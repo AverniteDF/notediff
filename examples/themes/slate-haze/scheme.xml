@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="user-slate-haze" name="Slate Haze" version="1.0">
+  <color name="bg"             value="#282c34"/>
+  <color name="gutter-bg"      value="#30353f"/>
+  <color name="bg-line"        value="#30353f"/>
+  <color name="bg-selection"   value="#4a5263"/>
+  <color name="fg"             value="#abb2bf"/>
+  <color name="cursor"         value="#f8f8f0"/>
+  <color name="line-number"    value="#657085"/>
+  <color name="danger"          value="#c24038"/>
+
+  <style name="text"                 foreground="fg" background="bg"/>
+  <style name="selection"            foreground="fg" background="bg-selection"/>
+  <style name="cursor"               foreground="cursor"/>
+  <style name="current-line"         background="bg-line"/>
+  <style name="line-numbers"         foreground="line-number" background="gutter-bg"/>
+  <style name="current-line-number"  foreground="fg" background="bg-line"/>
+  <style name="bracket-match"        foreground="fg" background="bg-selection" bold="true"/>
+  <style name="bracket-mismatch"     foreground="danger" underline="single"/>
+</style-scheme>

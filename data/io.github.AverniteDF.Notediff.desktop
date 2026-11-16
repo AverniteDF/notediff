@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=notediff
+GenericName=Text Editor
+Comment=Edit text and compare against a saved baseline
+Exec=notediff %F
+Icon=io.github.AverniteDF.Notediff
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=text;editor;notes;markdown;diff;
+MimeType=text/plain;text/markdown;
+StartupNotify=true

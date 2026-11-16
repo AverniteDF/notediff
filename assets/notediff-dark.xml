@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="notediff-dark" name="notediff Dark" version="1.0">
+  <color name="bg"            value="#1f2329"/>
+  <color name="gutter-bg"     value="#272c33"/>
+  <color name="bg-line"       value="#252a31"/>
+  <color name="bg-selection"  value="#34435a"/>
+  <color name="fg"            value="#c8cfda"/>
+  <color name="fg-strong"     value="#e8edf5"/>
+  <color name="fg-dim"        value="#5b6574"/>
+  <color name="amber"         value="#e0b36b"/>
+  <color name="red"           value="#e06c75"/>
+
+  <style name="text"                 foreground="fg" background="bg"/>
+  <style name="selection"            foreground="fg-strong" background="bg-selection"/>
+  <style name="cursor"               foreground="amber"/>
+  <style name="current-line"         background="bg-line"/>
+  <style name="line-numbers"         foreground="fg-dim" background="gutter-bg"/>
+  <style name="current-line-number"  foreground="fg" background="bg-line" bold="true"/>
+  <style name="bracket-match"        foreground="fg-strong" background="bg-selection" bold="true"/>
+  <style name="bracket-mismatch"     foreground="red" underline="single"/>
+
+  <!-- Dirty-header tint; this is not a syntax role. -->
+  <style name="notediff:accent"      foreground="amber"/>
+  <!-- Standard opaque review palette; independent of the editor background.
+       User themes may omit these styles to use the mode standard. -->
+  <style name="notediff:hunk"         foreground="#ffffff" background="#664400"/>
+  <style name="notediff:word"         foreground="#ffffff" background="#8a5a00"/>
+  <style name="notediff:focused-hunk" foreground="#ffffff" background="#702020"/>
+  <style name="notediff:focused-word" foreground="#ffffff" background="#ad3030"/>
+</style-scheme>

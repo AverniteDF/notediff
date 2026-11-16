@@ -1,0 +1,48 @@
+/* notediff application stylesheet, installed by theme::install_css.
+   Words in double braces are placeholders filled in by theme::stylesheet. */
+
+textview.{{content_class}},
+.{{preview_font_class}} {
+    font-family: {{font_family}};
+    font-size: {{font_size}}pt;
+}
+
+textview.{{content_class}} border gutter {
+    {{gutter_fallback}}
+}
+
+.diff-toolbar {
+    border-bottom: 1px solid alpha(currentColor, 0.12);
+    background: alpha(currentColor, 0.03);
+}
+
+.diff-toolbar button {
+    min-height: 28px;
+}
+
+.status-bar {
+    padding: 3px 10px;
+    border-top: 1px solid alpha(currentColor, 0.12);
+    background: alpha(currentColor, 0.03);
+}
+
+.status-bar label {
+    font-size: 0.95em;
+}
+
+.status-bar separator {
+    margin: 2px 0;
+}
+
+.diff-pane-divider {
+    border-left: 1px solid alpha(currentColor, 0.2);
+}
+
+window.{{dirty_class}} headerbar.{{main_header_class}} {
+    background: {{dirty_header_bg}};
+}
+
+.version-pill {
+    padding: 2px 10px;
+    min-height: 0;
+}

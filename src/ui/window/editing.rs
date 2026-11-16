@@ -1,0 +1,515 @@
+//! Editing behaviour of the main window: the no-tab paste filter, the Tab
+//! key, Scale Indentation, EOL conversion, word wrap and the read-only state.
+
+use std::path::Path;
+use std::rc::Rc;
+
+use adw::prelude::*;
+use gtk::glib::variant::ToVariant;
+use gtk::{gdk, gio, glib};
+
+use crate::core::eol;
+use crate::core::indent::{self, IndentError, IndentScale};
+use crate::core::insert::{self, InsertError};
+use crate::core::tabs;
+use crate::core::textlines;
+use crate::core::textstats::{self, LineEnding};
+use crate::ui::dialogs::{self, Response};
+use crate::ui::toast::ToastKind;
+
+use super::{AppWindow, add_action};
+
+impl AppWindow {
+    /// Connect the editing signals and actions. Called once from
+    /// `connect_signals`; every handler holds the window weakly.
+    pub(super) fn connect_editing(this: &Rc<Self>) {
+        // No-tab policy and line-ending consistency. Tabs in pasted, dropped
+        // or otherwise inserted text become spaces. New line breaks match the
+        // document's dominant ending, so Enter in a CRLF file inserts CRLF and
+        // a pasted LF does not silently make the document mixed. The handler
+        // replaces the insertion with a converted one; the nested insert has
+        // nothing left to convert and passes straight through. The
+        // programmatic-load guard bypasses both rules.
+        {
+            let weak = Rc::downgrade(this);
+            this.editor_buffer
+                .connect_insert_text(move |buffer, iter, text| {
+                    let Some(this) = weak.upgrade() else {
+                        return;
+                    };
+                    if this.flags.is_loading() {
+                        return;
+                    }
+                    let target = this.doc.borrow().line_ending();
+                    let convert_breaks = target != LineEnding::Mixed
+                        && !this.flags.keep_inserted_line_endings.get()
+                        && textlines::has_break(text);
+                    let convert_tabs = tabs::contains_tab(text);
+                    if !convert_breaks && !convert_tabs {
+                        return;
+                    }
+
+                    let mut converted = text.to_string();
+                    if convert_tabs {
+                        converted = tabs::convert_tabs(&converted);
+                    }
+                    if convert_breaks {
+                        converted = eol::convert_line_endings(&converted, target);
+                    }
+                    if converted == text {
+                        return;
+                    }
+                    buffer.stop_signal_emission_by_name("insert-text");
+                    buffer.insert(iter, &converted);
+                    if convert_tabs {
+                        this.toast(ToastKind::Info, "Tabs were converted to spaces");
+                    }
+                });
+        }
+
+        // No-tab policy: the editor's Tab key never inserts a tab character.
+        // The controller runs in the capture phase so GtkSourceView's own Tab
+        // handling never sees the key.
+        let tab_keys = gtk::EventControllerKey::new();
+        tab_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let weak = Rc::downgrade(this);
+            tab_keys.connect_key_pressed(move |_, keyval, _, state| {
+                let Some(this) = weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                let other_modifiers = gdk::ModifierType::CONTROL_MASK
+                    | gdk::ModifierType::ALT_MASK
+                    | gdk::ModifierType::SUPER_MASK
+                    | gdk::ModifierType::META_MASK;
+                if state.intersects(other_modifiers) || !this.editor_view.is_editable() {
+                    return glib::Propagation::Proceed;
+                }
+                let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
+                match keyval {
+                    gdk::Key::Tab => this.press_tab(shift),
+                    gdk::Key::ISO_Left_Tab => this.press_tab(true),
+                    _ => return glib::Propagation::Proceed,
+                }
+                glib::Propagation::Stop
+            });
+        }
+        this.editor_view.add_controller(tab_keys);
+
+        let window = &this.window;
+        let wrap_enabled = this.editor_view.wrap_mode() != gtk::WrapMode::None;
+        let word_wrap =
+            gio::SimpleAction::new_stateful("word-wrap", None, &wrap_enabled.to_variant());
+        let weak = Rc::downgrade(this);
+        // GIO toggles boolean actions by requesting a state change on activation.
+        word_wrap.connect_change_state(move |action, state| {
+            let (Some(this), Some(state)) = (weak.upgrade(), state) else {
+                return;
+            };
+            let Some(enabled) = state.get::<bool>() else {
+                return;
+            };
+            this.editor_view.set_wrap_mode(if enabled {
+                gtk::WrapMode::WordChar
+            } else {
+                gtk::WrapMode::None
+            });
+            action.set_state(state);
+        });
+        window.add_action(&word_wrap);
+        this.stack.connect_visible_child_name_notify(move |stack| {
+            word_wrap.set_enabled(stack.visible_child_name().as_deref() == Some("editor"));
+        });
+
+        // Only set_read_only changes the state, including after a refused unlock.
+        let read_only_action =
+            gio::SimpleAction::new_stateful("read-only", None, &false.to_variant());
+        let weak = Rc::downgrade(this);
+        read_only_action.connect_change_state(move |_, state| {
+            let (Some(this), Some(wanted)) =
+                (weak.upgrade(), state.and_then(|state| state.get::<bool>()))
+            else {
+                return;
+            };
+            this.request_read_only(wanted);
+        });
+        window.add_action(&read_only_action);
+        this.stack.connect_visible_child_name_notify(move |stack| {
+            read_only_action.set_enabled(stack.visible_child_name().as_deref() == Some("editor"));
+        });
+
+        add_action(window, this, "convert-eol-crlf", |this| {
+            this.convert_line_endings(LineEnding::CrLf)
+        });
+        add_action(window, this, "convert-eol-lf", |this| {
+            this.convert_line_endings(LineEnding::Lf)
+        });
+        add_action(window, this, "indent-double", |this| {
+            this.scale_indentation(IndentScale::Double)
+        });
+        add_action(window, this, "indent-halve", |this| {
+            this.scale_indentation(IndentScale::Halve)
+        });
+        add_action(window, this, "insert-file", |this| {
+            this.request_insert_file()
+        });
+    }
+
+    /// Lock or unlock the editor for the current document.
+    pub(super) fn set_read_only(&self, read_only: bool) {
+        self.flags.read_only.set(read_only);
+        self.editor_view.set_editable(!read_only);
+        if let Some(action) = self
+            .window
+            .lookup_action("read-only")
+            .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+        {
+            action.set_state(&read_only.to_variant());
+        }
+        self.set_edit_actions_enabled(!read_only);
+        self.update_search_actions();
+        self.update_status();
+        self.update_title();
+    }
+
+    /// Enable or disable the context-menu actions that edit the text (Scale
+    /// Indentation and Insert Text from File).
+    fn set_edit_actions_enabled(&self, enabled: bool) {
+        for name in ["indent-double", "indent-halve", "insert-file"] {
+            if let Some(action) = self
+                .window
+                .lookup_action(name)
+                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+            {
+                action.set_enabled(enabled);
+            }
+        }
+    }
+
+    /// Insert one space at the cursor. In overwrite mode the space replaces
+    /// the next character on the line, as typed text would, unless the cursor
+    /// is at the end of the line. One undo step.
+    fn insert_space_at_cursor(&self) {
+        let buffer = &self.editor_buffer;
+        buffer.begin_user_action();
+        if self.editor_view.overwrites() {
+            let mut start = buffer.iter_at_mark(&buffer.get_insert());
+            if !start.ends_line() {
+                let mut end = start;
+                end.forward_char();
+                buffer.delete(&mut start, &mut end);
+            }
+        }
+        buffer.insert_at_cursor(" ");
+        buffer.end_user_action();
+    }
+
+    /// The editor's Tab key under the no-tab policy. Tab never inserts a tab
+    /// character. With no selection it inserts one space (overwriting the next
+    /// character in overwrite mode). With a selection it indents every touched
+    /// line by one space. Shift+Tab removes one leading space from the touched
+    /// lines, or from the cursor's line when nothing is selected. Line edits
+    /// form one undo step.
+    pub(super) fn press_tab(&self, outdent: bool) {
+        let buffer = &self.editor_buffer;
+        let selection = self.selection_offsets();
+
+        if selection.is_none() && !outdent {
+            self.insert_space_at_cursor();
+        } else {
+            let text = self.current_text();
+            let lines = selection
+                .and_then(|(start, end)| textstats::selection_stats(&text, start, end))
+                .map(|selection| selection.line_range())
+                .unwrap_or_else(|| {
+                    let line = buffer
+                        .iter_at_offset(buffer.cursor_position())
+                        .line()
+                        .max(0) as usize;
+                    line..=line
+                });
+
+            buffer.begin_user_action();
+            for line in lines {
+                self.shift_line(line, outdent);
+            }
+            buffer.end_user_action();
+        }
+
+        self.editor_view.scroll_mark_onscreen(&buffer.get_insert());
+    }
+
+    /// Add or remove one leading space on a 0-based line. Blank lines are not
+    /// indented, so no trailing-whitespace-only lines appear.
+    fn shift_line(&self, line: usize, outdent: bool) {
+        let buffer = &self.editor_buffer;
+        let Some(mut start) = buffer.iter_at_line(line as i32) else {
+            return;
+        };
+        if outdent {
+            if start.char() == ' ' {
+                let mut end = start;
+                end.forward_char();
+                buffer.delete(&mut start, &mut end);
+            }
+        } else if !start.ends_line() {
+            buffer.insert(&mut start, " ");
+        }
+    }
+
+    /// Convert every line ending in the editor to `target`. It is one undo
+    /// step and leaves the document dirty. The cursor keeps its line and
+    /// column. Does nothing in Diff Mode and is refused for read-only
+    /// documents.
+    pub(super) fn convert_line_endings(&self, target: LineEnding) {
+        if self.diff_active() {
+            return;
+        }
+
+        // The status-bar EOL popover is anchored to a label, which cannot take
+        // focus. When it closes, GTK would otherwise fall back to focusing the
+        // new toast's close button, and AdwToast deliberately suspends its
+        // timeout while it has keyboard focus. Return focus to the editor
+        // before showing any toast, so the toast can expire normally.
+        self.editor_view.grab_focus();
+
+        if self.flags.read_only.get() {
+            self.toast(
+                ToastKind::Warning,
+                "This document is read-only, so its line endings cannot be converted",
+            );
+            return;
+        }
+
+        let text = self.current_text();
+        let converted = eol::convert_line_endings(&text, target);
+        if converted == text {
+            if textlines::has_break(&text) {
+                self.toast(
+                    ToastKind::Info,
+                    &format!("Line endings are already {}", target.label()),
+                );
+            } else {
+                self.toast(
+                    ToastKind::Info,
+                    "The document has no line breaks to convert",
+                );
+            }
+            return;
+        }
+
+        let buffer = &self.editor_buffer;
+        let cursor = buffer.iter_at_offset(buffer.cursor_position());
+        let (line, column) = (cursor.line(), cursor.line_offset());
+
+        // Update the preferred ending before touching the buffer: the insert
+        // filter sees the converted text and must not normalize it back.
+        self.doc.borrow_mut().set_line_ending(target);
+        buffer.begin_user_action();
+        let mut start = buffer.start_iter();
+        let mut end = buffer.end_iter();
+        buffer.delete(&mut start, &mut end);
+        buffer.insert(&mut start, &converted);
+        buffer.end_user_action();
+
+        let restored = buffer
+            .iter_at_line_offset(line, column)
+            .unwrap_or_else(|| buffer.end_iter());
+        buffer.place_cursor(&restored);
+        self.editor_view.scroll_mark_onscreen(&buffer.get_insert());
+        self.toast(
+            ToastKind::Success,
+            &format!("Converted line endings to {}", target.label()),
+        );
+    }
+
+    /// Double or halve the leading spaces of the target lines: the lines the
+    /// selection touches, or the whole document when nothing is selected.
+    /// Aborts with a toast (changing nothing) when the operation is not
+    /// possible; there is no success toast. The edits are one undo step.
+    pub(super) fn scale_indentation(&self, scale: IndentScale) {
+        if self.diff_active() || self.flags.read_only.get() {
+            return;
+        }
+
+        let text = self.current_text();
+        let lines = self
+            .selection_offsets()
+            .and_then(|(start, end)| textstats::selection_stats(&text, start, end))
+            .map(|selection| selection.line_range());
+
+        let changes = match indent::plan(&text, scale, lines) {
+            Ok(changes) => changes,
+            Err(err @ (IndentError::NothingToScale | IndentError::OddIndent { .. })) => {
+                self.toast(ToastKind::Warning, &err.message(scale));
+                return;
+            }
+        };
+
+        let buffer = &self.editor_buffer;
+        buffer.begin_user_action();
+        for change in &changes {
+            // Line numbers do not shift: only spaces are added or removed.
+            let Some(mut start) = buffer.iter_at_line(change.line as i32) else {
+                continue;
+            };
+            if change.new > change.old {
+                buffer.insert(&mut start, &" ".repeat(change.new - change.old));
+            } else {
+                let mut end = start;
+                end.forward_chars((change.old - change.new) as i32);
+                buffer.delete(&mut start, &mut end);
+            }
+        }
+        buffer.end_user_action();
+    }
+
+    /// True when text may be inserted now. Does nothing (silently) in Diff
+    /// Mode and refuses, with a toast, for a read-only document.
+    fn can_insert_text(&self) -> bool {
+        if self.diff_active() {
+            return false;
+        }
+        if self.flags.read_only.get() {
+            self.toast(
+                ToastKind::Warning,
+                "This document is read-only, so text cannot be inserted",
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Insert Text from File: let the user pick a file, then insert its whole
+    /// contents at the cursor (see `insert_file`).
+    pub(super) fn request_insert_file(self: &Rc<Self>) {
+        if !self.can_insert_text() {
+            return;
+        }
+
+        let dialog = gtk::FileDialog::builder()
+            .title("Insert Text from File")
+            .modal(true)
+            .build();
+        if let Some(folder) = self
+            .path_for_snapshot()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        {
+            dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
+        }
+
+        let this = self.clone();
+        dialog.open(
+            Some(&self.window),
+            None::<&gio::Cancellable>,
+            move |result| {
+                if let Ok(file) = result
+                    && let Some(path) = file.path()
+                {
+                    this.insert_file_checked(&path);
+                }
+            },
+        );
+    }
+
+    /// Validate the chosen file and, for a large one, ask before inserting.
+    fn insert_file_checked(self: &Rc<Self>, path: &Path) {
+        // The state may have changed while the chooser was open.
+        if !self.can_insert_text() {
+            return;
+        }
+        let bytes = match insert::inspect(path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.show_error("Could not insert file", &err.to_string());
+                return;
+            }
+        };
+        if !insert::needs_confirmation(bytes) {
+            self.insert_file(path);
+            return;
+        }
+
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("The file")
+            .to_string();
+        let this = self.clone();
+        let path = path.to_path_buf();
+        dialogs::ask(
+            &self.window,
+            "Insert a large file?",
+            &format!(
+                "{name} is {} bytes. Inserting it may make the editor slow.",
+                textstats::format_thousands(bytes as usize)
+            ),
+            &[
+                Response::new("cancel", "Cancel"),
+                Response::suggested("insert", "Insert"),
+            ],
+            "cancel",
+            "cancel",
+            move |response| {
+                if response == "insert" {
+                    this.insert_file(&path);
+                }
+            },
+        );
+    }
+
+    /// Insert the whole contents of `path` at the cursor, like a paste: a
+    /// selection is replaced, the inserted text is selected and the edit is
+    /// one undo step. A leading BOM is dropped, line endings are matched to
+    /// the document, and tabs are converted by the insert filter. Failures
+    /// are reported and change nothing.
+    pub(super) fn insert_file(&self, path: &Path) {
+        if !self.can_insert_text() {
+            return;
+        }
+
+        let loaded = match insert::load(path) {
+            Ok(text) => text,
+            Err(
+                err @ (InsertError::NotAFile | InsertError::TooLarge { .. } | InsertError::Read(_)),
+            ) => {
+                self.show_error("Could not insert file", &err.to_string());
+                return;
+            }
+        };
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("file")
+            .to_string();
+        if loaded.is_empty() {
+            self.toast(
+                ToastKind::Info,
+                &format!("{name} is empty, so nothing was inserted"),
+            );
+            return;
+        }
+
+        let text = insert::match_line_endings(&loaded, &self.current_text());
+        let buffer = &self.editor_buffer;
+        let insert_mark = self.flags.with_inserted_line_endings(|| {
+            buffer.begin_user_action();
+            buffer.delete_selection(true, true);
+            let insert_mark = buffer.get_insert();
+            let start_offset = buffer.iter_at_mark(&insert_mark).offset();
+            buffer.insert_at_cursor(&text);
+
+            // Resolve both ends after the edit. The insert mark follows the
+            // actual insertion even when the tab filter rewrites the text.
+            let start = buffer.iter_at_offset(start_offset);
+            let end = buffer.iter_at_mark(&insert_mark);
+            buffer.select_range(&end, &start);
+            buffer.end_user_action();
+            insert_mark
+        });
+
+        self.editor_view.scroll_mark_onscreen(&insert_mark);
+        self.editor_view.grab_focus();
+        self.toast(ToastKind::Success, &format!("Inserted {name}"));
+    }
+}

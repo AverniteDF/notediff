@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>notediff</title>
+  <defs>
+    <linearGradient id="back" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#498ee0"/>
+      <stop offset="1" stop-color="#245398"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#fffdf5"/>
+      <stop offset="1" stop-color="#dce6f2"/>
+    </linearGradient>
+  </defs>
+  <rect x="15" y="13" width="76" height="99" rx="12" fill="#14283f" opacity=".2"/>
+  <rect x="12" y="9" width="76" height="99" rx="12" fill="url(#back)"/>
+  <path d="M47 22h44l25 25v61a11 11 0 0 1-11 11H47a11 11 0 0 1-11-11V33a11 11 0 0 1 11-11Z" fill="#14283f" opacity=".2"/>
+  <path d="M44 18h44l25 25v61a11 11 0 0 1-11 11H44a11 11 0 0 1-11-11V29a11 11 0 0 1 11-11Z" fill="url(#paper)"/>
+  <path d="M88 18v17a8 8 0 0 0 8 8h17Z" fill="#a8bfdc"/>
+  <g stroke-linecap="round" stroke-width="5">
+    <path d="M48 40h24M48 53h47M63 70h32M63 89h32" stroke="#657b96"/>
+    <path d="M45 70h9" stroke="#d99021"/>
+    <path d="M45 89h9m-4.5-4.5v9" stroke="#287bd0"/>
+  </g>
+  <path d="M22 32v52" stroke="#a9cffa" stroke-linecap="round" stroke-width="4"/>
+</svg>

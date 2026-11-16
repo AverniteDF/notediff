@@ -1,0 +1,24 @@
+[package]
+name = "notediff"
+version = "1.0.0"
+authors = ["Robert Hewitt (AverniteDF)"]
+# The Rust language edition (2015, 2018, 2021, 2024), not a notediff edition.
+# The app's own version is the `version` field above.
+edition = "2024"
+rust-version = "1.92"
+description = "A single-user plaintext and markdown editor with baseline comparison"
+license = "MIT"
+repository = "https://github.com/AverniteDF/notediff"
+readme = "README.md"
+keywords = ["editor", "gtk", "markdown", "diff", "plaintext"]
+categories = ["gui", "text-editors"]
+publish = false
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_7"] }
+sourceview5 = { version = "0.11", features = ["v5_16"] }
+similar = { version = "3.2", features = ["unicode"] }
+
+[profile.release]
+lto = "thin"

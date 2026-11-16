@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="user-forest-dusk" name="Forest Dusk" version="1.0">
+  <color name="bg"            value="#2c3338"/>
+  <color name="gutter-bg"     value="#353d42"/>
+  <color name="fg"            value="#d3c6aa"/>
+  <color name="bg-selection"  value="#a99f89"/>
+  <color name="selection-fg"  value="#1a1e1c"/>
+  <color name="bg-bracket"    value="#5f5b56"/>
+  <color name="line-number"   value="#80756A"/>
+  <color name="danger"        value="#cc241d"/>
+  <color name="accent"        value="#d79921"/>
+
+  <style name="text"                 foreground="fg" background="bg"/>
+  <style name="selection"            foreground="selection-fg" background="bg-selection"/>
+  <style name="cursor"               foreground="fg"/>
+  <style name="current-line"         background="gutter-bg"/>
+  <style name="line-numbers"         foreground="line-number" background="gutter-bg"/>
+  <style name="current-line-number"  foreground="fg" background="gutter-bg"/>
+  <style name="bracket-match"        foreground="fg" background="bg-bracket" bold="true"/>
+  <style name="bracket-mismatch"     foreground="danger" underline="single"/>
+  <style name="notediff:accent"      foreground="accent"/>
+</style-scheme>

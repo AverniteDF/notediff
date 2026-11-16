@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="user-cola-n-cream" name="Cola &amp; Cream" version="1.0">
+  <color name="bg"            value="#f6ead8"/>
+  <color name="gutter-bg"     value="#f1e3cf"/>
+  <color name="bg-line"       value="#eeddc5"/>
+  <color name="bg-selection"  value="#d8b98f"/>
+  <color name="fg"            value="#3a2417"/>
+  <color name="fg-strong"     value="#231207"/>
+  <color name="fg-dim"        value="#805c3f"/>
+  <color name="accent"        value="#b43a1e"/>
+  <color name="danger"        value="#b3261e"/>
+
+  <style name="text"                 foreground="fg" background="bg"/>
+  <style name="selection"            foreground="fg-strong" background="bg-selection"/>
+  <style name="cursor"               foreground="accent"/>
+  <style name="current-line"         background="bg-line"/>
+  <style name="line-numbers"         foreground="fg-dim" background="gutter-bg"/>
+  <style name="current-line-number"  foreground="fg" background="bg-line" bold="true"/>
+  <style name="bracket-match"        foreground="fg-strong" background="bg-selection" bold="true"/>
+  <style name="bracket-mismatch"     foreground="danger" underline="single"/>
+  <style name="notediff:accent"      foreground="accent"/>
+  <!-- Standard light review palette; explicit despite the dark UI mode. -->
+  <style name="notediff:hunk"         foreground="#000000" background="#fff0c2"/>
+  <style name="notediff:word"         foreground="#000000" background="#ffd477"/>
+  <style name="notediff:focused-hunk" foreground="#000000" background="#fad6d6"/>
+  <style name="notediff:focused-word" foreground="#000000" background="#f39a9a"/>
+</style-scheme>

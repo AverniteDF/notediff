@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Test on Debian trixie
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install git for checkout
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl
+      - uses: actions/checkout@v4
+      - name: Install GTK and test dependencies
+        run: |
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev \
+            xvfb xauth dbus dbus-x11 libgl1-mesa-dri fonts-dejavu-core
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - name: GTK smoke test
+        env:
+          NO_AT_BRIDGE: "1"
+        run: xvfb-run -a dbus-run-session -- cargo test --locked gtk_window_smoke -- --ignored
+
+  msrv:
+    name: MSRV 1.92
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install git for checkout
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl
+      - uses: actions/checkout@v4
+      - name: Install GTK dependencies
+        run: |
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - run: cargo check --locked
