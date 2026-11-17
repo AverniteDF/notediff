@@ -856,26 +856,16 @@ fn transient_focus_scenario(app: &adw::Application, store: &SnapshotStore) {
     window.set_editor_text("");
     window.flags.dirty.set(false);
 
-    // Cancel on the unsaved-changes prompt, including dismissal via close.
+    // Dismissing the unsaved-changes prompt restores editing focus. The
+    // prompt has no Cancel button; Esc and close abort the pending New File.
     window.editor_buffer.insert_at_cursor("unsaved text");
-    for click_cancel in [true, false] {
-        menu.grab_focus();
-        window.window.lookup_action("new").unwrap().activate(None);
-        let dialog = window.window.visible_dialog().unwrap();
-        if click_cancel {
-            let cancel = descendants(dialog.upcast_ref())
-                .into_iter()
-                .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
-                .find(|button| button.label().as_deref() == Some("Cancel"))
-                .unwrap();
-            cancel.emit_clicked();
-        } else {
-            dialog.close();
-        }
-        wait_for(|| window.window.visible_dialog().is_none() && editor_focused());
-        assert_eq!(window.current_text(), "unsaved text");
-        assert!(window.flags.dirty.get());
-    }
+    menu.grab_focus();
+    window.window.lookup_action("new").unwrap().activate(None);
+    let dialog = window.window.visible_dialog().unwrap();
+    dialog.close();
+    wait_for(|| window.window.visible_dialog().is_none() && editor_focused());
+    assert_eq!(window.current_text(), "unsaved text");
+    assert!(window.flags.dirty.get());
 
     // A menu action opening a dialog must keep that dialog's focus. On close,
     // Manage App returns focus to the editor.
@@ -1232,7 +1222,7 @@ fn open_file_save_prompt_scenario(app: &adw::Application, dir: &Path, store: &Sn
     let first_canonical = first.canonicalize().unwrap();
 
     // Simulate the file chooser returning the second file. The save prompt
-    // comes after the chooser and has no second Cancel button.
+    // comes after the chooser and has no Cancel button.
     AppWindow::finish_open_dialog(&window, Ok(gio::File::for_path(&second)));
     wait_for(|| {
         window
@@ -1247,20 +1237,11 @@ fn open_file_save_prompt_scenario(app: &adw::Application, dir: &Path, store: &Sn
         .downcast::<adw::AlertDialog>()
         .unwrap();
     assert_eq!(dialog.heading().as_deref(), Some("Save changes?"));
-    assert!(
-        dialog
-            .body()
-            .contains("The current document has unsaved changes.")
-    );
-    assert!(
-        dialog
-            .body()
-            .contains("open the selected file in a new window")
-    );
+    assert_eq!(dialog.body().as_str(), "The document has unsaved changes.");
     assert!(find_response_button(dialog.upcast_ref(), "Cancel").is_none());
     assert!(find_response_button(dialog.upcast_ref(), "Save").is_some());
     assert!(find_response_button(dialog.upcast_ref(), "Discard Changes").is_some());
-    assert!(find_response_button(dialog.upcast_ref(), "Open in New Window").is_some());
+    assert!(find_response_button(dialog.upcast_ref(), "Open New Window").is_some());
     assert_eq!(
         dialog.response_appearance("save"),
         adw::ResponseAppearance::Suggested
@@ -1297,7 +1278,7 @@ fn open_file_save_prompt_scenario(app: &adw::Application, dir: &Path, store: &Sn
         .unwrap()
         .downcast::<adw::AlertDialog>()
         .unwrap();
-    find_response_button(dialog.upcast_ref(), "Open in New Window")
+    find_response_button(dialog.upcast_ref(), "Open New Window")
         .unwrap()
         .emit_clicked();
     wait_for(|| super::WINDOWS.with_borrow(|windows| windows.len() == before + 1));
@@ -1391,7 +1372,8 @@ fn new_file_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) 
     window.window.present();
     let canonical = path.canonicalize().unwrap();
 
-    // New File prompts before replacing a dirty document.
+    // New File prompts before replacing a dirty document. The neutral button
+    // opens an empty window instead; there is no Cancel button.
     window
         .editor_buffer
         .place_cursor(&window.editor_buffer.end_iter());
@@ -1399,6 +1381,12 @@ fn new_file_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) 
     assert_eq!(window.current_text(), "first file\nunsaved");
     assert!(window.flags.dirty.get());
     window.window.lookup_action("new").unwrap().activate(None);
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
     let dialog = window
         .window
         .visible_dialog()
@@ -1406,13 +1394,73 @@ fn new_file_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) 
         .downcast::<adw::AlertDialog>()
         .unwrap();
     assert_eq!(dialog.heading().as_deref(), Some("Save changes?"));
-    find_response_button(dialog.upcast_ref(), "Cancel")
-        .unwrap()
-        .emit_clicked();
+    assert_eq!(dialog.body().as_str(), "The document has unsaved changes.");
+    assert!(find_response_button(dialog.upcast_ref(), "Cancel").is_none());
+    assert!(find_response_button(dialog.upcast_ref(), "Save").is_some());
+    assert!(find_response_button(dialog.upcast_ref(), "Discard Changes").is_some());
+    assert!(find_response_button(dialog.upcast_ref(), "Open New Window").is_some());
+    assert_eq!(
+        dialog.response_appearance("save"),
+        adw::ResponseAppearance::Suggested
+    );
+    assert_eq!(
+        dialog.response_appearance("discard"),
+        adw::ResponseAppearance::Destructive
+    );
+    assert_eq!(
+        dialog.response_appearance("new-window"),
+        adw::ResponseAppearance::Default
+    );
+
+    // Dismissing the prompt leaves the dirty document in place.
+    dialog.close();
     wait_for(|| window.window.visible_dialog().is_none());
     assert_eq!(window.doc.borrow().path(), Some(canonical.as_path()));
     assert_eq!(window.current_text(), "first file\nunsaved");
     assert!(window.flags.dirty.get());
+
+    // Open New Window opens an empty window and keeps this draft.
+    let before = super::WINDOWS.with_borrow(|windows| windows.len());
+    window.window.lookup_action("new").unwrap().activate(None);
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    find_response_button(dialog.upcast_ref(), "Open New Window")
+        .unwrap()
+        .emit_clicked();
+    wait_for(|| super::WINDOWS.with_borrow(|windows| windows.len() == before + 1));
+    let created = super::WINDOWS
+        .with_borrow(|windows| {
+            windows
+                .iter()
+                .find(|candidate| !Rc::ptr_eq(candidate, &window))
+                .cloned()
+        })
+        .expect("new window");
+    assert!(created.doc.borrow().path().is_none());
+    assert_eq!(created.current_text(), "");
+    assert_eq!(created.window.title().as_deref(), Some("Untitled"));
+    assert!(!created.flags.dirty.get());
+    assert_eq!(window.doc.borrow().path(), Some(canonical.as_path()));
+    assert_eq!(window.current_text(), "first file\nunsaved");
+    assert!(window.flags.dirty.get());
+    created.window.destroy();
+    wait_for(|| {
+        super::WINDOWS.with_borrow(|windows| {
+            !windows
+                .iter()
+                .any(|candidate| Rc::ptr_eq(candidate, &created))
+        })
+    });
 
     // Discard Changes resets this window to an untitled, editable document.
     window.window.lookup_action("new").unwrap().activate(None);
@@ -1435,6 +1483,35 @@ fn new_file_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) 
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "first file\n");
     // Replacing the document leaves the old file's baseline on disk.
     assert!(store.has_for_canonical(&canonical));
+
+    // Save writes the draft first, then starts the new document.
+    AppWindow::open_path(&window, &path);
+    window
+        .editor_buffer
+        .place_cursor(&window.editor_buffer.end_iter());
+    window.editor_buffer.insert_at_cursor("saved");
+    assert!(window.flags.dirty.get());
+    window.window.lookup_action("new").unwrap().activate(None);
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    find_response_button(dialog.upcast_ref(), "Save")
+        .unwrap()
+        .emit_clicked();
+    wait_for(|| window.window.visible_dialog().is_none());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "first file\nsaved");
+    assert!(window.doc.borrow().path().is_none());
+    assert_eq!(window.current_text(), "");
+    assert!(!window.flags.dirty.get());
 
     // New Window opens another empty window and leaves this one untouched.
     let open_before = super::WINDOWS.with_borrow(|windows| windows.len());

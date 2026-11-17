@@ -9,11 +9,12 @@ notes for details and workarounds.
 
 - Open files with **Ctrl+O**, the header-bar button or **Open…** in the File
   menu. The chooser appears first; a chosen file replaces the document in the
-  current window. If the current document has unsaved changes, the save prompt
-  then offers **Open in New Window**, **Discard Changes** and **Save**; there is
-  no second Cancel button, but Esc aborts the pending open. **Open in New Window**
-  leaves the current document untouched. This action is unavailable in Diff Mode;
-  use **New Window** or finish the review first. A command-line path or a
+  current window. If the document has unsaved changes, the **Save changes?**
+  prompt says **The document has unsaved changes.** and offers
+  **Open New Window**, **Discard Changes** and **Save**; there is no Cancel
+  button, but Esc aborts the pending open. **Open New Window** leaves the
+  current document untouched. This action is unavailable in Diff Mode; use
+  **New Window** or finish the review first. A command-line path or a
   file-manager launch opens a new window for each file.
 - **Copy Selected Text** (copy icon immediately right of Open File) copies the
   editor selection, or the selection in the last-focused visible Diff Mode or
@@ -29,9 +30,11 @@ notes for details and workarounds.
   to leave out display-only markers.
 - Start a new document with **Ctrl+N**, the header-bar button beside Open, or
   **New File** in the menu. It replaces the document in the current window; an
-  unsaved document first offers **Save**, **Discard Changes** or **Cancel**.
-  The file and its baseline on disk are untouched. New File is unavailable in
-  Diff Mode.
+  unsaved document first shows the same **Save changes?** prompt with
+  **Open New Window**, **Discard Changes** and **Save**. Choosing
+  **Open New Window** opens an empty window and keeps this document; Esc
+  leaves everything as it is. The file and its baseline on disk are untouched.
+  New File is unavailable in Diff Mode.
 - Open another empty window with **Ctrl+Shift+N** or **New Window** in the File
   menu. The current window and document are left alone. New Window remains
   available in Diff Mode, so another file can be opened without disturbing the
@@ -60,8 +63,8 @@ notes for details and workarounds.
   action is unavailable for read-only documents and in Diff Mode.
 - Find with **Ctrl+F**; press Enter to jump to the next match.
   Ordinary typing never opens Find. Cancelling Open File restores editor focus.
-  Focus also returns after cancelling the unsaved-changes prompt, dismissing
-  the main menu, or closing Manage App… → Baseline Snapshots. In Diff Mode it returns to a
+  Focus also returns after the unsaved-changes prompt closes, after the main
+  menu is dismissed, or after closing Manage App… → Baseline Snapshots. In Diff Mode it returns to a
   visible pane instead; Find and newly opened dialogs retain their own focus.
 - **Replace…** (**Ctrl+H**, main menu) adds a replacement field to the Find bar.
   **Replace** changes the selected match and finds the next; if the selection

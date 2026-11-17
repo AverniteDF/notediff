@@ -542,10 +542,11 @@ impl AppWindow {
     ///
     /// - Baseline actions get Cancel / Save. Cancelling or dismissing drops
     ///   the action and leaves the baseline untouched.
-    /// - OpenPath follows a file chooser. It gets Open in New Window / Discard
-    ///   Changes / Save, with no second Cancel button; Esc still dismisses.
-    /// - Other actions that leave the document (new file, close, quit) get
-    ///   Cancel / Discard Changes / Save.
+    /// - Actions that may leave the document (OpenPath, New File) get a
+    ///   neutral button that keeps the draft and resolves the request in a new
+    ///   window, plus Discard Changes and Save. There is no Cancel button;
+    ///   Esc and dismissal still abort the pending action.
+    /// - Closing the window or quitting gets Cancel / Discard Changes / Save.
     ///
     /// For an untitled document the save button reads "Save As", because the
     /// document can only be saved through the file chooser.
@@ -555,37 +556,23 @@ impl AppWindow {
             return;
         }
 
-        let this = self.clone();
-        let save_label = save_action_label(self.doc.borrow().path().is_some());
-        let new_window_path = if let PendingAction::OpenPath(path) = &action {
-            Some(path.clone())
-        } else {
-            None
-        };
-
-        if let Some(path) = new_window_path {
-            dialogs::ask(
-                &self.window,
-                "Save changes?",
-                "The current document has unsaved changes. Save first, discard changes and \
-                 replace this document, or open the selected file in a new window.",
-                &[
-                    Response::new("new-window", "Open in New Window"),
-                    Response::destructive("discard", "Discard Changes"),
-                    Response::suggested("save", save_label),
-                ],
-                "save",
-                "cancel",
-                move |response| match response {
-                    "save" => this.save_then(Some(action)),
-                    "discard" => this.run_pending(action),
-                    "new-window" => this.open_path_in_new_window(&path),
-                    _ => {}
-                },
-            );
+        if let PendingAction::OpenPath(path) = &action {
+            let path = path.clone();
+            self.prompt_leave_document(action, "new-window", "Open New Window", move |this| {
+                this.open_path_in_new_window(&path);
+            });
             return;
         }
 
+        if let PendingAction::NewFile = action {
+            self.prompt_leave_document(action, "new-window", "Open New Window", |this| {
+                this.new_window();
+            });
+            return;
+        }
+
+        let this = self.clone();
+        let save_label = save_action_label(self.doc.borrow().path().is_some());
         match action.baseline_label() {
             Some(label) => dialogs::ask(
                 &self.window,
@@ -609,7 +596,7 @@ impl AppWindow {
             None => dialogs::ask(
                 &self.window,
                 "Save changes?",
-                "The live document has unsaved changes.",
+                "The document has unsaved changes.",
                 &[
                     Response::new("cancel", "Cancel"),
                     Response::destructive("discard", "Discard Changes"),
@@ -624,6 +611,40 @@ impl AppWindow {
                 },
             ),
         }
+    }
+
+    /// The shared "Save changes?" prompt for an action that may leave the
+    /// document. The neutral button, whose id is `neutral_id` and whose label
+    /// is `neutral_label`, keeps this document and lets `on_neutral` resolve
+    /// the request elsewhere; Discard Changes and Save act on this window.
+    /// Esc and dismissal abort the pending action.
+    fn prompt_leave_document(
+        self: &Rc<Self>,
+        action: PendingAction,
+        neutral_id: &'static str,
+        neutral_label: &'static str,
+        on_neutral: impl FnOnce(&Rc<Self>) + 'static,
+    ) {
+        let this = self.clone();
+        let save_label = save_action_label(self.doc.borrow().path().is_some());
+        dialogs::ask(
+            &self.window,
+            "Save changes?",
+            "The document has unsaved changes.",
+            &[
+                Response::new(neutral_id, neutral_label),
+                Response::destructive("discard", "Discard Changes"),
+                Response::suggested("save", save_label),
+            ],
+            "save",
+            "cancel",
+            move |response| match response {
+                "save" => this.save_then(Some(action)),
+                "discard" => this.run_pending(action),
+                id if id == neutral_id => on_neutral(&this),
+                _ => {}
+            },
+        );
     }
 
     /// Open the selected path in a new window, leaving this document and its

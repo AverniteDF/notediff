@@ -4,6 +4,17 @@ All notable changes to notediff are documented here. The project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses semantic
 versioning.
 
+## [Unreleased]
+
+### Changed
+
+- New File now shows the same **Save changes?** prompt as Open File, with
+  **Open New Window**, **Discard Changes** and **Save** and no Cancel button.
+  **Open New Window** opens an empty window and leaves the current document
+  untouched; Esc still aborts the pending action.
+- Every **Save changes?** prompt, including Close Window and Quit, now reads
+  **The document has unsaved changes.**
+
 ## [1.0.0] - 2026-11-16
 
 The first public release.
@@ -33,4 +44,5 @@ The first public release.
 - An installer and uninstaller, desktop entry, application icon and GitHub
   Actions CI.
 
+[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/AverniteDF/notediff/releases/tag/v1.0.0

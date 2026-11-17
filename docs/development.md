@@ -60,10 +60,11 @@ src/
       editing.rs        insert filter for tabs and document line endings, Tab
                         key, Scale Indentation, EOL conversion, file insertion,
                         word wrap, read-only state
-      file_actions.rs   open (chooser first, post-chooser save prompt), save
-                        (with external-change overwrite guard), save as, rename
-                        or move, Convert Tabs prompt, external-change handling,
-                        save-then-continue and multi-window quit continuation
+      file_actions.rs   new file and open (chooser first, post-chooser save
+                        prompt), save (with external-change overwrite guard),
+                        save as, rename or move, Convert Tabs prompt,
+                        external-change handling, save-then-continue and
+                        multi-window quit continuation
       diff_actions.rs   Diff Mode wiring: applies session results to the
                         snapshot store and the UI, Diff Mode keys, Create
                         Baseline and Confirm
@@ -128,8 +129,8 @@ insertions and deletions, and long-document scroll placement after repeated
 and rapid Accept/Undo operations. It also covers the external-change overwrite
 prompt on save, multi-window Quit across dirty, accepted-review and clean
 windows, Esc and window-close review-discard confirmations, the Open File save
-prompt after the chooser (including Open in New Window and no second Cancel
-button), disabled New/Open actions and hidden header tooltips in Diff Mode, CRLF
+prompt after the chooser (including Open New Window and no Cancel button),
+disabled New/Open actions and hidden header tooltips in Diff Mode, CRLF
 Enter handling, Insert Text line-ending preservation, and that every editor and
 diff buffer remains plain text. It checks that closing a window asks before
 discarding unconfirmed hunks and releases its `AppWindow` state. Run it in a graphical session. Theme coverage
