@@ -23,6 +23,20 @@ never the document.
   files. The 16 MiB limit applies to opening, reloading, saving and baselines,
   so the app cannot create a file it would refuse to reopen.
 
+## Screenshots
+
+![The notediff editor showing a Markdown document with line numbers and the status bar](screenshots/notediff_editor.webp)
+
+*The editor, with line numbers and the status bar.*
+
+![Review Changes showing the live document on the left and the baseline on the right](screenshots/notediff_review_changes.webp)
+
+*Review Changes: the live document on the left and the baseline on the right.*
+
+![Appearance settings with theme choices and font controls](screenshots/notediff_appearances.webp)
+
+*Appearance settings: themes, font controls and user theme previews.*
+
 ## Requirements
 
 - Rust **1.92 or newer**, installed with [rustup](https://rustup.rs).
