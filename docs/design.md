@@ -41,7 +41,7 @@ The baseline is a save point, not a history. There is exactly one per file, and 
 | Text widget | GtkSourceView 5 | Via the `sourceview5` crate; plain-text editing with undo, search, line numbers, current-line highlighting and bracket matching |
 | Diff engine | `similar` crate | Line diffs plus inline (word-level) refinement |
 | File I/O | `std::fs` | Atomic temp-then-rename for all writes, with a direct-write fallback only when the mount rejects the rename |
-| Persistence | Plain files only | No database; an app-written state file (`$XDG_DATA_HOME/notediff/appearance`) holds the validated content font family and size; another (`$XDG_DATA_HOME/notediff/theme`, written by the app) remembers the chosen theme |
+| Persistence | Plain files only | No database; an app-written state file (`$XDG_DATA_HOME/notediff/appearance`) holds the validated content font family and size; another (`$XDG_DATA_HOME/notediff/theme`, written by the app) remembers the chosen theme; `$XDG_DATA_HOME/notediff/recent` holds the recent-document paths |
 
 ### 3.3 Module layout
 
@@ -110,6 +110,7 @@ notediff/
                       document to be saved, and the rules for which save prompt each one gets;
                       ExternalCheck and AfterOpen enums: what follows an external-change check or
                       an aborted open (no GTK)
+    recent            bounded recent-document paths, UTF-8 line state, lazy existence pruning (no GTK)
     relink            ranking of baselines that could be linked to a document: same file name,
                       content similarity, modification time (no GTK)
     rename            planning a rename or move (name or path) and moving the open file together
@@ -167,6 +168,34 @@ A document’s identity is its **canonical absolute path**, with symlinks resolv
 - **Atomic replace on shared mounts:** temp-then-rename is attempted first. If the mount rejects the rename after the temporary file has been written, fall back to a direct write for that file and report any failure as a normal write failure. A failure while creating or writing the temporary file never touches the original.
 - **One file, two paths:** if the same file is reachable under two different paths, each path gets its own baseline. This falls under the accepted breakage in section 2.
 
+### 4.5 Recent documents
+
+When recent paths exist, the header Open button shows a menu: **Browse…**, up
+to ten recent file paths, then **Clear Recent**. Each recent path is a custom
+two-line row: a bold, end-ellipsized file name above a smaller, dimmed,
+middle-ellipsized directory ending in `/`. Directories below the user's home are shortened
+to `~/...`; stored paths and action targets remain absolute. Clear Recent is a
+custom row with a right-aligned `user-trash-symbolic` icon; native menu items
+hide an icon when they also have a label.
+When the pruned list is empty, the button opens the chooser directly instead of
+showing a one-item menu. **Ctrl+O** and **Open…** always open the chooser
+directly, and the header button is unavailable in Diff Mode.
+
+The list lives in `$XDG_DATA_HOME/notediff/recent` as one absolute path per
+line, newest first, with no metadata. Canonical paths from successful opens,
+Save As and Rename or Move are recorded. Paths that are not valid UTF-8 or
+contain control characters are skipped. The list is capped at ten entries;
+reopening a path moves it to the front and removes the duplicate.
+
+Nothing is read or stat-ed at startup. The list is loaded when a path is
+recorded and when the Open menu is about to be shown. At that point missing
+files and duplicates are removed and the file is rewritten only if it changed;
+if no entries remain, the state file is deleted. Paths under a shared-volume
+mount that is currently unavailable are kept, because they can return when the
+volume is reconnected. **Clear Recent** asks for confirmation and then removes
+the state file; it never touches the documents. A write failure is silent
+because the list is disposable, but a failed clear is reported.
+
 ## 5. Key Modules
 
 ### 5.1 Standard Editor Mode
@@ -176,7 +205,7 @@ A document’s identity is its **canonical absolute path**, with symlinks resolv
 - A clean text editor using GtkSourceView, with the usual open, save, search, and undo behavior. **Go to Line** (`Ctrl+G`, also in the menu) opens a small dialog for a line number; out-of-range numbers are clamped to the document. It is disabled while Diff Mode is showing. Clicking or dragging the left line-number gutter selects whole logical lines; the same gesture is installed on both full Diff Mode panes and is disabled in inspection.
 - **Word Wrap** is a checked item in the main menu, backed by the boolean window action `win.word-wrap` and the **Alt+Z** accelerator. **Ctrl+W** closes the window; **Ctrl+Q** quits through every window's normal close flow, prompting dirty windows one at a time before the remaining windows close. Each window starts with `WordChar` wrapping. Turning it off sets `None`, so long lines can be scrolled horizontally. This affects the editor display, including read-only files. The setting lasts for the life of that window and the action is disabled while Diff Mode is showing.
 - **EOL Conversion** (status-bar line-ending popover with **Windows (CRLF)** and **Unix (LF)**; not in the main menu) rewrites every GTK line break in the buffer to the chosen style: `\n`, `\r\n`, a lone `\r`, and U+2029. The trailing-newline state is preserved. The conversion is one undo step, keeps the cursor's line and column, and leaves the document dirty (the file on disk is untouched until saved, so Create Baseline and Confirm ask to save first). If the text already has that style (or has no line breaks) a toast says so and nothing changes. The action does nothing while Diff Mode is showing and is refused, with a toast, for read-only documents. The logic is `core::eol::convert_line_endings`; the window applies the result.
-- **Open File** (`Ctrl+O`, the header-bar button and **Open…** in the File menu) shows the chooser first. After a path is selected, a clean document opens it immediately. A dirty document shows the `Save changes?` prompt, whose body reads `The document has unsaved changes.`, with **Open New Window** (neutral), **Discard Changes** (destructive) and **Save** (suggested); there is no Cancel response button, but Esc and dismissal still abort the pending open. **Open New Window** leaves the current draft untouched. Open File is disabled while Diff Mode is showing. The selected path is carried through a save by `PendingAction::OpenPath(PathBuf)`.
+- **Open File** (`Ctrl+O`, the header-bar button and **Open…** in the File menu). `Ctrl+O` and **Open…** show the chooser directly. When recent paths exist, the header-bar button opens a menu whose first item is **Browse…**, followed by up to ten recent file paths (two-line rows with a bold file name over a smaller, dimmed home-shortened directory ending in `/`, newest first) and **Clear Recent** with a right-aligned trash icon; when the pruned list is empty, the button opens the chooser directly. Choosing **Clear Recent** asks for confirmation and deletes `$XDG_DATA_HOME/notediff/recent`; choosing a recent path enters the normal Open File flow. The recent list is pruned lazily when the menu is shown, never at startup (section 4.5). After a path is selected, a clean document opens it immediately. A dirty document shows the `Save changes?` prompt, whose body reads `The document has unsaved changes.`, with **Open New Window** (neutral), **Discard Changes** (destructive) and **Save** (suggested); there is no Cancel response button, but Esc and dismissal still abort the pending open. **Open New Window** leaves the current draft untouched. Open File is disabled while Diff Mode is showing, including the header menu button and `win.open-recent`. The selected path is carried through a save by `PendingAction::OpenPath(PathBuf)`. Successful opens, Save As and Rename or Move record the document's canonical path.
 - **New File** (`Ctrl+N`, a header-bar icon beside Open, and a File menu item) replaces the document in the current window with an empty, untitled one. A dirty document first gets the same `Save changes?` prompt (`PendingAction::NewFile`), whose neutral **Open New Window** opens an empty window and leaves this draft alone; Esc and dismissal abort the pending new file. `load_document` then resets the buffer, flags, Diff Mode and search bar. The old file and its baseline stay on disk. New File is disabled while Diff Mode is showing. **New Window** (`Ctrl+Shift+N` and a File menu item) opens an empty window via `open_empty_window`, reusing the caller's snapshot store; the current window and document are untouched, so no save prompt is involved. New Window remains available in Diff Mode.
 - **Copy Selected Text.** A flat `edit-copy-symbolic` button immediately right of Open File has tooltip `Copy Selected Text (Ctrl+C)`. Mouse clicks do not steal text focus. Weak focus-controller captures remember the last-focused editor/review view, including keyboard activation after tabbing to the button. In Diff Mode only the active full/inspection pair is eligible; stale hidden selections are ignored. The editor is used in editing mode. The button copies the selected text through the clipboard API, omitting display-only diff markers. Success says `Copied 3 characters to clipboard`, or `Copied 45 characters (6 lines) to clipboard` when more than one line is touched. Unicode scalar characters, including selected line terminators, are counted rather than bytes; trailing LF does not add another touched line. Counts use singular/plural and thousands separators (`core::textstats::copied_text_summary`). With no selection, a warning toast says `No selected text to copy!` and the clipboard is untouched. Read-only views work normally. Inline review highlighting is not a text selection. Copying changes neither the document nor its dirty state or edit clock. In the editor native Ctrl+C is unchanged and shows no toast; Diff Mode panes intercept the copy signal only to omit display-only markers.
 - **Save As** (`Ctrl+Shift+S`) saves the draft under a new path, which becomes the document's path. It is unavailable while Diff Mode is showing, like Rename or Move; finish or close the review first. The original file and its baseline are untouched. If the old path has a baseline and the new path has none, a prompt then asks **Copy Baseline** or **No Baseline** (dismissing means no baseline), so Review Changes can compare the new file against the same save point. Copying leaves the original baseline in place and never replaces an existing one (`SnapshotStore::link` with `LinkMode::Copy`). A pending save-then-continue action runs after the prompt.

@@ -46,6 +46,8 @@ src/
     pending.rs          PendingAction: actions that wait for a save, including
                         OpenPath(PathBuf); ExternalCheck and AfterOpen: what
                         follows an external-change check or an aborted open
+    recent.rs           bounded recent-document paths, line state and lazy
+                        existence pruning
     relink.rs           ranking of baselines that could be linked
     rename.rs           plan a rename or move (name or path); move a file
                         with its baseline
@@ -60,15 +62,16 @@ src/
       editing.rs        insert filter for tabs and document line endings, Tab
                         key, Scale Indentation, EOL conversion, file insertion,
                         word wrap, read-only state
-      file_actions.rs   new file and open (chooser first, post-chooser save
-                        prompt), save (with external-change overwrite guard),
-                        save as, rename or move, Convert Tabs prompt,
-                        external-change handling, save-then-continue and
-                        multi-window quit continuation
+      file_actions.rs   new file and open (chooser or recent path first,
+                        post-chooser save prompt), Clear Recent, save (with
+                        external-change overwrite guard), save as, rename or
+                        move, Convert Tabs prompt, external-change handling,
+                        save-then-continue and multi-window quit continuation
       diff_actions.rs   Diff Mode wiring: applies session results to the
                         snapshot store and the UI, Diff Mode keys, Create
                         Baseline and Confirm
-      menus.rs          menu models, shared menu actions, accelerators and Quit
+      menus.rs          menu models (including the Open menu), shared menu
+                        actions, accelerators and Quit
       flags.rs          DocumentFlags (dirty, read-only, close, external-change,
                         inserted line endings) and scoped loading guards
       flash.rs          FlashState: the header button's "No Changes" flash
@@ -130,6 +133,7 @@ and rapid Accept/Undo operations. It also covers the external-change overwrite
 prompt on save, multi-window Quit across dirty, accepted-review and clean
 windows, Esc and window-close review-discard confirmations, the Open File save
 prompt after the chooser (including Open New Window and no Cancel button),
+recent-menu ordering, lazy pruning, open-recent and Clear Recent confirmation,
 disabled New/Open actions and hidden header tooltips in Diff Mode, CRLF
 Enter handling, Insert Text line-ending preservation, and that every editor and
 diff buffer remains plain text. It checks that closing a window asks before

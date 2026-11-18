@@ -1,8 +1,10 @@
 //! Menu models, shared menu actions and application-wide accelerators.
 
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gtk::glib::variant::ToVariant;
 use gtk::{gio, glib};
 
 use crate::core::pending::PendingAction;
@@ -125,6 +127,137 @@ fn build_main_menu() -> gio::Menu {
     menu
 }
 
+/// With no recent paths the header Open button opens the chooser directly
+/// instead of showing a one-item menu.
+pub(super) fn open_menu_has_entries(recent: &[PathBuf]) -> bool {
+    !recent.is_empty()
+}
+
+/// The id used for a recent entry's custom two-line row.
+pub(super) fn recent_row_id(index: usize) -> String {
+    format!("recent-{index}")
+}
+
+/// The header Open button's menu: Browse first, then recent paths (custom
+/// two-line rows, newest first), then Clear Recent.
+pub(super) fn build_open_menu(recent: &[PathBuf]) -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append(Some("Browse…"), Some("win.open"));
+
+    if !open_menu_has_entries(recent) {
+        return menu;
+    }
+
+    let files = gio::Menu::new();
+    for (index, path) in recent.iter().enumerate() {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let target = path.to_string_lossy().into_owned();
+        let item = gio::MenuItem::new(Some(name), None);
+        item.set_action_and_target_value(Some("win.open-recent"), Some(&target.to_variant()));
+        item.set_attribute_value("custom", Some(&recent_row_id(index).to_variant()));
+        files.append_item(&item);
+    }
+    menu.append_section(None, &files);
+
+    let clear = gio::Menu::new();
+    let item = gio::MenuItem::new(Some("Clear Recent"), Some("win.clear-recent"));
+    item.set_attribute_value("custom", Some(&"clear-recent".to_variant()));
+    clear.append_item(&item);
+    menu.append_section(None, &clear);
+
+    menu
+}
+
+/// A custom Clear Recent row. A normal menu item hides its icon whenever it
+/// also has a label, so this row is inserted into the popover by id. The label
+/// expands so the trash icon sits at the trailing edge.
+pub(super) fn build_clear_recent_button() -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("flat");
+    button.set_action_name(Some("win.clear-recent"));
+    button.set_halign(gtk::Align::Fill);
+    button.set_hexpand(true);
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.set_hexpand(true);
+    let label = gtk::Label::new(Some("Clear Recent"));
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    let icon = gtk::Image::from_icon_name("user-trash-symbolic");
+    icon.set_halign(gtk::Align::End);
+    row.append(&label);
+    row.append(&icon);
+    button.set_child(Some(&row));
+    button
+}
+
+/// A custom two-line recent row: a bold file name and a smaller, dimmed
+/// directory path. The directory is middle-ellipsized so a deep path cannot
+/// widen the whole menu.
+pub(super) fn build_recent_button(path: &Path) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("flat");
+    button.set_halign(gtk::Align::Fill);
+    button.set_hexpand(true);
+    button.set_action_name(Some("win.open-recent"));
+    button.set_action_target_value(Some(&path.to_string_lossy().to_variant()));
+
+    let home = glib::home_dir();
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let directory = path
+        .parent()
+        .map(|parent| display_directory(parent, &home))
+        .unwrap_or_default();
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    content.set_hexpand(true);
+
+    let name_label = gtk::Label::new(Some(name));
+    name_label.set_xalign(0.0);
+    name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    name_label.set_max_width_chars(48);
+    let attributes = gtk::pango::AttrList::new();
+    attributes.insert(gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Bold));
+    name_label.set_attributes(Some(&attributes));
+
+    let directory_label = gtk::Label::new(Some(&directory));
+    directory_label.set_xalign(0.0);
+    directory_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    directory_label.set_max_width_chars(56);
+    directory_label.add_css_class("caption");
+    directory_label.add_css_class("dim-label");
+
+    content.append(&name_label);
+    content.append(&directory_label);
+    button.set_child(Some(&content));
+    button
+}
+
+/// Shorten a path below the user's home directory for display. The stored path
+/// and the action target remain absolute; only the menu label uses `~`.
+fn display_path(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.to_string_lossy()),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
+/// A directory label always ends with `/`, without doubling the root separator.
+fn display_directory(path: &Path, home: &Path) -> String {
+    let mut text = display_path(path, home);
+    if !text.ends_with('/') {
+        text.push('/');
+    }
+    text
+}
+
 /// The EOL conversion choices for the status-bar popover.
 pub(super) fn build_eol_menu() -> gio::Menu {
     let menu = gio::Menu::new();
@@ -217,6 +350,132 @@ mod tests {
         assert_eq!(
             attribute(&file, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
             Some("win.new-window")
+        );
+    }
+
+    #[test]
+    fn home_paths_are_shortened_for_display_only() {
+        let home = Path::new("/home/you");
+        assert_eq!(
+            display_path(Path::new("/home/you/notes/todo.md"), home),
+            "~/notes/todo.md"
+        );
+        assert_eq!(display_path(home, home), "~");
+        assert_eq!(
+            display_path(Path::new("/home/you2/notes/todo.md"), home),
+            "/home/you2/notes/todo.md"
+        );
+        assert_eq!(
+            display_path(Path::new("/tmp/notes/todo.md"), home),
+            "/tmp/notes/todo.md"
+        );
+    }
+
+    #[test]
+    fn directory_labels_end_with_a_slash() {
+        let home = Path::new("/home/you");
+        assert_eq!(
+            display_directory(Path::new("/home/you/notes"), home),
+            "~/notes/"
+        );
+        assert_eq!(display_directory(home, home), "~/");
+        assert_eq!(display_directory(Path::new("/"), home), "/");
+        assert_eq!(
+            display_directory(Path::new("/tmp/notes"), home),
+            "/tmp/notes/"
+        );
+    }
+
+    #[test]
+    fn open_menu_is_skipped_without_recents() {
+        assert!(!open_menu_has_entries(&[]));
+        assert!(open_menu_has_entries(&[PathBuf::from(
+            "/home/you/notes/one.md"
+        )]));
+    }
+
+    #[test]
+    fn open_menu_offers_browse_recents_and_clear() {
+        let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
+            menu.item_attribute_value(index, name, None)
+                .and_then(|value| value.get::<String>())
+        };
+        let home = glib::home_dir();
+        let first = home.join("notes/first.md");
+        let second = home.join("notes/second.md");
+        let menu = build_open_menu(&[second.clone(), first.clone()]);
+
+        assert_eq!(
+            attribute(
+                menu.upcast_ref::<gio::MenuModel>(),
+                0,
+                gio::MENU_ATTRIBUTE_LABEL
+            )
+            .as_deref(),
+            Some("Browse…")
+        );
+        assert_eq!(
+            attribute(
+                menu.upcast_ref::<gio::MenuModel>(),
+                0,
+                gio::MENU_ATTRIBUTE_ACTION
+            )
+            .as_deref(),
+            Some("win.open")
+        );
+
+        let files = menu.item_link(1, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(files.n_items(), 2);
+        for (index, path) in [second, first].iter().enumerate() {
+            let index = index as i32;
+            assert_eq!(
+                attribute(&files, index, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+                path.file_name().and_then(|name| name.to_str())
+            );
+            assert_eq!(
+                attribute(&files, index, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+                Some("win.open-recent")
+            );
+            assert_eq!(
+                attribute(&files, index, gio::MENU_ATTRIBUTE_TARGET).as_deref(),
+                Some(path.to_string_lossy().as_ref())
+            );
+            let custom = recent_row_id(index as usize);
+            assert_eq!(
+                attribute(&files, index, "custom").as_deref(),
+                Some(custom.as_str())
+            );
+        }
+
+        let clear = menu.item_link(2, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(clear.n_items(), 1);
+        assert_eq!(
+            attribute(&clear, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Clear Recent")
+        );
+        assert_eq!(
+            attribute(&clear, 0, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.clear-recent")
+        );
+        assert_eq!(
+            attribute(&clear, 0, "custom").as_deref(),
+            Some("clear-recent")
+        );
+        assert!(
+            attribute(&clear, 0, gio::MENU_ATTRIBUTE_ICON).is_none(),
+            "the native icon is never shown beside a label"
+        );
+
+        let empty = build_open_menu(&[]);
+        assert_eq!(empty.n_items(), 1);
+        assert_eq!(
+            attribute(
+                empty.upcast_ref::<gio::MenuModel>(),
+                0,
+                gio::MENU_ATTRIBUTE_ACTION
+            )
+            .as_deref(),
+            Some("win.open")
         );
     }
 

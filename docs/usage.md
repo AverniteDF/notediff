@@ -8,7 +8,20 @@ is a platform-wide issue; click the window to focus it. See the development
 notes for details and workarounds.
 
 - Open files with **Ctrl+O**, the header-bar button or **Open…** in the File
-  menu. The chooser appears first; a chosen file replaces the document in the
+  menu. **Ctrl+O** and **Open…** show the chooser directly. When there are no
+  recent files, the header-bar button opens the chooser directly too. Otherwise
+  it opens a menu with **Browse…** first, then up to ten recently opened file
+  paths (newest first) and **Clear Recent** at the bottom. Each recent entry
+  shows the file name in bold on the first line and its directory path in
+  smaller, dimmed text below, ending with a slash. Directories under your home
+  folder are shortened to `~/...`; the stored paths stay absolute.
+  **Clear Recent** has a right-aligned trash icon. Choosing a recent
+  path behaves like Open File. **Clear Recent** asks first, with the heading
+  **Clear recent documents?** and the body **The files won't be changed.**;
+  **Cancel** leaves the list alone, and confirming deletes the remembered
+  list. If the list cannot be removed, an error dialog says
+  **Could not clear recent documents**.
+  The chooser is shown first; a chosen file replaces the document in the
   current window. If the document has unsaved changes, the **Save changes?**
   prompt says **The document has unsaved changes.** and offers
   **Open New Window**, **Discard Changes** and **Save**; there is no Cancel
@@ -16,6 +29,12 @@ notes for details and workarounds.
   current document untouched. This action is unavailable in Diff Mode; use
   **New Window** or finish the review first. A command-line path or a
   file-manager launch opens a new window for each file.
+  Recent paths are kept in `$XDG_DATA_HOME/notediff/recent` (normally
+  `~/.local/share/notediff/recent`). A missing file is removed only when the
+  Open menu is used, so opening the editor does not scan the list at startup.
+  Paths on a temporarily unavailable shared volume are kept; renaming or
+  moving a file or using Save As updates the list to its new path. Only
+  absolute UTF-8 paths without control characters are remembered.
 - The system file chooser's **Open files read-only** checkbox belongs to the
   desktop portal and only restricts file access for sandboxed apps. It does not
   put notediff into Read-Only mode and does not stop changes from being saved;
@@ -68,7 +87,7 @@ notes for details and workarounds.
 - Find with **Ctrl+F**; press Enter to jump to the next match.
   Ordinary typing never opens Find. Cancelling Open File restores editor focus.
   Focus also returns after the unsaved-changes prompt closes, after the main
-  menu is dismissed, or after closing Manage App… → Baseline Snapshots. In Diff Mode it returns to a
+  menu or the Open menu is dismissed, or after closing Manage App… → Baseline Snapshots. In Diff Mode it returns to a
   visible pane instead; Find and newly opened dialogs retain their own focus.
 - **Replace…** (**Ctrl+H**, main menu) adds a replacement field to the Find bar.
   **Replace** changes the selected match and finds the next; if the selection

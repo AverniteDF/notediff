@@ -63,6 +63,7 @@ use sourceview5::prelude::*;
 
 use crate::core::document::Document;
 use crate::core::pending::AfterOpen;
+use crate::core::recent::RecentDocuments;
 use crate::core::session::DiffSession;
 use crate::core::snapshot_store::SnapshotStore;
 use crate::ui::app_dialog::snapshots_tab::LinkTarget;
@@ -145,6 +146,10 @@ pub struct AppWindow {
     diff: Rc<DiffPage>,
     new_button: gtk::Button,
     open_button: gtk::Button,
+    open_popover: gtk::PopoverMenu,
+    open_clear_button: gtk::Button,
+    /// Custom two-line rows currently installed in the Open menu.
+    open_recent_rows: RefCell<Vec<gtk::Button>>,
     diff_button: gtk::Button,
     /// The "No Changes" label flash on the header button (see `flash`).
     flash: flash::FlashState,
@@ -160,6 +165,8 @@ pub struct AppWindow {
     /// Whether theme and font settings are written to disk.
     persist_settings: bool,
     store: SnapshotStore,
+    /// Remembered recent document paths (see `recent`).
+    recent: RecentDocuments,
     diff_state: RefCell<Option<DiffSession>>,
     last_copy_view: glib::WeakRef<sourceview5::View>,
     #[cfg(test)]
@@ -173,15 +180,16 @@ impl AppWindow {
     /// touches the real baselines.
     #[cfg(test)]
     fn with_store(app: &adw::Application, store: SnapshotStore) -> Rc<Self> {
-        Self::with_parts(app, store, false)
+        Self::with_parts(app, store, false, RecentDocuments::disabled())
     }
 
-    /// Build a window with explicit storage: the baseline `store` and whether
-    /// theme/font settings are written to disk.
+    /// Build a window with explicit storage: the baseline `store`, whether
+    /// theme/font settings are written to disk, and the recent-document state.
     fn with_parts(
         app: &adw::Application,
         store: SnapshotStore,
         persist_settings: bool,
+        recent: RecentDocuments,
     ) -> Rc<Self> {
         let window = adw::ApplicationWindow::builder()
             .application(app)
@@ -201,10 +209,22 @@ impl AppWindow {
         new_button.set_action_name(Some("win.new"));
         header.pack_start(&new_button);
 
+        // The Open button shows recent files when there are any; otherwise its
+        // handler opens the chooser directly. The popover is built on demand.
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
         open_button.set_tooltip_text(Some("Open File (Ctrl+O)"));
         open_button.add_css_class("flat");
-        open_button.set_action_name(Some("win.open"));
+        let open_popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
+        open_popover.set_parent(&open_button);
+        let open_clear_button = menus::build_clear_recent_button();
+        {
+            let popover = open_popover.clone();
+            open_button.connect_destroy(move |_| {
+                if popover.parent().is_some() {
+                    popover.unparent();
+                }
+            });
+        }
         header.pack_start(&open_button);
 
         let copy_button = gtk::Button::from_icon_name("edit-copy-symbolic");
@@ -290,6 +310,9 @@ impl AppWindow {
             diff,
             new_button: new_button.clone(),
             open_button: open_button.clone(),
+            open_popover: open_popover.clone(),
+            open_clear_button: open_clear_button.clone(),
+            open_recent_rows: RefCell::new(Vec::new()),
             diff_button: diff_button.clone(),
             flash: flash::FlashState::default(),
             doc: RefCell::new(Document::new()),
@@ -299,6 +322,7 @@ impl AppWindow {
             status_state: status::StatusState::default(),
             persist_settings,
             store,
+            recent,
             diff_state: RefCell::new(None),
             last_copy_view: glib::WeakRef::new(),
             #[cfg(test)]
@@ -307,7 +331,13 @@ impl AppWindow {
 
         Self::connect_signals(&this, &diff_button);
         Self::connect_copy_button(&this, &copy_button);
-        Self::connect_transient_focus(&this, &main_menu);
+        Self::connect_open_menu(&this);
+        let mut popovers = Vec::new();
+        if let Some(popover) = main_menu.popover() {
+            popovers.push(popover);
+        }
+        popovers.push(this.open_popover.clone().upcast::<gtk::Popover>());
+        Self::connect_transient_focus(&this, popovers);
         WINDOWS.with_borrow_mut(|windows| windows.push(this.clone()));
         this.update_title();
         this.update_diff_button();
@@ -354,6 +384,56 @@ impl AppWindow {
         Self::connect_diff_actions(this, diff_button);
         Self::connect_status_activity(this);
         Self::connect_theme_keys(this);
+    }
+
+    /// Open the chooser directly when there are no recent paths. Otherwise
+    /// refill the menu from the pruned recent list. This is the only place the
+    /// recent state is pruned, so startup and ordinary editing never scan the
+    /// remembered paths.
+    fn connect_open_menu(this: &Rc<Self>) {
+        let weak = Rc::downgrade(this);
+        this.open_button.connect_clicked(move |_| {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            if this.open_popover.is_visible() {
+                this.open_popover.popdown();
+                return;
+            }
+            let entries = this.recent.pruned_entries();
+            if !menus::open_menu_has_entries(&entries) {
+                this.request_open_dialog();
+                return;
+            }
+            let old_rows = std::mem::take(&mut *this.open_recent_rows.borrow_mut());
+            for row in old_rows {
+                if row.parent().is_some() {
+                    row.unparent();
+                }
+            }
+            if this.open_clear_button.parent().is_some() {
+                this.open_clear_button.unparent();
+            }
+            this.open_popover
+                .set_menu_model(Some(&menus::build_open_menu(&entries)));
+
+            let mut rows = Vec::with_capacity(entries.len());
+            for (index, path) in entries.iter().enumerate() {
+                let row = menus::build_recent_button(path);
+                let _ = this
+                    .open_popover
+                    .add_child(&row, &menus::recent_row_id(index));
+                let popover = this.open_popover.clone();
+                row.connect_clicked(move |_| popover.popdown());
+                rows.push(row);
+            }
+            *this.open_recent_rows.borrow_mut() = rows;
+
+            let _ = this
+                .open_popover
+                .add_child(&this.open_clear_button, "clear-recent");
+            this.open_popover.popup();
+        });
     }
 
     fn diff_active(&self) -> bool {
@@ -626,7 +706,12 @@ impl AppWindow {
             .application()
             .and_then(|app| app.downcast::<adw::Application>().ok())
         {
-            open_empty_window_with(&app, self.store.clone(), self.persist_settings);
+            open_empty_window_with(
+                &app,
+                self.store.clone(),
+                self.persist_settings,
+                self.recent.clone(),
+            );
         }
     }
 }
@@ -663,8 +748,38 @@ where
     window.add_action(&action);
 }
 
+/// Register a window action with a single string parameter (used for recent
+/// file paths). The action holds the window weakly.
+fn add_string_action<F>(
+    window: &adw::ApplicationWindow,
+    this: &Rc<AppWindow>,
+    name: &str,
+    handler: F,
+) where
+    F: Fn(&Rc<AppWindow>, &str) + 'static,
+{
+    let action = gio::SimpleAction::new(name, Some(glib::VariantTy::STRING));
+    let weak = Rc::downgrade(this);
+    action.connect_activate(move |_, parameter| {
+        let Some(this) = weak.upgrade() else {
+            return;
+        };
+        let Some(value) = parameter.and_then(|parameter| parameter.str()) else {
+            return;
+        };
+        handler(&this, value);
+    });
+    window.add_action(&action);
+}
+
 pub fn open_window_for_path(app: &adw::Application, path: &Path) {
-    open_window_for_path_with(app, path, SnapshotStore::default(), true);
+    open_window_for_path_with(
+        app,
+        path,
+        SnapshotStore::default(),
+        true,
+        RecentDocuments::default(),
+    );
 }
 
 /// Open `path` in a new window backed by `store`. `persist_settings` says
@@ -675,21 +790,32 @@ pub(super) fn open_window_for_path_with(
     path: &Path,
     store: SnapshotStore,
     persist_settings: bool,
+    recent: RecentDocuments,
 ) {
-    let window = AppWindow::with_parts(app, store, persist_settings);
+    let window = AppWindow::with_parts(app, store, persist_settings, recent);
     window.window.present();
     AppWindow::open_path_after(&window, path, AfterOpen::CloseWindowOnCancel);
     window.editor_view.grab_focus();
 }
 
 pub fn open_empty_window(app: &adw::Application) {
-    open_empty_window_with(app, SnapshotStore::default(), true);
+    open_empty_window_with(
+        app,
+        SnapshotStore::default(),
+        true,
+        RecentDocuments::default(),
+    );
 }
 
 /// Open an empty window backed by `store`. `persist_settings` says whether
 /// theme and font settings are written to disk; test windows pass false.
-fn open_empty_window_with(app: &adw::Application, store: SnapshotStore, persist_settings: bool) {
-    let window = AppWindow::with_parts(app, store, persist_settings);
+fn open_empty_window_with(
+    app: &adw::Application,
+    store: SnapshotStore,
+    persist_settings: bool,
+    recent: RecentDocuments,
+) {
+    let window = AppWindow::with_parts(app, store, persist_settings, recent);
     window.window.present();
     window.editor_view.grab_focus();
 }

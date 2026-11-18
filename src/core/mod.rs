@@ -14,6 +14,7 @@ pub mod indent;
 pub mod inline;
 pub mod insert;
 pub mod pending;
+pub mod recent;
 pub mod relink;
 pub mod rename;
 pub mod session;

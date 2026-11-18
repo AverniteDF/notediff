@@ -19,7 +19,7 @@ use crate::ui::dialogs::{self, Response};
 use crate::ui::toast::ToastKind;
 
 use super::diff_actions::AfterDiscardReview;
-use super::{AppWindow, add_action};
+use super::{AppWindow, add_action, add_string_action};
 
 /// How a freshly opened file is presented under the no-tab policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl AppWindow {
     /// buttons lose their shortcut tooltips.
     pub(super) fn update_file_actions(&self) {
         let enabled = !self.diff_active();
-        for name in ["new", "open", "save-as", "rename"] {
+        for name in ["new", "open", "open-recent", "save-as", "rename"] {
             if let Some(action) = self
                 .window
                 .lookup_action(name)
@@ -69,11 +69,13 @@ impl AppWindow {
                 action.set_enabled(enabled);
             }
         }
-        for (button, tooltip) in [
-            (&self.new_button, "New File (Ctrl+N)"),
-            (&self.open_button, "Open File (Ctrl+O)"),
-        ] {
-            button.set_tooltip_text(enabled.then_some(tooltip));
+        self.new_button
+            .set_tooltip_text(enabled.then_some("New File (Ctrl+N)"));
+        self.open_button
+            .set_tooltip_text(enabled.then_some("Open File (Ctrl+O)"));
+        self.open_button.set_sensitive(enabled);
+        if !enabled {
+            self.open_popover.popdown();
         }
     }
 
@@ -84,6 +86,12 @@ impl AppWindow {
         add_action(window, this, "new", |this| this.request_new_file());
         add_action(window, this, "new-window", |this| this.new_window());
         add_action(window, this, "open", |this| this.request_open_dialog());
+        add_string_action(window, this, "open-recent", |this, path| {
+            this.request_open_path(PathBuf::from(path));
+        });
+        add_action(window, this, "clear-recent", |this| {
+            this.confirm_clear_recent()
+        });
         add_action(window, this, "save", |this| this.save_then(None));
         add_action(window, this, "save-as", |this| this.save_as_then(None));
         add_action(window, this, "rename", |this| this.show_rename());
@@ -167,7 +175,11 @@ impl AppWindow {
     }
 
     fn load_document(&self, document: Document, mode: OpenMode) {
+        let recent_path = document.path().map(Path::to_path_buf);
         *self.doc.borrow_mut() = document;
+        if let Some(path) = recent_path {
+            self.recent.record(&path);
+        }
         // The declined-reload marker belongs to the previous file.
         self.flags.declined_reload_mtime.set(None);
         self.show_document_text(mode);
@@ -281,11 +293,49 @@ impl AppWindow {
         }
     }
 
-    fn request_open_dialog(self: &Rc<Self>) {
+    pub(super) fn request_open_dialog(self: &Rc<Self>) {
         if self.diff_active() {
             return;
         }
         self.show_open_dialog();
+    }
+
+    /// Open a path chosen from the chooser or the recent list. The path is
+    /// committed first, so the usual save prompt runs before the document is
+    /// replaced.
+    fn request_open_path(self: &Rc<Self>, path: PathBuf) {
+        if self.diff_active() {
+            return;
+        }
+        self.require_saved(PendingAction::OpenPath(path));
+    }
+
+    /// Clear the remembered recent files after confirmation. The documents
+    /// themselves are never touched.
+    fn confirm_clear_recent(self: &Rc<Self>) {
+        if self.diff_active() {
+            return;
+        }
+        self.open_popover.popdown();
+        let this = self.clone();
+        dialogs::ask(
+            &self.window,
+            "Clear recent documents?",
+            "The files won't be changed.",
+            &[
+                Response::new("cancel", "Cancel"),
+                Response::destructive("clear", "Clear Recent"),
+            ],
+            "cancel",
+            "cancel",
+            move |response| {
+                if response == "clear"
+                    && let Err(err) = this.recent.clear()
+                {
+                    this.show_error("Could not clear recent documents", &err.to_string());
+                }
+            },
+        );
     }
 
     fn show_open_dialog(self: &Rc<Self>) {
@@ -315,7 +365,7 @@ impl AppWindow {
         {
             // The chooser already committed to a path; the save prompt, if
             // any, comes now so cancelling the chooser costs nothing.
-            this.require_saved(PendingAction::OpenPath(path));
+            this.request_open_path(path);
         } else {
             this.editor_view.grab_focus();
         }
@@ -345,6 +395,11 @@ impl AppWindow {
         match result {
             Ok(()) => {
                 drop(doc);
+                if path.is_some()
+                    && let Some(saved) = self.path_for_snapshot()
+                {
+                    self.recent.record(&saved);
+                }
                 self.flags.dirty.set(false);
                 self.update_title();
                 self.update_diff_button();
@@ -657,7 +712,13 @@ impl AppWindow {
         else {
             return;
         };
-        super::open_window_for_path_with(&app, path, self.store.clone(), self.persist_settings);
+        super::open_window_for_path_with(
+            &app,
+            path,
+            self.store.clone(),
+            self.persist_settings,
+            self.recent.clone(),
+        );
     }
 
     /// Ask for a new name or path for the open file. Does nothing in Diff
@@ -769,6 +830,9 @@ impl AppWindow {
                 self.update_title();
                 self.update_diff_button();
                 let new_path = self.path_for_snapshot().unwrap_or_default();
+                if !new_path.as_os_str().is_empty() {
+                    self.recent.record(&new_path);
+                }
                 let name = new_path
                     .file_name()
                     .and_then(|name| name.to_str())

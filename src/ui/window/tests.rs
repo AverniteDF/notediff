@@ -6,10 +6,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use adw::prelude::*;
 use gtk::gio;
+use gtk::glib::variant::ToVariant;
 use sourceview5::prelude::*;
 
 use crate::core::indent::IndentScale;
 use crate::core::inline::ChangeKind;
+use crate::core::recent::RecentDocuments;
 use crate::core::snapshot_store::{LinkMode, SnapshotStore};
 use crate::core::textstats::LineEnding;
 use crate::ui::status_bar::EditMode;
@@ -166,6 +168,7 @@ fn gtk_window_smoke() {
     quit_scenario(&app, store.clone());
     quit_review_scenario(&app, &dir, &store);
     open_file_save_prompt_scenario(&app, &dir, &store);
+    recent_menu_scenario(&app, &dir, &store);
     new_file_scenario(&app, &dir, &store);
     diff_file_actions_disabled_scenario(&app, &dir, &store);
     theme_scenario(&app, &store);
@@ -281,10 +284,7 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
         .iter()
         .find(|button| button.icon_name().as_deref() == Some("edit-copy-symbolic"))
         .unwrap();
-    let open = buttons
-        .iter()
-        .find(|button| button.icon_name().as_deref() == Some("document-open-symbolic"))
-        .unwrap();
+    let open = &window.open_button;
     assert_eq!(
         open.next_sibling().as_ref(),
         Some(copy.upcast_ref::<gtk::Widget>())
@@ -1550,6 +1550,248 @@ fn new_file_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) 
     });
 }
 
+fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let state = dir.join("recent-state");
+    let first_file = dir.join("recent-first.txt");
+    let second_file = dir.join("recent-second.txt");
+    std::fs::write(&first_file, "first\n").unwrap();
+    std::fs::write(&second_file, "second\n").unwrap();
+
+    let window = AppWindow::with_parts(
+        app,
+        store.clone(),
+        false,
+        RecentDocuments::at(state.clone()),
+    );
+    window.window.present();
+    AppWindow::open_path(&window, &first_file);
+    AppWindow::open_path(&window, &second_file);
+    let first = first_file.canonicalize().unwrap();
+    let second = second_file.canonicalize().unwrap();
+
+    assert_eq!(
+        window.recent.pruned_entries(),
+        vec![second.clone(), first.clone()]
+    );
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        format!("{}\n{}\n", second.display(), first.display())
+    );
+
+    // Clicking the button opens the menu when there are recent paths.
+    window.open_button.emit_clicked();
+    assert!(window.open_popover.is_visible());
+    let model = window.open_popover.menu_model().expect("open menu model");
+    assert_eq!(model.n_items(), 3);
+    let label = |menu: &gio::MenuModel, index: i32| {
+        menu.item_attribute_value(index, gio::MENU_ATTRIBUTE_LABEL, None)
+            .and_then(|value| value.get::<String>())
+    };
+    assert_eq!(label(&model, 0).as_deref(), Some("Browse…"));
+    let recents = model.item_link(1, gio::MENU_LINK_SECTION).unwrap();
+    assert_eq!(recents.n_items(), 2);
+    assert_eq!(label(&recents, 0).as_deref(), Some("recent-second.txt"));
+    assert_eq!(label(&recents, 1).as_deref(), Some("recent-first.txt"));
+    let custom = |menu: &gio::MenuModel, index: i32| {
+        menu.item_attribute_value(index, "custom", None)
+            .and_then(|value| value.get::<String>())
+    };
+    assert_eq!(custom(&recents, 0).as_deref(), Some("recent-0"));
+    assert_eq!(custom(&recents, 1).as_deref(), Some("recent-1"));
+
+    let rows = window.open_recent_rows.borrow().clone();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].parent().is_some());
+    let content = rows[0].child().unwrap().downcast::<gtk::Box>().unwrap();
+    assert_eq!(content.orientation(), gtk::Orientation::Vertical);
+    let name_label = content
+        .first_child()
+        .unwrap()
+        .downcast::<gtk::Label>()
+        .unwrap();
+    assert_eq!(name_label.label().as_str(), "recent-second.txt");
+    assert!(name_label.attributes().is_some());
+    assert!(rows[0].tooltip_text().is_none());
+    let directory_label = content
+        .last_child()
+        .unwrap()
+        .downcast::<gtk::Label>()
+        .unwrap();
+    assert_eq!(
+        directory_label.label().as_str(),
+        format!("{}/", second.parent().unwrap().to_string_lossy())
+    );
+    assert!(directory_label.has_css_class("dim-label"));
+    assert!(directory_label.has_css_class("caption"));
+
+    let clear = model.item_link(2, gio::MENU_LINK_SECTION).unwrap();
+    assert_eq!(clear.n_items(), 1);
+    assert_eq!(label(&clear, 0).as_deref(), Some("Clear Recent"));
+    assert_eq!(
+        clear
+            .item_attribute_value(0, "custom", None)
+            .and_then(|value| value.get::<String>())
+            .as_deref(),
+        Some("clear-recent")
+    );
+    assert!(window.open_clear_button.parent().is_some());
+    assert_eq!(
+        window.open_clear_button.action_name().as_deref(),
+        Some("win.clear-recent")
+    );
+    let row = window
+        .open_clear_button
+        .child()
+        .unwrap()
+        .downcast::<gtk::Box>()
+        .unwrap();
+    assert_eq!(
+        row.first_child()
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap()
+            .label()
+            .as_str(),
+        "Clear Recent"
+    );
+    assert_eq!(
+        row.last_child()
+            .unwrap()
+            .downcast::<gtk::Image>()
+            .unwrap()
+            .icon_name()
+            .as_deref(),
+        Some("user-trash-symbolic")
+    );
+    window.open_popover.popdown();
+
+    // Reopening the menu replaces the custom rows instead of reusing stale
+    // ones.
+    window.open_button.emit_clicked();
+    let rows = window.open_recent_rows.borrow().clone();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.parent().is_some()));
+    window.open_popover.popdown();
+
+    // Clicking a two-line recent row goes through the normal open flow and
+    // moves the path to the front of the list.
+    let first_row = rows[1].clone();
+    first_row.emit_clicked();
+    assert_eq!(window.doc.borrow().path(), Some(first.as_path()));
+    assert_eq!(
+        window.recent.pruned_entries(),
+        vec![first.clone(), second.clone()]
+    );
+
+    // A dirty document gets the same save prompt as the chooser.
+    window
+        .editor_buffer
+        .place_cursor(&window.editor_buffer.end_iter());
+    window.editor_buffer.insert_at_cursor("dirty");
+    let parameter = second.to_str().unwrap().to_variant();
+    window
+        .window
+        .lookup_action("open-recent")
+        .unwrap()
+        .activate(Some(&parameter));
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert_eq!(dialog.heading().as_deref(), Some("Save changes?"));
+    dialog.close();
+    wait_for(|| window.window.visible_dialog().is_none());
+    assert_eq!(window.doc.borrow().path(), Some(first.as_path()));
+    assert!(window.flags.dirty.get());
+
+    // Save As and Rename or Move record the new canonical path; the stale old
+    // path is pruned when the list is next used.
+    let third_file = dir.join("recent-third.txt");
+    window.persist(Some(&third_file)).unwrap();
+    let third = third_file.canonicalize().unwrap();
+    assert_eq!(window.doc.borrow().path(), Some(third.as_path()));
+    assert_eq!(
+        window.recent.pruned_entries(),
+        vec![third.clone(), first.clone(), second.clone()]
+    );
+
+    window.rename_file("recent-renamed.txt");
+    let renamed = dir.join("recent-renamed.txt").canonicalize().unwrap();
+    assert_eq!(window.doc.borrow().path(), Some(renamed.as_path()));
+    assert_eq!(
+        window.recent.pruned_entries(),
+        vec![renamed.clone(), first.clone(), second.clone()]
+    );
+
+    // A missing file disappears the next time the list is used.
+    std::fs::remove_file(&second_file).unwrap();
+    assert_eq!(
+        window.recent.pruned_entries(),
+        vec![renamed.clone(), first.clone()]
+    );
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        format!("{}\n{}\n", renamed.display(), first.display())
+    );
+
+    // The custom Clear Recent row asks first, and cancelling keeps the state
+    // file.
+    window.open_clear_button.emit_clicked();
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert_eq!(dialog.heading().as_deref(), Some("Clear recent documents?"));
+    assert_eq!(dialog.body().as_str(), "The files won't be changed.");
+    find_response_button(dialog.upcast_ref(), "Cancel")
+        .unwrap()
+        .emit_clicked();
+    wait_for(|| window.window.visible_dialog().is_none());
+    assert!(state.exists());
+
+    window
+        .window
+        .lookup_action("clear-recent")
+        .unwrap()
+        .activate(None);
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    find_response_button(dialog.upcast_ref(), "Clear Recent")
+        .unwrap()
+        .emit_clicked();
+    wait_for(|| window.window.visible_dialog().is_none());
+    assert!(!state.exists());
+    assert!(window.recent.pruned_entries().is_empty());
+
+    window.window.destroy();
+}
+
 fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     let path = dir.join("diff-locked-actions.txt");
     std::fs::write(&path, "base\n").unwrap();
@@ -1560,10 +1802,7 @@ fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store
     window.set_editor_text("changed\n");
     window.persist(None).unwrap();
     assert_eq!(
-        find_action_button(window.window.upcast_ref(), "win.open")
-            .unwrap()
-            .tooltip_text()
-            .as_deref(),
+        window.open_button.tooltip_text().as_deref(),
         Some("Open File (Ctrl+O)")
     );
     assert_eq!(
@@ -1579,7 +1818,7 @@ fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store
     assert!(window.has_accepted_diff());
     window.window.present();
 
-    for name in ["new", "open", "save-as", "rename"] {
+    for name in ["new", "open", "open-recent", "save-as", "rename"] {
         assert!(
             !window.window.lookup_action(name).unwrap().is_enabled(),
             "{name} must be disabled in Diff Mode"
@@ -1592,9 +1831,8 @@ fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store
             .unwrap()
             .is_enabled()
     );
-    let open_button = find_action_button(window.window.upcast_ref(), "win.open").unwrap();
-    assert!(!open_button.is_sensitive());
-    assert!(open_button.tooltip_text().is_none());
+    assert!(!window.open_button.is_sensitive());
+    assert!(window.open_button.tooltip_text().is_none());
     let new_button = find_action_button(window.window.upcast_ref(), "win.new").unwrap();
     assert!(!new_button.is_sensitive());
     assert!(new_button.tooltip_text().is_none());
@@ -1612,14 +1850,12 @@ fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store
     assert!(!window.has_accepted_diff());
     window.exit_diff();
     assert!(!window.diff_active());
-    for name in ["new", "open", "save-as", "rename"] {
+    for name in ["new", "open", "open-recent", "save-as", "rename"] {
         assert!(window.window.lookup_action(name).unwrap().is_enabled());
     }
+    assert!(window.open_button.is_sensitive());
     assert_eq!(
-        find_action_button(window.window.upcast_ref(), "win.open")
-            .unwrap()
-            .tooltip_text()
-            .as_deref(),
+        window.open_button.tooltip_text().as_deref(),
         Some("Open File (Ctrl+O)")
     );
     assert_eq!(

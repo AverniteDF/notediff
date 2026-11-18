@@ -6,6 +6,16 @@ versioning.
 
 ## [Unreleased]
 
+### Added
+
+- The header Open button now opens a menu with **Browse…**, up to ten recently
+  opened file paths and **Clear Recent** with a right-aligned trash icon. Each
+  recent entry shows a bold file name above a smaller, dimmed directory path
+  ending in `/`, with home paths shortened to `~/...`; recent rows have no
+  tooltips. With no recent files the button opens
+  the chooser directly. Missing paths are pruned lazily when the menu is shown,
+  so startup does no recent-list filesystem scan.
+
 ### Changed
 
 - Startup no longer rewrites the installed scheme files when their content is

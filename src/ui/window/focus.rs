@@ -11,7 +11,10 @@ use gtk::glib;
 use super::AppWindow;
 
 impl AppWindow {
-    pub(super) fn connect_transient_focus(this: &Rc<Self>, menu: &gtk::MenuButton) {
+    pub(super) fn connect_transient_focus(
+        this: &Rc<Self>,
+        popovers: impl IntoIterator<Item = gtk::Popover>,
+    ) {
         // A menu closing because an action was chosen must not override that
         // action's focus (a new dialog, a file chooser, etc.). Find/Replace
         // are restored explicitly if GTK hands focus back to the menu button.
@@ -31,13 +34,14 @@ impl AppWindow {
                 action.connect_activate(move |_, _| chosen.set(true));
             }
         }
-        if let Some(popover) = menu.popover() {
-            let chosen = action_chosen.clone();
-            popover.connect_show(move |_| chosen.set(false));
+        for popover in popovers {
+            let shown = action_chosen.clone();
+            popover.connect_show(move |_| shown.set(false));
             let weak = Rc::downgrade(this);
+            let chosen = action_chosen.clone();
             popover.connect_closed(move |_| {
                 let weak = weak.clone();
-                let chosen = action_chosen.clone();
+                let chosen = chosen.clone();
                 glib::idle_add_local_once(move || {
                     if let Some(this) = weak.upgrade()
                         && (!chosen.get() || this.search_bar.is_search_mode())
