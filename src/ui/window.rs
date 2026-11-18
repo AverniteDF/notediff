@@ -355,6 +355,7 @@ impl AppWindow {
             popovers.push(popover);
         }
         popovers.push(this.open_popover.clone().upcast::<gtk::Popover>());
+        popovers.push(this.title_popover.clone().upcast::<gtk::Popover>());
         Self::connect_transient_focus(&this, popovers);
         WINDOWS.with_borrow_mut(|windows| windows.push(this.clone()));
         this.update_title();

@@ -1551,13 +1551,22 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
     );
 
     // The full-path tooltip is suppressed while the copy menu is showing.
+    // Dismissing the menu also returns focus to the editor.
     window.window.present();
     gtk::test_widget_wait_for_draw(&window.window);
+    window.title_popover.set_autohide(false);
+    let editor_focused = || {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            == Some(window.editor_view.clone().upcast::<gtk::Widget>())
+    };
+    window.editor_view.grab_focus();
+    assert!(editor_focused());
     window.title_popover.popup();
     wait_for(|| window.title_popover.is_visible());
     assert!(window.title_label.tooltip_text().is_none());
     window.title_popover.popdown();
     wait_for(|| !window.title_popover.is_visible());
+    wait_for(editor_focused);
     assert_eq!(
         window.title_label.tooltip_text().as_deref(),
         Some(canonical_text.as_str())
@@ -1567,11 +1576,17 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
         assert!(window.window.lookup_action(name).unwrap().is_enabled());
     }
 
+    window.editor_view.grab_focus();
+    window.title_popover.popup();
+    wait_for(|| window.title_popover.is_visible());
     window
         .window
         .lookup_action("copy-file-name")
         .unwrap()
         .activate(None);
+    window.title_popover.popdown();
+    wait_for(|| !window.title_popover.is_visible());
+    wait_for(editor_focused);
     let copied = gtk::glib::MainContext::default()
         .block_on(window.window.clipboard().read_text_future())
         .unwrap()
@@ -1589,11 +1604,17 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
     );
     window.last_toast.borrow_mut().take();
 
+    window.editor_view.grab_focus();
+    window.title_popover.popup();
+    wait_for(|| window.title_popover.is_visible());
     window
         .window
         .lookup_action("copy-full-path")
         .unwrap()
         .activate(None);
+    window.title_popover.popdown();
+    wait_for(|| !window.title_popover.is_visible());
+    wait_for(editor_focused);
     let copied = gtk::glib::MainContext::default()
         .block_on(window.window.clipboard().read_text_future())
         .unwrap()

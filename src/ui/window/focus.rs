@@ -20,7 +20,13 @@ impl AppWindow {
         // are restored explicitly if GTK hands focus back to the menu button.
         // Check on idle because closure can precede action activation.
         let action_chosen = Rc::new(Cell::new(false));
+        // These actions only write the clipboard and show a toast, so they do
+        // not claim focus. Choosing one must still restore the editor.
+        const COPY_ACTIONS: [&str; 2] = ["copy-file-name", "copy-full-path"];
         for name in this.window.list_actions() {
+            if COPY_ACTIONS.contains(&name.as_str()) {
+                continue;
+            }
             if let Some(action) = this
                 .window
                 .lookup_action(&name)

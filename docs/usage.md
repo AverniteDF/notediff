@@ -180,7 +180,9 @@ notes for details and workarounds.
   title shows the full path; the tooltip is hidden while the right-click menu
   is showing. Right-clicking it offers **Copy file name** and
   **Copy full path**; untitled documents have no tooltip and both actions are
-  disabled. Copying shows **Copied file name** or **Copied full path**.
+  disabled. Closing the menu with Esc, a click outside, or either copy action
+  returns focus to the editor. Copying shows **Copied file name** or
+  **Copied full path**.
 - Closing a window with unsaved text prompts to save, discard or cancel. For an
   untitled document the prompt's save action reads **Save As** and opens the file
   chooser. A new
