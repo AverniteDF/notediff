@@ -153,6 +153,49 @@ The GitHub Actions workflow runs formatting, clippy with `-D warnings`, the
 unit tests, the ignored smoke test under Xvfb plus a DBus session, and a
 separate `cargo check` on Rust 1.92.
 
+## Production builds
+
+The committed release profile keeps `lto = "thin"` and leaves symbols in place,
+which links quickly (about 20 s) and is the right default while developing. It
+produces a binary of roughly 2.2 MB.
+
+Builds for distribution should additionally strip the symbol table and let fat
+LTO merge more code. Measured on Debian 13 on 2026-11-17:
+
+| Profile | Binary | Build |
+| --- | --- | --- |
+| default release (`lto = "thin"`) | 2,218,216 B | ~20 s |
+| `strip = true`, `lto = "fat"`, `codegen-units = 1` | 1,437,312 B (−35%) | ~2 min |
+| the same plus `panic = "abort"` | 1,336,736 B (−40%) | ~2 min |
+
+None of these settings change behaviour except `panic = "abort"`, which turns a
+panic into an abort instead of unwinding through GTK callbacks; it also removes
+the unwinding tables. Use it for distribution builds unless crash unwinding
+matters to you.
+
+Apply the profile overrides only when building for distribution, so normal
+builds stay fast:
+
+```sh
+cargo build --release --config 'profile.release.lto="fat"' \
+  --config 'profile.release.codegen-units=1' \
+  --config 'profile.release.strip=true'
+
+cargo install --locked --path . --config 'profile.release.lto="fat"' \
+  --config 'profile.release.codegen-units=1' \
+  --config 'profile.release.strip=true'
+```
+
+`cargo install` accepts the same overrides, so `install.sh` needs no change for
+a smaller local install, and a tagged release may commit the settings to
+`[profile.release]` instead.
+
+Startup is dominated by GTK and the desktop's display bridge, not by the binary
+size: a bare GTK window takes ~140 ms to appear on this ChromeOS/Sommelier
+setup, and an empty notediff window ~300 ms. The scheme files under
+`$XDG_DATA_HOME/notediff/styles` are only rewritten when their content changes,
+so a launch does not fsync them again.
+
 ## Notes and limitations
 
 - One baseline per file, no history. Replacing the live file outside notediff

@@ -8,6 +8,8 @@ versioning.
 
 ### Changed
 
+- Startup no longer rewrites the installed scheme files when their content is
+  already up to date, avoiding a few fsyncs on every launch.
 - New File now shows the same **Save changes?** prompt as Open File, with
   **Open New Window**, **Discard Changes** and **Save** and no Cancel button.
   **Open New Window** opens an empty window and leaves the current document

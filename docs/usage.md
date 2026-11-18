@@ -16,6 +16,10 @@ notes for details and workarounds.
   current document untouched. This action is unavailable in Diff Mode; use
   **New Window** or finish the review first. A command-line path or a
   file-manager launch opens a new window for each file.
+- The system file chooser's **Open files read-only** checkbox belongs to the
+  desktop portal and only restricts file access for sandboxed apps. It does not
+  put notediff into Read-Only mode and does not stop changes from being saved;
+  use the status-bar **Read Only** toggle to lock a document instead.
 - **Copy Selected Text** (copy icon immediately right of Open File) copies the
   editor selection, or the selection in the last-focused visible Diff Mode or
   inspection pane, through the clipboard API. It omits display-only diff markers

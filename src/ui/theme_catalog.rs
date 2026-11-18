@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use super::theme_palette::{self, Palette};
 use crate::core::{
-    fsutil::atomic_write,
+    fsutil::atomic_write_if_changed,
     themes::{self, Theme},
 };
 
@@ -52,8 +52,8 @@ impl Catalog {
             let path = styles_dir.join(format!("{id}.xml"));
             let (xml, line_number_alpha) = prepare_scheme_xml(xml);
             let manager = sourceview5::StyleSchemeManager::new();
-            let scheme = match atomic_write(&path, &xml, true) {
-                Ok(()) => load_file(&manager, &path, id, &path),
+            let scheme = match atomic_write_if_changed(&path, &xml, true) {
+                Ok(_) => load_file(&manager, &path, id, &path),
                 Err(err) => Err(format!("{}: {err}", path.display())),
             };
             let scheme = match scheme {
@@ -96,8 +96,8 @@ impl Catalog {
             let (sanitized, line_number_alpha) = prepare_scheme_xml(&xml);
             let load_path = if sanitized != xml {
                 let cached = styles_dir.join(format!("{}.xml", def.scheme_id));
-                match atomic_write(&cached, &sanitized, true) {
-                    Ok(()) => cached,
+                match atomic_write_if_changed(&cached, &sanitized, true) {
+                    Ok(_) => cached,
                     Err(err) => {
                         result
                             .diagnostics

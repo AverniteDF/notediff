@@ -70,6 +70,9 @@ Cargo (normally under `~/.cargo/bin`), places the desktop entry and icons under
 
 Snapshots and settings under `$XDG_DATA_HOME/notediff` are left alone.
 
+Distribution builds can be made about a third smaller with stripping and fat
+LTO; see [Production builds](docs/development.md#production-builds).
+
 To run a development build:
 
 ```sh

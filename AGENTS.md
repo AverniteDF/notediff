@@ -64,4 +64,7 @@ its submodules. See `docs/development.md` for the full map.
   `src/ui/about_dialog.rs`.
 - The application ID is `io.github.AverniteDF.Notediff` in `src/main.rs` and the
   desktop-file/icon names match it.
+- Distribution builds use the size profile in `docs/development.md` → Production
+  builds (`strip`, fat LTO, one codegen unit); day-to-day builds stay on the
+  default thin LTO.
 - `target/` must not be committed.

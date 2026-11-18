@@ -116,6 +116,24 @@ pub fn atomic_write(path: &Path, contents: &str, create_parent: bool) -> io::Res
     Ok(())
 }
 
+/// Like [`atomic_write`], but skip the write when `path` already holds exactly
+/// `contents`, and report whether a write happened.
+///
+/// Startup code uses this so cache files (the installed scheme XMLs) are not
+/// rewritten with an fsync on every launch. A read failure falls back to a
+/// normal write, so a missing, unreadable or corrupt file still recovers.
+pub fn atomic_write_if_changed(
+    path: &Path,
+    contents: &str,
+    create_parent: bool,
+) -> io::Result<bool> {
+    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+        return Ok(false);
+    }
+    atomic_write(path, contents, create_parent)?;
+    Ok(true)
+}
+
 /// Whether a rename failure may indicate a filesystem that does not support
 /// sibling renames. Other failures (notably disk-full and generic I/O errors)
 /// must leave the original file untouched.
@@ -314,6 +332,25 @@ mod tests {
         atomic_write(&path, "one", true).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "one");
         atomic_write(&path, "two", true).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "two");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn atomic_write_if_changed_skips_identical_content() {
+        let dir = test_dir("write-if-changed");
+        let path = dir.join("nested/scheme.xml");
+        assert!(atomic_write_if_changed(&path, "one", true).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "one");
+        // Unchanged content is left alone, including its modification time.
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(!atomic_write_if_changed(&path, "one", true).unwrap());
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        // Changed content is still written, and a missing file is recreated.
+        assert!(atomic_write_if_changed(&path, "two", true).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "two");
+        fs::remove_file(&path).unwrap();
+        assert!(atomic_write_if_changed(&path, "two", true).unwrap());
         assert_eq!(fs::read_to_string(&path).unwrap(), "two");
         let _ = fs::remove_dir_all(dir);
     }
