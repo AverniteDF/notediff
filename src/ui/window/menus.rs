@@ -139,7 +139,7 @@ pub(super) fn recent_row_id(index: usize) -> String {
 }
 
 /// The header Open button's menu: Browse first, then recent paths (custom
-/// two-line rows, newest first), then Clear Recent.
+/// two-line rows, newest first).
 pub(super) fn build_open_menu(recent: &[PathBuf]) -> gio::Menu {
     let menu = gio::Menu::new();
     menu.append(Some("Browse…"), Some("win.open"));
@@ -162,48 +162,31 @@ pub(super) fn build_open_menu(recent: &[PathBuf]) -> gio::Menu {
     }
     menu.append_section(None, &files);
 
-    let clear = gio::Menu::new();
-    let item = gio::MenuItem::new(Some("Clear Recent"), Some("win.clear-recent"));
-    item.set_attribute_value("custom", Some(&"clear-recent".to_variant()));
-    clear.append_item(&item);
-    menu.append_section(None, &clear);
-
     menu
 }
 
-/// A custom Clear Recent row. A normal menu item hides its icon whenever it
-/// also has a label, so this row is inserted into the popover by id. The label
-/// expands so the trash icon sits at the trailing edge.
-pub(super) fn build_clear_recent_button() -> gtk::Button {
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.set_action_name(Some("win.clear-recent"));
-    button.set_halign(gtk::Align::Fill);
-    button.set_hexpand(true);
-
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    row.set_hexpand(true);
-    let label = gtk::Label::new(Some("Clear Recent"));
-    label.set_xalign(0.0);
-    label.set_hexpand(true);
-    let icon = gtk::Image::from_icon_name("user-trash-symbolic");
-    icon.set_halign(gtk::Align::End);
-    row.append(&label);
-    row.append(&icon);
-    button.set_child(Some(&row));
-    button
+/// The widgets of one custom recent entry: the clickable two-line open area and
+/// its trailing trash button.
+#[derive(Clone)]
+pub(super) struct RecentRow {
+    pub root: gtk::Box,
+    pub open: gtk::Button,
+    pub trash: gtk::Button,
 }
 
 /// A custom two-line recent row: a bold file name and a smaller, dimmed
 /// directory path. The directory is middle-ellipsized so a deep path cannot
-/// widen the whole menu.
-pub(super) fn build_recent_button(path: &Path) -> gtk::Button {
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.set_halign(gtk::Align::Fill);
-    button.set_hexpand(true);
-    button.set_action_name(Some("win.open-recent"));
-    button.set_action_target_value(Some(&path.to_string_lossy().to_variant()));
+/// widen the whole menu. The trash button fills the trailing edge.
+pub(super) fn build_recent_row(path: &Path) -> RecentRow {
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    root.set_hexpand(true);
+
+    let open = gtk::Button::new();
+    open.add_css_class("flat");
+    open.set_halign(gtk::Align::Fill);
+    open.set_hexpand(true);
+    open.set_action_name(Some("win.open-recent"));
+    open.set_action_target_value(Some(&path.to_string_lossy().to_variant()));
 
     let home = glib::home_dir();
     let name = path
@@ -235,8 +218,16 @@ pub(super) fn build_recent_button(path: &Path) -> gtk::Button {
 
     content.append(&name_label);
     content.append(&directory_label);
-    button.set_child(Some(&content));
-    button
+    open.set_child(Some(&content));
+
+    let trash = gtk::Button::from_icon_name("user-trash-symbolic");
+    trash.add_css_class("flat");
+    trash.set_valign(gtk::Align::Center);
+    trash.set_focus_on_click(false);
+
+    root.append(&open);
+    root.append(&trash);
+    RecentRow { root, open, trash }
 }
 
 /// Shorten a path below the user's home directory for display. The stored path
@@ -395,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn open_menu_offers_browse_recents_and_clear() {
+    fn open_menu_offers_browse_and_recents() {
         let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
             menu.item_attribute_value(index, name, None)
                 .and_then(|value| value.get::<String>())
@@ -447,24 +438,7 @@ mod tests {
             );
         }
 
-        let clear = menu.item_link(2, gio::MENU_LINK_SECTION).unwrap();
-        assert_eq!(clear.n_items(), 1);
-        assert_eq!(
-            attribute(&clear, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Clear Recent")
-        );
-        assert_eq!(
-            attribute(&clear, 0, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
-            Some("win.clear-recent")
-        );
-        assert_eq!(
-            attribute(&clear, 0, "custom").as_deref(),
-            Some("clear-recent")
-        );
-        assert!(
-            attribute(&clear, 0, gio::MENU_ATTRIBUTE_ICON).is_none(),
-            "the native icon is never shown beside a label"
-        );
+        assert_eq!(menu.n_items(), 2);
 
         let empty = build_open_menu(&[]);
         assert_eq!(empty.n_items(), 1);

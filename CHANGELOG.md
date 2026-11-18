@@ -8,13 +8,15 @@ versioning.
 
 ### Added
 
-- The header Open button now opens a menu with **Browse…**, up to ten recently
-  opened file paths and **Clear Recent** with a right-aligned trash icon. Each
-  recent entry shows a bold file name above a smaller, dimmed directory path
-  ending in `/`, with home paths shortened to `~/...`; recent rows have no
-  tooltips. With no recent files the button opens
-  the chooser directly. Missing paths are pruned lazily when the menu is shown,
-  so startup does no recent-list filesystem scan.
+- The header Open button now opens a menu with **Browse…** and up to ten
+  recently opened file paths. Each entry shows a bold file name above a smaller,
+  dimmed directory path ending in `/`, with home paths shortened to `~/...`, and
+  has a right-aligned trash button that removes that entry immediately. Recent
+  rows have no tooltips. With no recent files the button opens the chooser
+  directly. Missing paths are pruned lazily when the menu is shown, so startup
+  does no recent-list filesystem scan.
+- Shift-clicking the header New button opens a new window. The shortcut is
+  hidden from the tooltip and menus.
 
 ### Changed
 

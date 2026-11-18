@@ -147,9 +147,8 @@ pub struct AppWindow {
     new_button: gtk::Button,
     open_button: gtk::Button,
     open_popover: gtk::PopoverMenu,
-    open_clear_button: gtk::Button,
     /// Custom two-line rows currently installed in the Open menu.
-    open_recent_rows: RefCell<Vec<gtk::Button>>,
+    open_recent_rows: RefCell<Vec<menus::RecentRow>>,
     diff_button: gtk::Button,
     /// The "No Changes" label flash on the header button (see `flash`).
     flash: flash::FlashState,
@@ -202,11 +201,10 @@ impl AppWindow {
         header.add_css_class(theme::MAIN_HEADER_CLASS);
         header.set_show_end_title_buttons(true);
 
-        // New File is wired through its action, so it needs no handler below.
+        // A normal click starts New File; Shift-click opens a new window.
         let new_button = gtk::Button::from_icon_name("document-new-symbolic");
         new_button.set_tooltip_text(Some("New File (Ctrl+N)"));
         new_button.add_css_class("flat");
-        new_button.set_action_name(Some("win.new"));
         header.pack_start(&new_button);
 
         // The Open button shows recent files when there are any; otherwise its
@@ -216,7 +214,6 @@ impl AppWindow {
         open_button.add_css_class("flat");
         let open_popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
         open_popover.set_parent(&open_button);
-        let open_clear_button = menus::build_clear_recent_button();
         {
             let popover = open_popover.clone();
             open_button.connect_destroy(move |_| {
@@ -311,7 +308,6 @@ impl AppWindow {
             new_button: new_button.clone(),
             open_button: open_button.clone(),
             open_popover: open_popover.clone(),
-            open_clear_button: open_clear_button.clone(),
             open_recent_rows: RefCell::new(Vec::new()),
             diff_button: diff_button.clone(),
             flash: flash::FlashState::default(),
@@ -405,35 +401,67 @@ impl AppWindow {
                 this.request_open_dialog();
                 return;
             }
-            let old_rows = std::mem::take(&mut *this.open_recent_rows.borrow_mut());
-            for row in old_rows {
-                if row.parent().is_some() {
-                    row.unparent();
-                }
-            }
-            if this.open_clear_button.parent().is_some() {
-                this.open_clear_button.unparent();
-            }
-            this.open_popover
-                .set_menu_model(Some(&menus::build_open_menu(&entries)));
-
-            let mut rows = Vec::with_capacity(entries.len());
-            for (index, path) in entries.iter().enumerate() {
-                let row = menus::build_recent_button(path);
-                let _ = this
-                    .open_popover
-                    .add_child(&row, &menus::recent_row_id(index));
-                let popover = this.open_popover.clone();
-                row.connect_clicked(move |_| popover.popdown());
-                rows.push(row);
-            }
-            *this.open_recent_rows.borrow_mut() = rows;
-
-            let _ = this
-                .open_popover
-                .add_child(&this.open_clear_button, "clear-recent");
+            this.fill_open_menu(&entries);
             this.open_popover.popup();
         });
+    }
+
+    /// Install the recent rows into a freshly built menu model. Existing rows
+    /// are detached first so a rebuild while the menu is open does not leave
+    /// stale widgets behind.
+    fn fill_open_menu(self: &Rc<Self>, entries: &[PathBuf]) {
+        let old_rows = std::mem::take(&mut *self.open_recent_rows.borrow_mut());
+        for row in old_rows {
+            if row.root.parent().is_some() {
+                row.root.unparent();
+            }
+        }
+        self.open_popover
+            .set_menu_model(Some(&menus::build_open_menu(entries)));
+
+        let mut rows = Vec::with_capacity(entries.len());
+        for (index, path) in entries.iter().enumerate() {
+            let row = menus::build_recent_row(path);
+            let _ = self
+                .open_popover
+                .add_child(&row.root, &menus::recent_row_id(index));
+
+            let popover = self.open_popover.clone();
+            row.open.connect_clicked(move |_| popover.popdown());
+
+            let weak = Rc::downgrade(self);
+            let delete_path = path.clone();
+            row.trash.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.remove_recent_entry(&delete_path, index);
+                }
+            });
+            rows.push(row);
+        }
+        *self.open_recent_rows.borrow_mut() = rows;
+    }
+
+    /// Remove one recent entry from its trash button without confirmation.
+    /// The open menu is rebuilt in place and focus moves to the next row, or
+    /// the previous row when the last entry was deleted.
+    fn remove_recent_entry(self: &Rc<Self>, path: &Path, index: usize) {
+        self.recent.remove(path);
+        if !self.open_popover.is_visible() {
+            return;
+        }
+        let entries = self.recent.pruned_entries();
+        if entries.is_empty() {
+            self.open_popover.popdown();
+            return;
+        }
+        self.fill_open_menu(&entries);
+        let rows = self.open_recent_rows.borrow();
+        let focus = index.min(rows.len().saturating_sub(1));
+        if let Some(row) = rows.get(focus).cloned() {
+            glib::idle_add_local_once(move || {
+                row.open.grab_focus();
+            });
+        }
     }
 
     fn diff_active(&self) -> bool {

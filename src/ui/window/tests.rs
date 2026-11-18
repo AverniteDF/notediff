@@ -169,6 +169,7 @@ fn gtk_window_smoke() {
     quit_review_scenario(&app, &dir, &store);
     open_file_save_prompt_scenario(&app, &dir, &store);
     recent_menu_scenario(&app, &dir, &store);
+    recent_trash_scenario(&app, &dir, &store);
     new_file_scenario(&app, &dir, &store);
     diff_file_actions_disabled_scenario(&app, &dir, &store);
     theme_scenario(&app, &store);
@@ -759,22 +760,6 @@ fn find_response_button(widget: &gtk::Widget, label: &str) -> Option<gtk::Button
     let mut child = widget.first_child();
     while let Some(widget) = child {
         if let Some(button) = find_response_button(&widget, label) {
-            return Some(button);
-        }
-        child = widget.next_sibling();
-    }
-    None
-}
-
-fn find_action_button(widget: &gtk::Widget, action: &str) -> Option<gtk::Button> {
-    if let Some(button) = widget.downcast_ref::<gtk::Button>()
-        && button.action_name().as_deref() == Some(action)
-    {
-        return Some(button.clone());
-    }
-    let mut child = widget.first_child();
-    while let Some(widget) = child {
-        if let Some(button) = find_action_button(&widget, action) {
             return Some(button);
         }
         child = widget.next_sibling();
@@ -1380,7 +1365,7 @@ fn new_file_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) 
     window.editor_buffer.insert_at_cursor("unsaved");
     assert_eq!(window.current_text(), "first file\nunsaved");
     assert!(window.flags.dirty.get());
-    window.window.lookup_action("new").unwrap().activate(None);
+    window.new_button.emit_clicked();
     wait_for(|| {
         window
             .window
@@ -1582,7 +1567,7 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
     window.open_button.emit_clicked();
     assert!(window.open_popover.is_visible());
     let model = window.open_popover.menu_model().expect("open menu model");
-    assert_eq!(model.n_items(), 3);
+    assert_eq!(model.n_items(), 2);
     let label = |menu: &gio::MenuModel, index: i32| {
         menu.item_attribute_value(index, gio::MENU_ATTRIBUTE_LABEL, None)
             .and_then(|value| value.get::<String>())
@@ -1601,8 +1586,13 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
 
     let rows = window.open_recent_rows.borrow().clone();
     assert_eq!(rows.len(), 2);
-    assert!(rows[0].parent().is_some());
-    let content = rows[0].child().unwrap().downcast::<gtk::Box>().unwrap();
+    assert!(rows[0].root.parent().is_some());
+    let content = rows[0]
+        .open
+        .child()
+        .unwrap()
+        .downcast::<gtk::Box>()
+        .unwrap();
     assert_eq!(content.orientation(), gtk::Orientation::Vertical);
     let name_label = content
         .first_child()
@@ -1611,7 +1601,8 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         .unwrap();
     assert_eq!(name_label.label().as_str(), "recent-second.txt");
     assert!(name_label.attributes().is_some());
-    assert!(rows[0].tooltip_text().is_none());
+    assert!(rows[0].open.tooltip_text().is_none());
+    assert!(rows[0].trash.tooltip_text().is_none());
     let directory_label = content
         .last_child()
         .unwrap()
@@ -1623,45 +1614,13 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
     );
     assert!(directory_label.has_css_class("dim-label"));
     assert!(directory_label.has_css_class("caption"));
-
-    let clear = model.item_link(2, gio::MENU_LINK_SECTION).unwrap();
-    assert_eq!(clear.n_items(), 1);
-    assert_eq!(label(&clear, 0).as_deref(), Some("Clear Recent"));
     assert_eq!(
-        clear
-            .item_attribute_value(0, "custom", None)
-            .and_then(|value| value.get::<String>())
-            .as_deref(),
-        Some("clear-recent")
-    );
-    assert!(window.open_clear_button.parent().is_some());
-    assert_eq!(
-        window.open_clear_button.action_name().as_deref(),
-        Some("win.clear-recent")
-    );
-    let row = window
-        .open_clear_button
-        .child()
-        .unwrap()
-        .downcast::<gtk::Box>()
-        .unwrap();
-    assert_eq!(
-        row.first_child()
-            .unwrap()
-            .downcast::<gtk::Label>()
-            .unwrap()
-            .label()
-            .as_str(),
-        "Clear Recent"
-    );
-    assert_eq!(
-        row.last_child()
-            .unwrap()
-            .downcast::<gtk::Image>()
-            .unwrap()
-            .icon_name()
-            .as_deref(),
+        rows[0].trash.icon_name().as_deref(),
         Some("user-trash-symbolic")
+    );
+    assert_eq!(
+        rows[0].root.last_child().as_ref(),
+        Some(rows[0].trash.upcast_ref::<gtk::Widget>())
     );
     window.open_popover.popdown();
 
@@ -1670,12 +1629,12 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
     window.open_button.emit_clicked();
     let rows = window.open_recent_rows.borrow().clone();
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| row.parent().is_some()));
+    assert!(rows.iter().all(|row| row.root.parent().is_some()));
     window.open_popover.popdown();
 
     // Clicking a two-line recent row goes through the normal open flow and
     // moves the path to the front of the list.
-    let first_row = rows[1].clone();
+    let first_row = rows[1].open.clone();
     first_row.emit_clicked();
     assert_eq!(window.doc.borrow().path(), Some(first.as_path()));
     assert_eq!(
@@ -1742,52 +1701,56 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         format!("{}\n{}\n", renamed.display(), first.display())
     );
 
-    // The custom Clear Recent row asks first, and cancelling keeps the state
-    // file.
-    window.open_clear_button.emit_clicked();
-    wait_for(|| {
-        window
-            .window
-            .visible_dialog()
-            .is_some_and(|dialog| dialog.is_mapped())
-    });
-    let dialog = window
-        .window
-        .visible_dialog()
-        .unwrap()
-        .downcast::<adw::AlertDialog>()
-        .unwrap();
-    assert_eq!(dialog.heading().as_deref(), Some("Clear recent documents?"));
-    assert_eq!(dialog.body().as_str(), "The files won't be changed.");
-    find_response_button(dialog.upcast_ref(), "Cancel")
-        .unwrap()
-        .emit_clicked();
-    wait_for(|| window.window.visible_dialog().is_none());
-    assert!(state.exists());
+    assert!(
+        window.window.lookup_action("clear-recent").is_none(),
+        "Clear Recent was removed"
+    );
 
-    window
-        .window
-        .lookup_action("clear-recent")
-        .unwrap()
-        .activate(None);
-    wait_for(|| {
-        window
-            .window
-            .visible_dialog()
-            .is_some_and(|dialog| dialog.is_mapped())
-    });
-    let dialog = window
-        .window
-        .visible_dialog()
-        .unwrap()
-        .downcast::<adw::AlertDialog>()
-        .unwrap();
-    find_response_button(dialog.upcast_ref(), "Clear Recent")
-        .unwrap()
-        .emit_clicked();
-    wait_for(|| window.window.visible_dialog().is_none());
-    assert!(!state.exists());
+    window.window.destroy();
+}
+
+fn recent_trash_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let state = dir.join("recent-trash-state");
+    let first_file = dir.join("recent-trash-first.txt");
+    let second_file = dir.join("recent-trash-second.txt");
+    std::fs::write(&first_file, "first\n").unwrap();
+    std::fs::write(&second_file, "second\n").unwrap();
+
+    let window = AppWindow::with_parts(
+        app,
+        store.clone(),
+        false,
+        RecentDocuments::at(state.clone()),
+    );
+    window.window.present();
+    AppWindow::open_path(&window, &first_file);
+    AppWindow::open_path(&window, &second_file);
+    let first = first_file.canonicalize().unwrap();
+    let second = second_file.canonicalize().unwrap();
+    assert_eq!(
+        window.recent.pruned_entries(),
+        vec![second.clone(), first.clone()]
+    );
+
+    window.open_button.emit_clicked();
+    let rows = window.open_recent_rows.borrow().clone();
+    assert_eq!(rows.len(), 2);
+
+    rows[0].trash.emit_clicked();
+    assert_eq!(window.recent.pruned_entries(), vec![first.clone()]);
+    assert_eq!(
+        std::fs::read_to_string(&state).unwrap(),
+        format!("{}\n", first.display())
+    );
+    assert!(window.open_popover.is_visible());
+    let rows = window.open_recent_rows.borrow().clone();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].open.is_focusable());
+
+    rows[0].trash.emit_clicked();
+    assert!(!window.open_popover.is_visible());
     assert!(window.recent.pruned_entries().is_empty());
+    assert!(!state.exists());
 
     window.window.destroy();
 }
@@ -1806,10 +1769,7 @@ fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store
         Some("Open File (Ctrl+O)")
     );
     assert_eq!(
-        find_action_button(window.window.upcast_ref(), "win.new")
-            .unwrap()
-            .tooltip_text()
-            .as_deref(),
+        window.new_button.tooltip_text().as_deref(),
         Some("New File (Ctrl+N)")
     );
     window.enter_diff();
@@ -1833,9 +1793,8 @@ fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store
     );
     assert!(!window.open_button.is_sensitive());
     assert!(window.open_button.tooltip_text().is_none());
-    let new_button = find_action_button(window.window.upcast_ref(), "win.new").unwrap();
-    assert!(!new_button.is_sensitive());
-    assert!(new_button.tooltip_text().is_none());
+    assert!(!window.new_button.is_sensitive());
+    assert!(window.new_button.tooltip_text().is_none());
 
     // Disabled actions must not open a prompt or disturb the review session.
     window.window.lookup_action("new").unwrap().activate(None);
@@ -1859,12 +1818,10 @@ fn diff_file_actions_disabled_scenario(app: &adw::Application, dir: &Path, store
         Some("Open File (Ctrl+O)")
     );
     assert_eq!(
-        find_action_button(window.window.upcast_ref(), "win.new")
-            .unwrap()
-            .tooltip_text()
-            .as_deref(),
+        window.new_button.tooltip_text().as_deref(),
         Some("New File (Ctrl+N)")
     );
+    assert!(window.new_button.is_sensitive());
     window.window.destroy();
 }
 

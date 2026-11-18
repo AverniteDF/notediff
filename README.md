@@ -14,7 +14,7 @@ never the document.
 - Plain-text editing with no tab characters, undo, search and replace, word
   wrap, line numbers and configurable content fonts.
 - A recent-documents menu on the header Open button, with up to ten file paths,
-  lazy pruning and Clear Recent.
+  lazy pruning and per-entry deletion.
 - **Diff Mode**: compare the live file against a saved baseline, inspect whole
   hunks or individual word-level changes, and accept them one at a time.
 - Baselines can be created, moved, copied and re-linked when files move on disk.
@@ -84,9 +84,10 @@ cargo run --release -- /path/to/notes.md
 ## Quick start
 
 - **Ctrl+N** starts a new file in the current window, prompting to save or
-  discard unsaved changes first. **Ctrl+Shift+N** opens a new window. **Ctrl+O**
-  shows the file chooser first; the header Open button offers **Browse…** plus
-  the recent files, or opens the chooser when there are none. If the current document is dirty, choose
+  discard unsaved changes first. **Ctrl+Shift+N** opens a new window, as does
+  Shift-clicking the header New button. **Ctrl+O** shows the file chooser first;
+  the header Open button offers **Browse…** plus the recent files, each with its
+  own trash button, or opens the chooser when there are none. If the current document is dirty, choose
   Open in New Window, Discard Changes, or Save. A command-line path or a
   file-manager launch opens a new window. New File and Open File are unavailable
   while Review Changes is open; New Window remains available.

@@ -11,16 +11,12 @@ notes for details and workarounds.
   menu. **Ctrl+O** and **Open…** show the chooser directly. When there are no
   recent files, the header-bar button opens the chooser directly too. Otherwise
   it opens a menu with **Browse…** first, then up to ten recently opened file
-  paths (newest first) and **Clear Recent** at the bottom. Each recent entry
-  shows the file name in bold on the first line and its directory path in
-  smaller, dimmed text below, ending with a slash. Directories under your home
-  folder are shortened to `~/...`; the stored paths stay absolute.
-  **Clear Recent** has a right-aligned trash icon. Choosing a recent
-  path behaves like Open File. **Clear Recent** asks first, with the heading
-  **Clear recent documents?** and the body **The files won't be changed.**;
-  **Cancel** leaves the list alone, and confirming deletes the remembered
-  list. If the list cannot be removed, an error dialog says
-  **Could not clear recent documents**.
+  paths, newest first. Each recent entry shows the file name in bold on the
+  first line and its directory path in smaller, dimmed text below, ending with
+  a slash. Directories under your home folder are shortened to `~/...`; the
+  stored paths stay absolute. Each entry has a right-aligned trash icon;
+  clicking it removes just that entry immediately, without confirmation.
+  Choosing the rest of the entry behaves like Open File.
   The chooser is shown first; a chosen file replaces the document in the
   current window. If the document has unsaved changes, the **Save changes?**
   prompt says **The document has unsaved changes.** and offers
@@ -57,7 +53,8 @@ notes for details and workarounds.
   **Open New Window**, **Discard Changes** and **Save**. Choosing
   **Open New Window** opens an empty window and keeps this document; Esc
   leaves everything as it is. The file and its baseline on disk are untouched.
-  New File is unavailable in Diff Mode.
+  Shift-clicking the header New button opens a new window instead. New File is
+  unavailable in Diff Mode.
 - Open another empty window with **Ctrl+Shift+N** or **New Window** in the File
   menu. The current window and document are left alone. New Window remains
   available in Diff Mode, so another file can be opened without disturbing the

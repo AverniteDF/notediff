@@ -62,11 +62,12 @@ src/
       editing.rs        insert filter for tabs and document line endings, Tab
                         key, Scale Indentation, EOL conversion, file insertion,
                         word wrap, read-only state
-      file_actions.rs   new file and open (chooser or recent path first,
-                        post-chooser save prompt), Clear Recent, save (with
-                        external-change overwrite guard), save as, rename or
-                        move, Convert Tabs prompt, external-change handling,
-                        save-then-continue and multi-window quit continuation
+      file_actions.rs   new file (including Shift-click to a new window) and
+                        open (chooser or recent path first, post-chooser save
+                        prompt), save (with external-change overwrite guard),
+                        save as, rename or move, Convert Tabs prompt,
+                        external-change handling, save-then-continue and
+                        multi-window quit continuation
       diff_actions.rs   Diff Mode wiring: applies session results to the
                         snapshot store and the UI, Diff Mode keys, Create
                         Baseline and Confirm
@@ -133,8 +134,9 @@ and rapid Accept/Undo operations. It also covers the external-change overwrite
 prompt on save, multi-window Quit across dirty, accepted-review and clean
 windows, Esc and window-close review-discard confirmations, the Open File save
 prompt after the chooser (including Open New Window and no Cancel button),
-recent-menu ordering, lazy pruning, open-recent and Clear Recent confirmation,
-disabled New/Open actions and hidden header tooltips in Diff Mode, CRLF
+recent-menu ordering, lazy pruning, open-recent and per-entry trash deletion,
+Shift-click New, disabled New/Open actions and hidden header tooltips in Diff
+Mode, CRLF
 Enter handling, Insert Text line-ending preservation, and that every editor and
 diff buffer remains plain text. It checks that closing a window asks before
 discarding unconfirmed hunks and releases its `AppWindow` state. Run it in a graphical session. Theme coverage

@@ -8,7 +8,6 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use super::fsutil::{atomic_write_if_changed, data_home, read_utf8_limited};
@@ -92,15 +91,22 @@ impl RecentDocuments {
         pruned
     }
 
-    /// Forget every recent path. The file itself is removed, not blanked.
-    pub fn clear(&self) -> io::Result<()> {
+    /// Remove one remembered path. The state file is deleted when the list
+    /// becomes empty. Missing paths are ignored.
+    pub fn remove(&self, path: &Path) {
         let Some(state) = &self.path else {
-            return Ok(());
+            return;
         };
-        match fs::remove_file(state) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err),
+        let mut paths = self.load();
+        let before = paths.len();
+        paths.retain(|existing| existing != path);
+        if paths.len() == before {
+            return;
+        }
+        if paths.is_empty() {
+            let _ = fs::remove_file(state);
+        } else {
+            let _ = atomic_write_if_changed(state, &render(&paths), true);
         }
     }
 
@@ -280,18 +286,27 @@ mod tests {
     }
 
     #[test]
-    fn clear_is_idempotent_and_removes_the_file() {
+    fn remove_drops_one_entry_and_deletes_an_empty_state() {
         let dir = test_dir();
         let state = dir.join("recent");
-        let note = touch(&dir, "note.md");
+        let first = touch(&dir, "first.md");
+        let second = touch(&dir, "second.md");
         let recent = RecentDocuments::at(state.clone());
-        recent.record(&note);
-        assert!(state.exists());
 
-        recent.clear().unwrap();
+        recent.record(&first);
+        recent.record(&second);
+        recent.remove(&first);
+        assert_eq!(recent.load(), vec![second.clone()]);
+        assert_eq!(
+            fs::read_to_string(&state).unwrap(),
+            format!("{}\n", second.display())
+        );
+
+        recent.remove(&first); // Missing entries are ignored.
+        assert_eq!(recent.load(), vec![second.clone()]);
+        recent.remove(&second);
+        assert!(recent.load().is_empty());
         assert!(!state.exists());
-        recent.clear().unwrap();
-        assert!(recent.pruned_entries().is_empty());
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -302,7 +317,7 @@ mod tests {
         let path = PathBuf::from("/tmp/notediff-disabled.md");
         recent.record(&path);
         assert!(recent.pruned_entries().is_empty());
-        recent.clear().unwrap();
+        recent.remove(&path);
     }
 
     #[cfg(unix)]

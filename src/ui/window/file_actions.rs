@@ -3,6 +3,7 @@
 //! save as (with baseline carry-over), rename or move, the Convert Tabs prompt,
 //! external-change handling and the save-then-continue flow.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -71,6 +72,7 @@ impl AppWindow {
         }
         self.new_button
             .set_tooltip_text(enabled.then_some("New File (Ctrl+N)"));
+        self.new_button.set_sensitive(enabled);
         self.open_button
             .set_tooltip_text(enabled.then_some("Open File (Ctrl+O)"));
         self.open_button.set_sensitive(enabled);
@@ -89,12 +91,36 @@ impl AppWindow {
         add_string_action(window, this, "open-recent", |this, path| {
             this.request_open_path(PathBuf::from(path));
         });
-        add_action(window, this, "clear-recent", |this| {
-            this.confirm_clear_recent()
-        });
         add_action(window, this, "save", |this| this.save_then(None));
         add_action(window, this, "save-as", |this| this.save_as_then(None));
         add_action(window, this, "rename", |this| this.show_rename());
+
+        // A pointer Shift-click on the New button opens a new window. The
+        // shortcut is intentionally hidden from the tooltip and menus.
+        let shift = Rc::new(Cell::new(false));
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(1);
+        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let pressed_shift = shift.clone();
+        gesture.connect_pressed(move |gesture, _, _, _| {
+            pressed_shift.set(
+                gesture
+                    .current_event_state()
+                    .contains(gtk::gdk::ModifierType::SHIFT_MASK),
+            );
+        });
+        this.new_button.add_controller(gesture);
+        let weak = Rc::downgrade(this);
+        this.new_button.connect_clicked(move |_| {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            if shift.replace(false) {
+                this.new_window();
+            } else {
+                this.request_new_file();
+            }
+        });
 
         {
             let weak = Rc::downgrade(this);
@@ -308,34 +334,6 @@ impl AppWindow {
             return;
         }
         self.require_saved(PendingAction::OpenPath(path));
-    }
-
-    /// Clear the remembered recent files after confirmation. The documents
-    /// themselves are never touched.
-    fn confirm_clear_recent(self: &Rc<Self>) {
-        if self.diff_active() {
-            return;
-        }
-        self.open_popover.popdown();
-        let this = self.clone();
-        dialogs::ask(
-            &self.window,
-            "Clear recent documents?",
-            "The files won't be changed.",
-            &[
-                Response::new("cancel", "Cancel"),
-                Response::destructive("clear", "Clear Recent"),
-            ],
-            "cancel",
-            "cancel",
-            move |response| {
-                if response == "clear"
-                    && let Err(err) = this.recent.clear()
-                {
-                    this.show_error("Could not clear recent documents", &err.to_string());
-                }
-            },
-        );
     }
 
     fn show_open_dialog(self: &Rc<Self>) {
