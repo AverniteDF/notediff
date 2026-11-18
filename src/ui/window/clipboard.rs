@@ -26,6 +26,33 @@ impl AppWindow {
         connect_button(button, this, |this| this.copy_selected_text());
     }
 
+    pub(super) fn copy_file_name(&self) {
+        let name = self
+            .doc
+            .borrow()
+            .path()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned());
+        let Some(name) = name else {
+            return;
+        };
+        self.window.clipboard().set_text(&name);
+        self.toast(ToastKind::Success, "Copied file name");
+    }
+
+    pub(super) fn copy_full_path(&self) {
+        let path = self
+            .doc
+            .borrow()
+            .path()
+            .map(|path| path.display().to_string());
+        let Some(path) = path else {
+            return;
+        };
+        self.window.clipboard().set_text(&path);
+        self.toast(ToastKind::Success, "Copied full path");
+    }
+
     fn copy_selected_text(&self) {
         let source = if self.diff_active() {
             self.last_copy_view

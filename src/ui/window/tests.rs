@@ -16,6 +16,7 @@ use crate::core::snapshot_store::{LinkMode, SnapshotStore};
 use crate::core::textstats::LineEnding;
 use crate::ui::status_bar::EditMode;
 use crate::ui::theme;
+use crate::ui::toast::ToastKind;
 
 use super::file_actions::save_action_label;
 use super::{
@@ -160,6 +161,7 @@ fn gtk_window_smoke() {
     gutter_selection_scenario(&app, store.clone());
     editing_scenario(&app, &dir, &store);
     clipboard_scenario(&app, &dir, &store);
+    title_menu_scenario(&app, &dir, &store);
     search_replace_scenario(&app, &dir, &store);
     file_actions_scenario(&app, &dir, &store);
     plain_text_scenario(&app, &dir, &store);
@@ -1535,6 +1537,78 @@ fn new_file_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) 
     });
 }
 
+fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let path = dir.join("title-menu.md");
+    std::fs::write(&path, "title\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    let canonical = path.canonicalize().unwrap();
+    let canonical_text = canonical.display().to_string();
+
+    assert_eq!(
+        window.title_label.tooltip_text().as_deref(),
+        Some(canonical_text.as_str())
+    );
+    for name in ["copy-file-name", "copy-full-path"] {
+        assert!(window.window.lookup_action(name).unwrap().is_enabled());
+    }
+
+    window
+        .window
+        .lookup_action("copy-file-name")
+        .unwrap()
+        .activate(None);
+    let copied = gtk::glib::MainContext::default()
+        .block_on(window.window.clipboard().read_text_future())
+        .unwrap()
+        .unwrap();
+    assert_eq!(copied, "title-menu.md");
+    assert_eq!(
+        window
+            .last_toast
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .title()
+            .as_deref(),
+        Some(crate::ui::toast::title(ToastKind::Success, "Copied file name").as_str())
+    );
+    window.last_toast.borrow_mut().take();
+
+    window
+        .window
+        .lookup_action("copy-full-path")
+        .unwrap()
+        .activate(None);
+    let copied = gtk::glib::MainContext::default()
+        .block_on(window.window.clipboard().read_text_future())
+        .unwrap()
+        .unwrap();
+    assert_eq!(copied, canonical_text);
+    assert_eq!(
+        window
+            .last_toast
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .title()
+            .as_deref(),
+        Some(crate::ui::toast::title(ToastKind::Success, "Copied full path").as_str())
+    );
+    window.last_toast.borrow_mut().take();
+
+    // Untitled documents have no title tooltip or copy actions.
+    window.window.lookup_action("new").unwrap().activate(None);
+    assert!(window.doc.borrow().path().is_none());
+    assert!(window.title_label.tooltip_text().is_none());
+    assert_eq!(window.title_label.label().as_str(), "Untitled");
+    for name in ["copy-file-name", "copy-full-path"] {
+        assert!(!window.window.lookup_action(name).unwrap().is_enabled());
+    }
+
+    window.window.destroy();
+}
+
 fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     let state = dir.join("recent-state");
     let first_file = dir.join("recent-first.txt");
@@ -1616,7 +1690,7 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
     assert!(directory_label.has_css_class("caption"));
     assert_eq!(
         rows[0].trash.icon_name().as_deref(),
-        Some("user-trash-symbolic")
+        Some("view-conceal-symbolic")
     );
     assert_eq!(
         rows[0].root.last_child().as_ref(),
@@ -2981,10 +3055,7 @@ fn inspection_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
             .kind,
         ChangeKind::Block
     );
-    assert_eq!(
-        window.diff.header_texts().0,
-        format!("Live document ({})", canonical.display())
-    );
+    assert_eq!(window.diff.header_texts().0, "Document");
     assert!(press(Key::Up));
     assert_panes(added, "", wrapped);
 

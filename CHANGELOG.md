@@ -11,15 +11,19 @@ versioning.
 - The header Open button now opens a menu with **Browse…** and up to ten
   recently opened file paths. Each entry shows a bold file name above a smaller,
   dimmed directory path ending in `/`, with home paths shortened to `~/...`, and
-  has a right-aligned trash button that removes that entry immediately. Recent
-  rows have no tooltips. With no recent files the button opens the chooser
-  directly. Missing paths are pruned lazily when the menu is shown, so startup
-  does no recent-list filesystem scan.
+  has a right-aligned `view-conceal-symbolic` button that removes that entry
+  immediately. Recent rows have no tooltips. With no recent files the button
+  opens the chooser directly. Missing paths are pruned lazily when the menu is
+  shown, so startup does no recent-list filesystem scan.
 - Shift-clicking the header New button opens a new window. The shortcut is
   hidden from the tooltip and menus.
+- The document title shows the full path in a tooltip and has a right-click menu
+  with **Copy file name** and **Copy full path**.
 
 ### Changed
 
+- The Diff Mode pane headers now read **Document** and **Baseline**, without
+  tooltips.
 - Startup no longer rewrites the installed scheme files when their content is
   already up to date, avoiding a few fsyncs on every launch.
 - New File now shows the same **Save changes?** prompt as Open File, with

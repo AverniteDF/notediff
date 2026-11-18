@@ -216,12 +216,11 @@ impl AppWindow {
 
     /// Re-render both panes. The focused hunk, if any, is scrolled into view.
     fn render_diff(&self) {
-        let path = self.path_for_snapshot();
         let state = self.diff_state.borrow();
         let Some(session) = state.as_ref() else {
             return;
         };
-        self.diff.render(session, path.as_deref());
+        self.diff.render(session);
         self.diff.active_left_view().grab_focus();
     }
 
@@ -383,8 +382,7 @@ impl AppWindow {
         let session = state.as_ref().unwrap();
         if session.is_inspecting() {
             if (session.focus(), session.inline_focus()) != previous {
-                self.diff
-                    .render(session, self.path_for_snapshot().as_deref());
+                self.diff.render(session);
             }
         } else {
             let toolbar = DiffToolbarState::for_session(session);

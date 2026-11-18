@@ -134,7 +134,8 @@ and rapid Accept/Undo operations. It also covers the external-change overwrite
 prompt on save, multi-window Quit across dirty, accepted-review and clean
 windows, Esc and window-close review-discard confirmations, the Open File save
 prompt after the chooser (including Open New Window and no Cancel button),
-recent-menu ordering, lazy pruning, open-recent and per-entry trash deletion,
+recent-menu ordering, lazy pruning, open-recent and per-entry removal, the
+document title tooltip and copy menu, the Document/Baseline diff headers,
 Shift-click New, disabled New/Open actions and hidden header tooltips in Diff
 Mode, CRLF
 Enter handling, Insert Text line-ending preservation, and that every editor and

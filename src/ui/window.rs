@@ -150,6 +150,8 @@ pub struct AppWindow {
     /// Custom two-line rows currently installed in the Open menu.
     open_recent_rows: RefCell<Vec<menus::RecentRow>>,
     diff_button: gtk::Button,
+    title_label: gtk::Label,
+    title_popover: gtk::PopoverMenu,
     /// The "No Changes" label flash on the header button (see `flash`).
     flash: flash::FlashState,
     doc: RefCell<Document>,
@@ -200,6 +202,19 @@ impl AppWindow {
         let header = adw::HeaderBar::new();
         header.add_css_class(theme::MAIN_HEADER_CLASS);
         header.set_show_end_title_buttons(true);
+        let title_label = gtk::Label::new(None);
+        title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        header.set_title_widget(Some(&title_label));
+        let title_popover = gtk::PopoverMenu::from_model(Some(&menus::build_title_menu()));
+        title_popover.set_parent(&title_label);
+        {
+            let popover = title_popover.clone();
+            title_label.connect_destroy(move |_| {
+                if popover.parent().is_some() {
+                    popover.unparent();
+                }
+            });
+        }
 
         // A normal click starts New File; Shift-click opens a new window.
         let new_button = gtk::Button::from_icon_name("document-new-symbolic");
@@ -310,6 +325,8 @@ impl AppWindow {
             open_popover: open_popover.clone(),
             open_recent_rows: RefCell::new(Vec::new()),
             diff_button: diff_button.clone(),
+            title_label: title_label.clone(),
+            title_popover: title_popover.clone(),
             flash: flash::FlashState::default(),
             doc: RefCell::new(Document::new()),
             baseline: RefCell::new(BaselineCache::default()),
@@ -328,6 +345,7 @@ impl AppWindow {
         Self::connect_signals(&this, &diff_button);
         Self::connect_copy_button(&this, &copy_button);
         Self::connect_open_menu(&this);
+        Self::connect_title_menu(&this);
         let mut popovers = Vec::new();
         if let Some(popover) = main_menu.popover() {
             popovers.push(popover);
@@ -406,6 +424,31 @@ impl AppWindow {
         });
     }
 
+    /// Right-clicking the document title opens the copy menu for saved files.
+    fn connect_title_menu(this: &Rc<Self>) {
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(3);
+        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(this);
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            if this.doc.borrow().path().is_none() {
+                return;
+            }
+            if this.title_popover.is_visible() {
+                this.title_popover.popdown();
+                return;
+            }
+            let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+            this.title_popover.set_pointing_to(Some(&rect));
+            this.title_popover.popup();
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+        this.title_label.add_controller(gesture);
+    }
+
     /// Install the recent rows into a freshly built menu model. Existing rows
     /// are detached first so a rebuild while the menu is open does not leave
     /// stale widgets behind.
@@ -441,7 +484,7 @@ impl AppWindow {
         *self.open_recent_rows.borrow_mut() = rows;
     }
 
-    /// Remove one recent entry from its trash button without confirmation.
+    /// Remove one recent entry from its hide/remove button without confirmation.
     /// The open menu is rebuilt in place and focus moves to the next row, or
     /// the previous row when the last entry was deleted.
     fn remove_recent_entry(self: &Rc<Self>, path: &Path, index: usize) {
@@ -589,10 +632,9 @@ impl AppWindow {
     }
 
     fn update_title(&self) {
-        let name = self
-            .doc
-            .borrow()
-            .path()
+        let path = self.doc.borrow().path().map(Path::to_path_buf);
+        let name = path
+            .as_deref()
             .and_then(|path| path.file_name())
             .and_then(|name| name.to_str())
             .map(ToOwned::to_owned)
@@ -604,11 +646,22 @@ impl AppWindow {
         } else {
             self.window.remove_css_class(theme::DIRTY_CLASS);
         }
-        self.window.set_title(Some(&title_text(
-            &name,
-            is_dirty,
-            self.flags.read_only.get(),
-        )));
+        let title = title_text(&name, is_dirty, self.flags.read_only.get());
+        self.title_label.set_label(&title);
+        let tooltip = path.as_ref().map(|path| path.display().to_string());
+        self.title_label.set_tooltip_text(tooltip.as_deref());
+        self.window.set_title(Some(&title));
+
+        let has_path = path.is_some();
+        for name in ["copy-file-name", "copy-full-path"] {
+            if let Some(action) = self
+                .window
+                .lookup_action(name)
+                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+            {
+                action.set_enabled(has_path);
+            }
+        }
     }
 
     /// Assume file-backed documents dirty immediately, then compare on idle.

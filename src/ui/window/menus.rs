@@ -42,6 +42,8 @@ impl AppWindow {
         add_action(window, this, "about", |this| {
             about_dialog::present(&this.window)
         });
+        add_action(window, this, "copy-file-name", |this| this.copy_file_name());
+        add_action(window, this, "copy-full-path", |this| this.copy_full_path());
         add_action(window, this, "close", |this| this.window.close());
         add_action(window, this, "quit", |this| this.quit_application());
     }
@@ -127,6 +129,14 @@ fn build_main_menu() -> gio::Menu {
     menu
 }
 
+/// Context menu for the header document title.
+pub(super) fn build_title_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append(Some("Copy file name"), Some("win.copy-file-name"));
+    menu.append(Some("Copy full path"), Some("win.copy-full-path"));
+    menu
+}
+
 /// With no recent paths the header Open button opens the chooser directly
 /// instead of showing a one-item menu.
 pub(super) fn open_menu_has_entries(recent: &[PathBuf]) -> bool {
@@ -166,7 +176,7 @@ pub(super) fn build_open_menu(recent: &[PathBuf]) -> gio::Menu {
 }
 
 /// The widgets of one custom recent entry: the clickable two-line open area and
-/// its trailing trash button.
+/// its trailing hide/remove button.
 #[derive(Clone)]
 pub(super) struct RecentRow {
     pub root: gtk::Box,
@@ -176,7 +186,7 @@ pub(super) struct RecentRow {
 
 /// A custom two-line recent row: a bold file name and a smaller, dimmed
 /// directory path. The directory is middle-ellipsized so a deep path cannot
-/// widen the whole menu. The trash button fills the trailing edge.
+/// widen the whole menu. The remove button fills the trailing edge.
 pub(super) fn build_recent_row(path: &Path) -> RecentRow {
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     root.set_hexpand(true);
@@ -220,7 +230,7 @@ pub(super) fn build_recent_row(path: &Path) -> RecentRow {
     content.append(&directory_label);
     open.set_child(Some(&content));
 
-    let trash = gtk::Button::from_icon_name("user-trash-symbolic");
+    let trash = gtk::Button::from_icon_name("view-conceal-symbolic");
     trash.add_css_class("flat");
     trash.set_valign(gtk::Align::Center);
     trash.set_focus_on_click(false);
@@ -296,6 +306,32 @@ pub(super) fn install_accels(app: &adw::Application) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_menu_offers_copy_actions() {
+        let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
+            menu.item_attribute_value(index, name, None)
+                .and_then(|value| value.get::<String>())
+        };
+        let menu = build_title_menu();
+        assert_eq!(menu.n_items(), 2);
+        assert_eq!(
+            attribute(menu.upcast_ref(), 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Copy file name")
+        );
+        assert_eq!(
+            attribute(menu.upcast_ref(), 0, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.copy-file-name")
+        );
+        assert_eq!(
+            attribute(menu.upcast_ref(), 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Copy full path")
+        );
+        assert_eq!(
+            attribute(menu.upcast_ref(), 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.copy-full-path")
+        );
+    }
 
     #[test]
     fn app_data_entry_and_read_only_menu() {

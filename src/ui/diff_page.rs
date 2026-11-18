@@ -6,7 +6,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
-use std::path::Path;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -174,7 +173,7 @@ impl DiffPage {
         let left_stack = pane_stack(&left_scroller, &inspection_left_scroller);
         let right_stack = pane_stack(&right_scroller, &inspection_right_scroller);
 
-        let left_title = pane_title("Live document");
+        let left_title = pane_title("Document");
         let right_title = pane_title("Baseline");
 
         let left_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -584,8 +583,8 @@ impl DiffPage {
         self.scroll_to_focus(diff, focus);
     }
 
-    pub(super) fn render(self: &Rc<Self>, session: &DiffSession, live_path: Option<&Path>) {
-        self.set_headers(live_path);
+    pub(super) fn render(self: &Rc<Self>, session: &DiffSession) {
+        self.set_headers();
         let diff = session.diff();
         let focus = session.focus();
         let toolbar = DiffToolbarState::for_session(session);
@@ -1029,16 +1028,11 @@ impl DiffPage {
         )
     }
 
-    /// Pane titles stay the same in full diff and inspection, even on empty sides.
-    fn set_headers(&self, live_path: Option<&Path>) {
-        let live_title = match live_path {
-            Some(path) => format!("Live document ({})", path.display()),
-            None => "Live document".to_string(),
-        };
-        self.left_title.set_text(&live_title);
-        self.left_title.set_tooltip_text(Some(&live_title));
+    /// Pane titles stay the same in full diff and inspection, even on empty
+    /// sides. The document path remains available as a tooltip.
+    fn set_headers(&self) {
+        self.left_title.set_text("Document");
         self.right_title.set_text("Baseline");
-        self.right_title.set_tooltip_text(Some("Baseline"));
     }
 }
 
@@ -1097,7 +1091,6 @@ fn pane_title(text: &str) -> gtk::Label {
     label.set_halign(gtk::Align::Start);
     label.set_xalign(0.0);
     label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    label.set_tooltip_text(Some(text));
     label.set_margin_start(10);
     label.set_margin_top(4);
     label.set_margin_bottom(4);

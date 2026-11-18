@@ -14,8 +14,9 @@ notes for details and workarounds.
   paths, newest first. Each recent entry shows the file name in bold on the
   first line and its directory path in smaller, dimmed text below, ending with
   a slash. Directories under your home folder are shortened to `~/...`; the
-  stored paths stay absolute. Each entry has a right-aligned trash icon;
-  clicking it removes just that entry immediately, without confirmation.
+  stored paths stay absolute. Each entry has a right-aligned hide icon (an eye
+  with a slash); clicking it removes just that entry immediately, without
+  confirmation.
   Choosing the rest of the entry behaves like Open File.
   The chooser is shown first; a chosen file replaces the document in the
   current window. If the document has unsaved changes, the **Save changes?**
@@ -160,7 +161,10 @@ notes for details and workarounds.
   gutter, current-line and review colours.
 - A document with unsaved changes shows a dot before its name in the title, and
   only the header bar gets a subtle scheme-derived accent tint until it is saved or reverted.
-  A read-only document also shows **(Read-Only)** after its name.
+  A read-only document also shows **(Read-Only)** after its name. Hovering the
+  title shows the full path. Right-clicking it offers **Copy file name** and
+  **Copy full path**; untitled documents have no tooltip and both actions are
+  disabled. Copying shows **Copied file name** or **Copied full path**.
 - Closing a window with unsaved text prompts to save, discard or cancel. For an
   untitled document the prompt's save action reads **Save As** and opens the file
   chooser. A new
@@ -202,8 +206,8 @@ document's dominant ending so a CRLF file stays CRLF.
 Press **F5** or click **Review Changes (F5)** in the header bar.
 Diff Mode compares the baseline with the current editor text, so unsaved edits
 can be reviewed without writing them first. The left pane is the live document
-(read-only) and its header shows the canonical file path; the right pane is the
-baseline and its header reads `Baseline`. The Confirm button shows how many
+(read-only) and its header reads `Document`; the right pane is the baseline and
+its header reads `Baseline`. The Confirm button shows how many
 changes have been accepted since the last Confirm, for example `Confirm (3 changes)`.
 Each whole-hunk accept or inline accept counts as one change; Accept All counts
 the pending whole hunks as changes and remains one undo step.
@@ -284,7 +288,7 @@ cursor and insert-mode fields are omitted because the panes are read-only.
 Focus a hunk, then press **Enter** or click **Inspect** just left of **Accept**.
 Each pane shows only its side of that hunk, wraps long lines and scrolls
 independently. Insertions and deletions leave one pane empty. Its header says
-the same thing in either view: `Live document (<path>)` or `Baseline`, without
+the same thing in either view: `Document` or `Baseline`, without
 an empty-side suffix. The pane statistics describe the excerpts.
 
 Inspection reviews **individual changes within paired lines**, rather than
