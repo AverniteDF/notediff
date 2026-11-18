@@ -44,6 +44,9 @@ GDK_BACKEND=x11 NO_AT_BRIDGE=1 dbus-run-session -- \
 - The 16 MiB limit applies to open, reload, save and baselines.
 - Diff Mode locks document-replacing file actions: New File, Open File, Save As
   and Rename or Move are disabled. New Window remains available.
+- A canonical document path is open in at most one window. Opening it from
+  another window raises the existing window; opening it in its own window
+  reloads it from disk after confirming unsaved changes.
 - User-visible labels and messages are documented in `docs/usage.md`. Update the
   docs in the same change as behavioural code.
 - Compatibility/migration code is out of scope: this is a greenfield 1.x

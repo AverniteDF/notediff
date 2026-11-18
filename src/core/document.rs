@@ -157,6 +157,19 @@ impl Document {
         self.path.as_deref().and_then(|path| file_mtime(path).ok())
     }
 
+    /// Adopt the file's current modification time without replacing the text.
+    /// Used when an explicit reload finds identical disk content: the document
+    /// stays exactly as it is, but a later focus check must not report the
+    /// same modification again.
+    pub fn adopt_disk_mtime(&mut self) -> io::Result<()> {
+        let path = self
+            .path
+            .as_deref()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        self.last_mtime = Some(file_mtime(path)?);
+        Ok(())
+    }
+
     /// Read the file as it is on disk right now, without changing this
     /// document. Used to inspect an external change before deciding whether
     /// to reload it.
@@ -234,6 +247,20 @@ mod tests {
         assert_eq!(doc.read_disk().unwrap(), "new\n");
         assert_eq!(doc.text(), "old\n");
         assert!(Document::new().read_disk().is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn adopting_disk_mtime_silences_an_identical_change() {
+        let dir = test_dir();
+        let path = dir.join("same.md");
+        fs::write(&path, "same\n").unwrap();
+        let mut doc = Document::open(&path).unwrap();
+        doc.set_last_mtime(None);
+        assert!(doc.externally_modified());
+        doc.adopt_disk_mtime().unwrap();
+        assert!(!doc.externally_modified());
+        assert_eq!(doc.text(), "same\n");
         let _ = fs::remove_dir_all(dir);
     }
 

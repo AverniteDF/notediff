@@ -155,6 +155,9 @@ pub struct AppWindow {
     /// The "No Changes" label flash on the header button (see `flash`).
     flash: flash::FlashState,
     doc: RefCell<Document>,
+    /// Canonical path reserved while the asynchronous Convert Tabs prompt is
+    /// open, before the document itself is loaded into `doc`.
+    pending_open: RefCell<Option<PathBuf>>,
     /// Cached baseline text of the open document (see `BaselineCache`).
     baseline: RefCell<BaselineCache>,
     /// Whether the editor text currently differs from that baseline.
@@ -329,6 +332,7 @@ impl AppWindow {
             title_popover: title_popover.clone(),
             flash: flash::FlashState::default(),
             doc: RefCell::new(Document::new()),
+            pending_open: RefCell::new(None),
             baseline: RefCell::new(BaselineCache::default()),
             baseline_differs: Cell::new(false),
             flags: flags::DocumentFlags::default(),
@@ -406,6 +410,12 @@ impl AppWindow {
     /// remembered paths.
     fn connect_open_menu(this: &Rc<Self>) {
         let weak = Rc::downgrade(this);
+        this.open_popover.connect_visible_notify(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.update_open_tooltip();
+            }
+        });
+        let weak = Rc::downgrade(this);
         this.open_button.connect_clicked(move |_| {
             let Some(this) = weak.upgrade() else {
                 return;
@@ -426,6 +436,12 @@ impl AppWindow {
 
     /// Right-clicking the document title opens the copy menu for saved files.
     fn connect_title_menu(this: &Rc<Self>) {
+        let weak = Rc::downgrade(this);
+        this.title_popover.connect_visible_notify(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.update_title_tooltip();
+            }
+        });
         let gesture = gtk::GestureClick::new();
         gesture.set_button(3);
         gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -648,8 +664,7 @@ impl AppWindow {
         }
         let title = title_text(&name, is_dirty, self.flags.read_only.get());
         self.title_label.set_label(&title);
-        let tooltip = path.as_ref().map(|path| path.display().to_string());
-        self.title_label.set_tooltip_text(tooltip.as_deref());
+        self.update_title_tooltip();
         self.window.set_title(Some(&title));
 
         let has_path = path.is_some();
@@ -662,6 +677,20 @@ impl AppWindow {
                 action.set_enabled(has_path);
             }
         }
+    }
+
+    /// The header title shows the full path on hover, except while its copy
+    /// menu is showing; a tooltip over the menu would obscure its entries.
+    fn update_title_tooltip(&self) {
+        let tooltip = if self.title_popover.is_visible() {
+            None
+        } else {
+            self.doc
+                .borrow()
+                .path()
+                .map(|path| path.display().to_string())
+        };
+        self.title_label.set_tooltip_text(tooltip.as_deref());
     }
 
     /// Assume file-backed documents dirty immediately, then compare on idle.
@@ -767,6 +796,13 @@ impl AppWindow {
         self.doc.borrow().path().map(Path::to_path_buf)
     }
 
+    /// True when this window owns `canonical`, either as its loaded document
+    /// or as a path reserved for a pending Convert Tabs prompt.
+    fn owns_open_path(&self, canonical: &Path) -> bool {
+        self.doc.borrow().path() == Some(canonical)
+            || self.pending_open.borrow().as_deref() == Some(canonical)
+    }
+
     /// The document Manage Snapshots may link a baseline to: its canonical
     /// path and current editor text (used to rank candidates). `None` for an
     /// untitled document.
@@ -860,19 +896,52 @@ pub fn open_window_for_path(app: &adw::Application, path: &Path) {
         SnapshotStore::default(),
         true,
         RecentDocuments::default(),
+        None,
     );
+}
+
+/// Return the window that already owns `path`, if any. Canonicalization
+/// failure means the normal open can report the error instead.
+fn window_for_open_path(path: &Path) -> Option<Rc<AppWindow>> {
+    let canonical = path.canonicalize().ok()?;
+    WINDOWS.with_borrow(|windows| {
+        windows
+            .iter()
+            .find(|window| window.owns_open_path(&canonical))
+            .cloned()
+    })
+}
+
+/// Raise the window that already owns a path and explain why nothing opened.
+/// `requester` is the window that asked to open the file, when there is one;
+/// it gets its own toast if the owner is a different window.
+fn present_duplicate_open(target: &Rc<AppWindow>, requester: Option<&Rc<AppWindow>>) {
+    target.window.present();
+    target.toast(ToastKind::Info, "File is already open in this window");
+    if let Some(requester) = requester
+        && !Rc::ptr_eq(requester, target)
+    {
+        requester.toast(ToastKind::Info, "File is already open in another window");
+    }
 }
 
 /// Open `path` in a new window backed by `store`. `persist_settings` says
 /// whether theme and font settings are written to disk; test windows pass
 /// false. Cancelling the Convert Tabs prompt closes this new window.
+/// `requester` is passed through for duplicate-path feedback when an existing
+/// window already owns the file.
 pub(super) fn open_window_for_path_with(
     app: &adw::Application,
     path: &Path,
     store: SnapshotStore,
     persist_settings: bool,
     recent: RecentDocuments,
+    requester: Option<&Rc<AppWindow>>,
 ) {
+    if let Some(target) = window_for_open_path(path) {
+        present_duplicate_open(&target, requester);
+        return;
+    }
     let window = AppWindow::with_parts(app, store, persist_settings, recent);
     window.window.present();
     AppWindow::open_path_after(&window, path, AfterOpen::CloseWindowOnCancel);

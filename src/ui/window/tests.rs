@@ -164,6 +164,7 @@ fn gtk_window_smoke() {
     title_menu_scenario(&app, &dir, &store);
     search_replace_scenario(&app, &dir, &store);
     file_actions_scenario(&app, &dir, &store);
+    duplicate_open_scenario(&app, &dir, &store);
     plain_text_scenario(&app, &dir, &store);
     document_state_scenario(&app, &dir, &store);
     save_external_scenario(&app, &dir, &store);
@@ -235,6 +236,15 @@ fn selected_text(buffer: &gtk::TextBuffer) -> Option<String> {
     Some(buffer.text(&start, &end, true).to_string())
 }
 
+fn assert_toast(window: &AppWindow, kind: ToastKind, text: &str) {
+    let toast = window.last_toast.borrow().as_ref().unwrap().clone();
+    assert_eq!(
+        toast.title().as_deref(),
+        Some(crate::ui::toast::title(kind, text).as_str())
+    );
+    toast.dismiss();
+}
+
 fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
         let mut widgets = vec![root.clone()];
@@ -261,16 +271,6 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
             .unwrap()
             .to_string()
     }
-    fn assert_toast(window: &AppWindow, kind: crate::ui::toast::ToastKind, text: &str) {
-        let toast = window.last_toast.borrow().as_ref().unwrap().clone();
-        assert_eq!(
-            toast.title().as_deref(),
-            Some(crate::ui::toast::title(kind, text).as_str())
-        );
-        toast.dismiss();
-    }
-    use crate::ui::toast::ToastKind;
-
     let path = dir.join("clipboard.txt");
     std::fs::write(&path, "editor αβ\nsecond line\n").unwrap();
     let window = AppWindow::with_store(app, store.clone());
@@ -1549,6 +1549,20 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
         window.title_label.tooltip_text().as_deref(),
         Some(canonical_text.as_str())
     );
+
+    // The full-path tooltip is suppressed while the copy menu is showing.
+    window.window.present();
+    gtk::test_widget_wait_for_draw(&window.window);
+    window.title_popover.popup();
+    wait_for(|| window.title_popover.is_visible());
+    assert!(window.title_label.tooltip_text().is_none());
+    window.title_popover.popdown();
+    wait_for(|| !window.title_popover.is_visible());
+    assert_eq!(
+        window.title_label.tooltip_text().as_deref(),
+        Some(canonical_text.as_str())
+    );
+
     for name in ["copy-file-name", "copy-full-path"] {
         assert!(window.window.lookup_action(name).unwrap().is_enabled());
     }
@@ -1637,9 +1651,15 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         format!("{}\n{}\n", second.display(), first.display())
     );
 
-    // Clicking the button opens the menu when there are recent paths.
+    // Clicking the button opens the menu when there are recent paths. The
+    // button's shortcut tooltip is suppressed while the menu is showing.
+    assert_eq!(
+        window.open_button.tooltip_text().as_deref(),
+        Some("Open File (Ctrl+O)")
+    );
     window.open_button.emit_clicked();
     assert!(window.open_popover.is_visible());
+    assert!(window.open_button.tooltip_text().is_none());
     let model = window.open_popover.menu_model().expect("open menu model");
     assert_eq!(model.n_items(), 2);
     let label = |menu: &gio::MenuModel, index: i32| {
@@ -1697,14 +1717,23 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         Some(rows[0].trash.upcast_ref::<gtk::Widget>())
     );
     window.open_popover.popdown();
+    assert_eq!(
+        window.open_button.tooltip_text().as_deref(),
+        Some("Open File (Ctrl+O)")
+    );
 
     // Reopening the menu replaces the custom rows instead of reusing stale
     // ones.
     window.open_button.emit_clicked();
+    assert!(window.open_button.tooltip_text().is_none());
     let rows = window.open_recent_rows.borrow().clone();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| row.root.parent().is_some()));
     window.open_popover.popdown();
+    assert_eq!(
+        window.open_button.tooltip_text().as_deref(),
+        Some("Open File (Ctrl+O)")
+    );
 
     // Clicking a two-line recent row goes through the normal open flow and
     // moves the path to the front of the list.
@@ -2538,6 +2567,195 @@ fn file_actions_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSto
     copier.window.destroy();
     linker.window.destroy();
     renamer.window.destroy();
+}
+
+fn duplicate_open_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let shared = dir.join("duplicate-shared.txt");
+    std::fs::write(&shared, "shared\n").unwrap();
+    let owner = AppWindow::with_store(app, store.clone());
+    owner.window.present();
+    AppWindow::open_path(&owner, &shared);
+    let canonical = shared.canonicalize().unwrap();
+    assert_eq!(owner.doc.borrow().path(), Some(canonical.as_path()));
+
+    // Another window's open request raises the owner and leaves both
+    // documents alone.
+    let requester = AppWindow::with_store(app, store.clone());
+    requester.window.present();
+    requester.set_editor_text("draft\n");
+    let before = super::WINDOWS.with_borrow(|windows| windows.len());
+    AppWindow::finish_open_dialog(&requester, Ok(gio::File::for_path(&shared)));
+    assert_eq!(super::WINDOWS.with_borrow(|windows| windows.len()), before);
+    assert!(requester.doc.borrow().path().is_none());
+    assert_eq!(requester.current_text(), "draft\n");
+    assert_toast(
+        &owner,
+        ToastKind::Info,
+        "File is already open in this window",
+    );
+    assert_toast(
+        &requester,
+        ToastKind::Info,
+        "File is already open in another window",
+    );
+
+    // Opening the current window's own path is a reload, not a duplicate.
+    // A clean document follows the disk text without a prompt.
+    std::fs::write(&shared, "changed on disk\n").unwrap();
+    assert_eq!(owner.current_text(), "shared\n");
+    AppWindow::finish_open_dialog(&owner, Ok(gio::File::for_path(&shared)));
+    assert_eq!(owner.current_text(), "changed on disk\n");
+    assert!(!owner.flags.dirty.get());
+    assert_eq!(owner.doc.borrow().path(), Some(canonical.as_path()));
+
+    // Identical content is left untouched, preserving cursor, scroll and
+    // undo history.
+    let before_text = owner.current_text();
+    AppWindow::finish_open_dialog(&owner, Ok(gio::File::for_path(&shared)));
+    assert_eq!(owner.current_text(), before_text);
+    assert_toast(
+        &owner,
+        ToastKind::Info,
+        "Document is identical with its file on disk",
+    );
+
+    // A changed mtime with identical text is acknowledged without replacing
+    // the buffer, so the external-change prompt does not return.
+    owner.doc.borrow_mut().set_last_mtime(None);
+    assert!(owner.doc.borrow().externally_modified());
+    AppWindow::finish_open_dialog(&owner, Ok(gio::File::for_path(&shared)));
+    assert_eq!(owner.current_text(), before_text);
+    assert!(!owner.doc.borrow().externally_modified());
+    assert_toast(
+        &owner,
+        ToastKind::Info,
+        "Document is identical with its file on disk",
+    );
+
+    // Unsaved edits require confirmation. Cancel keeps them.
+    owner
+        .editor_buffer
+        .place_cursor(&owner.editor_buffer.end_iter());
+    owner.editor_buffer.insert_at_cursor("dirty");
+    assert!(owner.flags.dirty.get());
+    AppWindow::finish_open_dialog(&owner, Ok(gio::File::for_path(&shared)));
+    wait_for(|| {
+        owner
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = owner
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert_eq!(dialog.heading().as_deref(), Some("Reload from Disk?"));
+    assert_eq!(dialog.body().as_str(), "The document has unsaved changes.");
+    dialog.close();
+    wait_for(|| owner.window.visible_dialog().is_none());
+    assert_eq!(owner.current_text(), "changed on disk\ndirty");
+    assert!(owner.flags.dirty.get());
+
+    // Confirming reloads the saved disk text and clears the dirty state.
+    AppWindow::finish_open_dialog(&owner, Ok(gio::File::for_path(&shared)));
+    wait_for(|| {
+        owner
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = owner
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    find_response_button(dialog.upcast_ref(), "Reload from Disk")
+        .unwrap()
+        .emit_clicked();
+    wait_for(|| owner.window.visible_dialog().is_none());
+    assert_eq!(owner.current_text(), "changed on disk\n");
+    assert!(!owner.flags.dirty.get());
+
+    // A new-window request for the same path does not create a window.
+    let before = super::WINDOWS.with_borrow(|windows| windows.len());
+    super::open_window_for_path_with(
+        app,
+        &shared,
+        store.clone(),
+        false,
+        RecentDocuments::disabled(),
+        Some(&requester),
+    );
+    assert_eq!(super::WINDOWS.with_borrow(|windows| windows.len()), before);
+    assert_toast(
+        &owner,
+        ToastKind::Info,
+        "File is already open in this window",
+    );
+    assert_toast(
+        &requester,
+        ToastKind::Info,
+        "File is already open in another window",
+    );
+
+    // A pending Convert Tabs prompt reserves the path as well.
+    let tabs_file = dir.join("duplicate-tabs.txt");
+    std::fs::write(&tabs_file, "a\tb\n").unwrap();
+    AppWindow::open_path(&owner, &tabs_file);
+    wait_for(|| {
+        owner
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let before = super::WINDOWS.with_borrow(|windows| windows.len());
+    AppWindow::finish_open_dialog(&requester, Ok(gio::File::for_path(&tabs_file)));
+    assert_eq!(super::WINDOWS.with_borrow(|windows| windows.len()), before);
+    assert!(requester.doc.borrow().path().is_none());
+    assert_toast(
+        &owner,
+        ToastKind::Info,
+        "File is already open in this window",
+    );
+    assert_toast(
+        &requester,
+        ToastKind::Info,
+        "File is already open in another window",
+    );
+    owner.window.visible_dialog().unwrap().close();
+    wait_for(|| owner.window.visible_dialog().is_none());
+    assert_eq!(owner.doc.borrow().path(), Some(canonical.as_path()));
+
+    // Rename or Move updates the path that duplicate detection follows.
+    owner.rename_file("duplicate-renamed.txt");
+    let renamed = dir.join("duplicate-renamed.txt").canonicalize().unwrap();
+    assert_eq!(owner.doc.borrow().path(), Some(renamed.as_path()));
+    let before = super::WINDOWS.with_borrow(|windows| windows.len());
+    super::open_window_for_path_with(
+        app,
+        &renamed,
+        store.clone(),
+        false,
+        RecentDocuments::disabled(),
+        Some(&requester),
+    );
+    assert_eq!(super::WINDOWS.with_borrow(|windows| windows.len()), before);
+    assert_toast(
+        &owner,
+        ToastKind::Info,
+        "File is already open in this window",
+    );
+    assert_toast(
+        &requester,
+        ToastKind::Info,
+        "File is already open in another window",
+    );
+
+    requester.window.destroy();
+    owner.window.destroy();
 }
 
 fn inline_inspection_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {

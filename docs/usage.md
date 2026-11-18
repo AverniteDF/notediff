@@ -11,9 +11,10 @@ notes for details and workarounds.
   menu. **Ctrl+O** and **Open…** show the chooser directly. When there are no
   recent files, the header-bar button opens the chooser directly too. Otherwise
   it opens a menu with **Browse…** first, then up to ten recently opened file
-  paths, newest first. Each recent entry shows the file name in bold on the
-  first line and its directory path in smaller, dimmed text below, ending with
-  a slash. Directories under your home folder are shortened to `~/...`; the
+  paths, newest first. The button's **Open File (Ctrl+O)** tooltip is hidden
+  while this menu is showing. Each recent entry shows the file name in bold on
+  the first line and its directory path in smaller, dimmed text below, ending
+  with a slash. Directories under your home folder are shortened to `~/...`; the
   stored paths stay absolute. Each entry has a right-aligned hide icon (an eye
   with a slash); clicking it removes just that entry immediately, without
   confirmation.
@@ -24,8 +25,22 @@ notes for details and workarounds.
   **Open New Window**, **Discard Changes** and **Save**; there is no Cancel
   button, but Esc aborts the pending open. **Open New Window** leaves the
   current document untouched. This action is unavailable in Diff Mode; use
-  **New Window** or finish the review first. A command-line path or a
-  file-manager launch opens a new window for each file.
+  **New Window** or finish the review first. A file that is already open in
+  another window is not opened a second time: that window is raised and a toast
+  says **File is already open in this window**. The requesting window also
+  shows **File is already open in another window**. This check happens
+  before any save prompt, so redirecting never replaces or discards the current
+  document. It applies to the chooser, recent entries, **Open New Window**, and
+  command-line or file-manager launches. A command-line path or a file-manager
+  launch otherwise opens a new window for each file.
+  Opening the file already loaded in the current window reloads it from disk.
+  A dirty document first asks **Reload from Disk?** with the body
+  **The document has unsaved changes.** and offers **Cancel** or
+  **Reload from Disk**. A clean document reloads when the disk
+  text differs. When the disk text is identical, nothing is replaced and a
+  toast says **Document is identical with its file on disk**, preserving the
+  cursor, scroll position and undo history. Reloading follows the usual
+  Convert Tabs and read-only rules.
   Recent paths are kept in `$XDG_DATA_HOME/notediff/recent` (normally
   `~/.local/share/notediff/recent`). A missing file is removed only when the
   Open menu is used, so opening the editor does not scan the list at startup.
@@ -162,7 +177,8 @@ notes for details and workarounds.
 - A document with unsaved changes shows a dot before its name in the title, and
   only the header bar gets a subtle scheme-derived accent tint until it is saved or reverted.
   A read-only document also shows **(Read-Only)** after its name. Hovering the
-  title shows the full path. Right-clicking it offers **Copy file name** and
+  title shows the full path; the tooltip is hidden while the right-click menu
+  is showing. Right-clicking it offers **Copy file name** and
   **Copy full path**; untitled documents have no tooltip and both actions are
   disabled. Copying shows **Copied file name** or **Copied full path**.
 - Closing a window with unsaved text prompts to save, discard or cancel. For an

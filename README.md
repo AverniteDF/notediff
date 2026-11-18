@@ -91,8 +91,11 @@ cargo run --release -- /path/to/notes.md
   the header Open button offers **Browse…** plus the recent files, each with its
   own hide button, or opens the chooser when there are none. If the current document is dirty, choose
   Open in New Window, Discard Changes, or Save. A command-line path or a
-  file-manager launch opens a new window. New File and Open File are unavailable
-  while Review Changes is open; New Window remains available.
+  file-manager launch opens a new window. If a file is already open in another
+  window, that window is raised instead of opening the same file twice;
+  reopening the current window's file reloads it from disk. New File and Open
+  File are unavailable while Review Changes is open; New Window remains
+  available.
 - **Ctrl+S** saves. **Ctrl+Shift+S** saves as, except while Review Changes is
   open.
 - Press **F5** or click **Review Changes** to compare with a baseline.

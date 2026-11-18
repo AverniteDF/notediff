@@ -135,9 +135,12 @@ prompt on save, multi-window Quit across dirty, accepted-review and clean
 windows, Esc and window-close review-discard confirmations, the Open File save
 prompt after the chooser (including Open New Window and no Cancel button),
 recent-menu ordering, lazy pruning, open-recent and per-entry removal, the
-document title tooltip and copy menu, the Document/Baseline diff headers,
+document title tooltip and copy menu (including tooltip suppression while the
+menu is open), the Document/Baseline diff headers,
 Shift-click New, disabled New/Open actions and hidden header tooltips in Diff
-Mode, CRLF
+Mode, duplicate-path redirection to the owning window, same-window reload
+confirmation and identical-content detection, the Open menu's tooltip
+suppression, CRLF
 Enter handling, Insert Text line-ending preservation, and that every editor and
 diff buffer remains plain text. It checks that closing a window asks before
 discarding unconfirmed hunks and releases its `AppWindow` state. Run it in a graphical session. Theme coverage

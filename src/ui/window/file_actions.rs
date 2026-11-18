@@ -73,12 +73,20 @@ impl AppWindow {
         self.new_button
             .set_tooltip_text(enabled.then_some("New File (Ctrl+N)"));
         self.new_button.set_sensitive(enabled);
-        self.open_button
-            .set_tooltip_text(enabled.then_some("Open File (Ctrl+O)"));
         self.open_button.set_sensitive(enabled);
+        self.update_open_tooltip();
         if !enabled {
             self.open_popover.popdown();
         }
+    }
+
+    /// The Open button keeps its shortcut tooltip only while it is actionable
+    /// and its menu is not showing. A tooltip over the open menu would obscure
+    /// the recent entries.
+    pub(super) fn update_open_tooltip(&self) {
+        let tooltip = (!self.diff_active() && !self.open_popover.is_visible())
+            .then_some("Open File (Ctrl+O)");
+        self.open_button.set_tooltip_text(tooltip);
     }
 
     /// Connect the file-related actions and window signals. Called once from
@@ -243,6 +251,11 @@ impl AppWindow {
             return;
         }
 
+        // Reserve the path while the prompt is open. Another open request must
+        // raise this window instead of loading the same file twice.
+        if let Some(canonical) = document.path() {
+            this.pending_open.replace(Some(canonical.to_path_buf()));
+        }
         let opener = this.clone();
         this.prompt_convert_tabs(move |mode| match mode {
             Some(mode) => opener.finish_open(document, mode, large),
@@ -252,6 +265,7 @@ impl AppWindow {
 
     /// The user cancelled the Convert Tabs prompt of an open.
     fn abort_open(&self, after: AfterOpen) {
+        self.pending_open.replace(None);
         match after {
             AfterOpen::Stay => {}
             AfterOpen::CloseWindowOnCancel => {
@@ -310,6 +324,7 @@ impl AppWindow {
     }
 
     fn finish_open(&self, document: Document, mode: OpenMode, large: bool) {
+        self.pending_open.replace(None);
         self.load_document(document, mode);
         if large {
             self.toast(
@@ -333,7 +348,73 @@ impl AppWindow {
         if self.diff_active() {
             return;
         }
+        // Check before the save prompt: an already-open file must not discard
+        // or replace this document. The current window's own path becomes a
+        // reload rather than a duplicate-open request.
+        if self.handle_existing_open(&path) {
+            return;
+        }
         self.require_saved(PendingAction::OpenPath(path));
+    }
+
+    /// Handle an open request for a path that a window already owns. A
+    /// same-window request reloads; another window gets the duplicate toasts.
+    /// Returns false when no window owns the path.
+    fn handle_existing_open(self: &Rc<Self>, path: &Path) -> bool {
+        let Some(owner) = super::window_for_open_path(path) else {
+            return false;
+        };
+        if Rc::ptr_eq(&owner, self) {
+            self.request_reload();
+        } else {
+            super::present_duplicate_open(&owner, Some(self));
+        }
+        true
+    }
+
+    /// The user re-opened the document already loaded in this window. Treat
+    /// that as an explicit reload from disk: confirm before discarding unsaved
+    /// edits, but leave an identical clean document completely untouched so
+    /// its cursor, scroll position and undo history survive.
+    fn request_reload(self: &Rc<Self>) {
+        if self.diff_active() {
+            return;
+        }
+        if self.flags.dirty.get() {
+            let this = self.clone();
+            dialogs::ask(
+                &self.window,
+                "Reload from Disk?",
+                "The document has unsaved changes.",
+                &[
+                    Response::new("cancel", "Cancel"),
+                    Response::destructive("reload", "Reload from Disk"),
+                ],
+                "cancel",
+                "cancel",
+                move |response| {
+                    if response == "reload" {
+                        this.reload_from_disk(ExternalCheck::Focus);
+                    }
+                },
+            );
+            return;
+        }
+
+        let disk = self.doc.borrow().read_disk();
+        match disk {
+            Ok(text) if text == self.current_text() => {
+                if let Err(err) = self.doc.borrow_mut().adopt_disk_mtime() {
+                    self.show_error("Could not reload file", &err.to_string());
+                    return;
+                }
+                self.toast(
+                    ToastKind::Info,
+                    "Document is identical with its file on disk",
+                );
+            }
+            _ => self.reload_from_disk(ExternalCheck::Focus),
+        }
     }
 
     fn show_open_dialog(self: &Rc<Self>) {
@@ -579,7 +660,13 @@ impl AppWindow {
         match action {
             PendingAction::CreateBaseline => self.write_baseline(),
             PendingAction::ConfirmBaseline => self.confirm_diff(),
-            PendingAction::OpenPath(path) => Self::open_path(self, &path),
+            PendingAction::OpenPath(path) => {
+                // The file may have been opened elsewhere while the save
+                // prompt was showing.
+                if !self.handle_existing_open(&path) {
+                    Self::open_path(self, &path);
+                }
+            }
             PendingAction::NewFile => self.new_document(),
             PendingAction::CloseWindow => {
                 self.confirm_discard_review(AfterDiscardReview::CloseWindow);
@@ -716,6 +803,7 @@ impl AppWindow {
             self.store.clone(),
             self.persist_settings,
             self.recent.clone(),
+            Some(self),
         );
     }
 
