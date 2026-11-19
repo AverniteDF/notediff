@@ -159,11 +159,11 @@ fn gtk_window_smoke() {
     );
     assert_eq!(
         app.accels_for_action("win.indent-double").as_slice(),
-        ["<Shift><Control>bracketright"]
+        ["<Shift><Control>bracketright", "<Shift><Control>braceright"]
     );
     assert_eq!(
         app.accels_for_action("win.indent-halve").as_slice(),
-        ["<Shift><Control>bracketleft"]
+        ["<Shift><Control>bracketleft", "<Shift><Control>braceleft"]
     );
     let convert_tabs = super::file_actions::convert_tabs_dialog();
     assert_eq!(convert_tabs.default_response().as_deref(), Some("no"));
@@ -187,6 +187,7 @@ fn gtk_window_smoke() {
     crate::ui::app_dialog::snapshots_tab::link_buttons_smoke(&store, &dir);
     transient_focus_scenario(&app, &store);
     context_menu_focus_scenario(&app, &store);
+    trim_trailing_whitespace_scenario(&app, &store);
     gutter_selection_scenario(&app, store.clone());
     editing_scenario(&app, &dir, &store);
     indentation_scenario(&app, &dir, &store);
@@ -847,6 +848,24 @@ fn editor_context_menu(view: &sourceview5::View) -> Option<gtk::PopoverMenu> {
     None
 }
 
+fn open_editor_context_menu(window: &AppWindow) {
+    assert!(
+        window
+            .editor_view
+            .activate_action("menu.popup", None)
+            .is_ok()
+    );
+    wait_for(|| {
+        editor_context_menu(&window.editor_view).is_some_and(|popover| popover.is_mapped())
+    });
+}
+
+fn close_editor_context_menu(window: &AppWindow) {
+    let popover = editor_context_menu(&window.editor_view).unwrap();
+    popover.popdown();
+    wait_for(|| !popover.is_visible());
+}
+
 fn transient_focus_scenario(app: &adw::Application, store: &SnapshotStore) {
     fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
         let mut widgets = vec![root.clone()];
@@ -999,6 +1018,101 @@ fn context_menu_focus_scenario(app: &adw::Application, store: &SnapshotStore) {
     window.open_button.grab_focus();
     assert!(!editor_focused());
     wait_for(editor_focused);
+    window.window.destroy();
+}
+
+fn trim_trailing_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
+    let window = AppWindow::with_store(app, store.clone());
+    window.window.present();
+    wait_for(|| window.window.is_mapped());
+    let buffer = window.editor_buffer.clone();
+    let trim = window
+        .window
+        .lookup_action("trim-trailing-whitespace")
+        .unwrap();
+
+    // A clean document disables the context-menu item.
+    window.set_editor_text("a\nb\n");
+    open_editor_context_menu(&window);
+    assert!(!trim.is_enabled());
+    close_editor_context_menu(&window);
+
+    // Whole-document trim, success toast and one undo step.
+    window.set_editor_text("a \n b \n");
+    open_editor_context_menu(&window);
+    assert!(trim.is_enabled());
+    close_editor_context_menu(&window);
+    trim.activate(None);
+    assert_eq!(window.current_text(), "a\n b\n");
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "2 trailing whitespace characters were removed",
+    );
+    buffer.undo();
+    assert_eq!(window.current_text(), "a \n b \n");
+
+    // Singular wording.
+    window.set_editor_text("a \n");
+    window.trim_trailing_whitespace();
+    assert_eq!(window.current_text(), "a\n");
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "1 trailing whitespace character was removed",
+    );
+    buffer.undo();
+    assert_eq!(window.current_text(), "a \n");
+
+    // A selection limits the target lines.
+    window.set_editor_text("a \nb \nc \n");
+    buffer.select_range(
+        &buffer.iter_at_line(0).unwrap(),
+        &buffer.iter_at_line(1).unwrap(),
+    );
+    open_editor_context_menu(&window);
+    assert!(trim.is_enabled());
+    close_editor_context_menu(&window);
+    trim.activate(None);
+    assert_eq!(window.current_text(), "a\nb \nc \n");
+
+    // A clean selection disables Trim even though other lines have whitespace.
+    window.set_editor_text("a \nb\nc \n");
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    assert!(buffer.selection_bounds().is_some());
+    open_editor_context_menu(&window);
+    assert!(!trim.is_enabled());
+    close_editor_context_menu(&window);
+
+    // Direct invocation still reports the no-op. Restore the selection because
+    // closing a programmatically opened popup may move focus.
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    window.trim_trailing_whitespace();
+    assert_eq!(window.current_text(), "a \nb\nc \n");
+    assert_toast(&window, ToastKind::Info, "No trailing whitespace to remove");
+
+    // Read-only disables the action and the operation does nothing.
+    window.set_editor_text("a \n");
+    window.set_read_only(true);
+    open_editor_context_menu(&window);
+    assert!(!trim.is_enabled());
+    close_editor_context_menu(&window);
+    window.trim_trailing_whitespace();
+    assert_eq!(window.current_text(), "a \n");
+    window.set_read_only(false);
+
+    // Diff Mode does nothing.
+    window.stack.set_visible_child_name("diff");
+    window.trim_trailing_whitespace();
+    assert_eq!(window.current_text(), "a \n");
+    window.stack.set_visible_child_name("editor");
+
     window.window.destroy();
 }
 

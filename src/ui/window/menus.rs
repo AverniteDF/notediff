@@ -303,16 +303,17 @@ pub(super) fn build_context_menu() -> gio::Menu {
     path.append(Some("File…"), Some("win.insert-path"));
     path.append(Some("Directory…"), Some("win.insert-folder-path"));
 
-    let insert_section = gio::Menu::new();
-    insert_section.append_submenu(Some("Insert Path"), &path);
-    insert_section.append(Some("Add Text from File…"), Some("win.insert-file"));
-
-    let indentation_section = gio::Menu::new();
-    indentation_section.append_submenu(Some("Edit Indentation…"), &indentation);
+    let edit_section = gio::Menu::new();
+    edit_section.append_submenu(Some("Edit Indentation"), &indentation);
+    edit_section.append(
+        Some("Trim Trailing Whitespace"),
+        Some("win.trim-trailing-whitespace"),
+    );
 
     let menu = gio::Menu::new();
-    menu.append_section(None, &insert_section);
-    menu.append_section(None, &indentation_section);
+    menu.append_submenu(Some("Insert Path"), &path);
+    menu.append(Some("Add Text from File…"), Some("win.insert-file"));
+    menu.append_section(None, &edit_section);
     menu
 }
 
@@ -343,8 +344,14 @@ pub(super) fn install_accels(app: &adw::Application) {
         "win.indent-decrease-no-flattening",
         &["<Control>bracketleft"],
     );
-    app.set_accels_for_action("win.indent-double", &["<Control><Shift>bracketright"]);
-    app.set_accels_for_action("win.indent-halve", &["<Control><Shift>bracketleft"]);
+    app.set_accels_for_action(
+        "win.indent-double",
+        &["<Control><Shift>bracketright", "<Control><Shift>braceright"],
+    );
+    app.set_accels_for_action(
+        "win.indent-halve",
+        &["<Control><Shift>bracketleft", "<Control><Shift>braceleft"],
+    );
     app.set_accels_for_action("win.word-wrap", &["<Alt>z"]);
     app.set_accels_for_action("win.close", &["<Ctrl>w"]);
     app.set_accels_for_action("win.quit", &["<Ctrl>q"]);
@@ -381,23 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_orders_insert_actions_above_indentation() {
+    fn context_menu_orders_insert_edit_and_trim_actions() {
         let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
             menu.item_attribute_value(index, name, None)
                 .and_then(|value| value.get::<String>())
         };
 
         let menu = build_context_menu();
-        assert_eq!(menu.n_items(), 2);
+        assert_eq!(menu.n_items(), 3);
 
-        // The top section has the Insert Path submenu and Add Text from File.
-        let insert_section = menu.item_link(0, gio::MENU_LINK_SECTION).unwrap();
-        assert_eq!(insert_section.n_items(), 2);
+        // The first items are the Insert Path submenu and Add Text from File.
         assert_eq!(
-            attribute(&insert_section, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            attribute(menu.upcast_ref(), 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
             Some("Insert Path")
         );
-        let path = insert_section.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
+        let path = menu.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
         assert_eq!(path.n_items(), 2);
         for (index, (label, action)) in [
             ("File…", "win.insert-path"),
@@ -417,24 +422,22 @@ mod tests {
             );
         }
         assert_eq!(
-            attribute(&insert_section, 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            attribute(menu.upcast_ref(), 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
             Some("Add Text from File…")
         );
         assert_eq!(
-            attribute(&insert_section, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            attribute(menu.upcast_ref(), 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
             Some("win.insert-file")
         );
 
-        // The bottom section has Edit Indentation.
-        let indentation_section = menu.item_link(1, gio::MENU_LINK_SECTION).unwrap();
-        assert_eq!(indentation_section.n_items(), 1);
+        // The bottom section has Edit Indentation, then Trim Trailing Whitespace.
+        let edit_section = menu.item_link(2, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(edit_section.n_items(), 2);
         assert_eq!(
-            attribute(&indentation_section, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Edit Indentation…")
+            attribute(&edit_section, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Edit Indentation")
         );
-        let indentation = indentation_section
-            .item_link(0, gio::MENU_LINK_SUBMENU)
-            .unwrap();
+        let indentation = edit_section.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
 
         // Four one-space operations, then the scaling operations in a section.
         assert_eq!(indentation.n_items(), 5);
@@ -489,6 +492,15 @@ mod tests {
                 Some(*action)
             );
         }
+
+        assert_eq!(
+            attribute(&edit_section, 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Trim Trailing Whitespace")
+        );
+        assert_eq!(
+            attribute(&edit_section, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.trim-trailing-whitespace")
+        );
     }
 
     #[test]

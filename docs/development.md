@@ -40,8 +40,8 @@ src/
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
     indent.rs           indentation editing: increase with or without empty
                         lines, strict or flattening decrease, double and halve
-    whitespace.rs       trailing ASCII space/tab detection and the next wrapped
-                        trailing run
+    whitespace.rs       trailing ASCII space/tab detection, the next wrapped
+                        trailing run, and per-line trim plans
     inline.rs           byte-exact word, line-ending and fallback change units,
                         with the same diff deadline as `diff.rs`
     insert.rs           preparing a file's text for insertion: size limits,
@@ -63,7 +63,7 @@ src/
     window/
       clipboard.rs      header Copy Selected Text button and focused-pane tracking
       editing.rs        insert filter for tabs and document line endings, Tab
-                        key, indentation editing, Find next trailing whitespace,
+                        key, indentation editing, trailing-whitespace find and trim,
                         EOL conversion, file insertion, word wrap, read-only state
       file_actions.rs   new file (including Shift-click to a new window) and
                         open (chooser or recent path first, post-chooser save
@@ -129,7 +129,7 @@ cargo test
 One ignored UI smoke test runs the editing, file-action and Diff Mode
 scenarios on the same GTK thread with a temporary snapshot store. It covers
 tab handling, read-only mode, Find/Replace, EOL conversion, all six indentation
-operations, the trailing-whitespace dot and find, Word Wrap,
+operations, the trailing-whitespace dot, find and trim, Word Wrap,
 the Insert Path submenu and Add Text from File insertion with selection,
 baseline moves, links and copies, and the Diff
 Mode accept, undo and confirm flow. It exercises inline inspection keys, selection
@@ -147,7 +147,7 @@ Shift-click New, disabled New/Open actions and hidden header tooltips in Diff
 Mode, duplicate-path redirection to the owning window, same-window reload
 confirmation and identical-content detection, the Open menu's tooltip
 suppression, CRLF
-Enter handling, Insert Text line-ending preservation, and that every editor and
+Enter handling, Add Text from File line-ending preservation, and that every editor and
 diff buffer remains plain text. It checks that closing a window asks before
 discarding unconfirmed hunks and releases its `AppWindow` state. Run it in a graphical session. Theme coverage
 uses isolated directories and includes descriptor

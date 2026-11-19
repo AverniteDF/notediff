@@ -125,7 +125,7 @@ notes for details and workarounds.
 - Toggle **Word Wrap** with **Alt+Z** or in the main menu. It starts checked in each new window.
   When off, long editor lines scroll horizontally. The setting lasts for the
   life of the window, works on read-only documents, and is disabled in Diff Mode.
-- **Edit Indentation…** (right-click menu) changes the leading spaces of the
+- **Edit Indentation** (right-click menu) changes the leading spaces of the
   lines the selection touches, or of the whole document when nothing is
   selected. Only ASCII spaces count as indentation. Each operation is one undo
   step, keeps line breaks untouched, and is unavailable for read-only documents
@@ -145,6 +145,14 @@ notes for details and workarounds.
     (**Ctrl+Shift+[**) halves them. Double does nothing (with a toast) if every
     target line has no indentation; Halve does the same, and also refuses if any
     target line has an odd number of leading spaces, naming the first such line.
+- **Trim Trailing Whitespace** (right-click menu) removes trailing ASCII spaces
+  and tabs from the lines the selection touches, or from the whole document when
+  nothing is selected. Whitespace-only lines become empty lines. The item is
+  greyed out when the effective target has no trailing whitespace. A success
+  toast reports the number of characters removed, for example
+  `5 trailing whitespace characters were removed`; invoking it directly when
+  nothing can be removed shows `No trailing whitespace to remove` instead. One
+  undo step; unavailable for read-only documents and in Diff Mode.
 - **EOL Conversion** (click the status-bar line-ending field) converts every line ending in the document to
   Windows (CRLF) or Unix (LF), including mixed endings. It is one undo step and
   leaves the document with unsaved changes. It is unavailable in Diff Mode and

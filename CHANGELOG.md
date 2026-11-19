@@ -12,7 +12,7 @@ versioning.
   tooltip **No trailing whitespace**, yellow with **Find trailing whitespace**.
   Clicking a yellow dot selects the next trailing-whitespace run and wraps at
   the end of the document.
-- The editor context menu now has an **Edit Indentation…** submenu at the
+- The editor context menu now has an **Edit Indentation** submenu at the
   bottom, below a separator, with **Increase (skip empty lines)** (Ctrl+Alt+]),
   **Decrease (allow flattening)** (Ctrl+Alt+[),
   **Increase (include empty lines)** (Ctrl+]),
@@ -22,9 +22,17 @@ versioning.
 - The editor context menu now has an **Insert Path** submenu with **File…** and
   **Directory…**, plus a top-level **Add Text from File…** item, which insert a
   path or a file's text like a paste without reading path targets.
+- The editor context menu now has a **Trim Trailing Whitespace** item for the
+  selected lines or the whole document. It is greyed out when there is nothing
+  to trim, reports the number of removed characters, and is one undo step.
 - Diff Mode pane headers show the live document's full canonical path and
   right-aligned local timestamps for the last document edit (or save) and the
   saved baseline.
+
+### Fixed
+
+- **Ctrl+Shift+]** and **Ctrl+Shift+[** now trigger **Double** and **Halve** on
+  platforms that report the shifted brace key values.
 
 ### Changed
 

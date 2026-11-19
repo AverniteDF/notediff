@@ -84,6 +84,12 @@ impl AppWindow {
             let next = widget.next_sibling();
             if let Ok(popover) = widget.downcast::<gtk::PopoverMenu>() {
                 this.context_menu_hooked.set(true);
+                let weak = Rc::downgrade(this);
+                popover.connect_show(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.update_context_menu_actions();
+                    }
+                });
                 Self::connect_popover_focus(this, popover.upcast_ref(), action_chosen.clone());
                 return;
             }

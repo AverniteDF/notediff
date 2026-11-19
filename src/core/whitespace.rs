@@ -5,7 +5,7 @@
 //! `textlines`, so `\r\n`, a lone `\r` and U+2029 PARAGRAPH SEPARATOR are
 //! terminators. A whitespace-only line counts; a truly empty line does not.
 
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use super::textlines;
 
@@ -23,6 +23,48 @@ pub fn has_trailing(text: &str) -> bool {
         }
     }
     false
+}
+
+/// True when any line in `lines` (0-based, inclusive) ends in ASCII spaces or
+/// tabs. `None` checks the whole text.
+pub fn has_trailing_in(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
+    textlines::split_all(text)
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .any(|(_, line)| trailing_len(textlines::content(line)) > 0)
+}
+
+/// One line whose trailing-whitespace run is removed. `line` is 0-based;
+/// `start` and `len` are character offsets and counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrimChange {
+    pub line: usize,
+    pub start: usize,
+    pub len: usize,
+}
+
+/// Trailing-whitespace removals for `lines` (0-based, inclusive), or for the
+/// whole text when `None`. Only lines that change are returned.
+pub fn trim_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<TrimChange> {
+    textlines::split_all(text)
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .filter_map(|(line, text)| {
+            let content = textlines::content(text);
+            let len = trailing_len(content);
+            if len == 0 {
+                return None;
+            }
+            let content_chars = content.chars().count();
+            Some(TrimChange {
+                line,
+                start: content_chars - len,
+                len,
+            })
+        })
+        .collect()
 }
 
 /// Character range of the next trailing-whitespace run at or after `from_char`,
@@ -86,6 +128,87 @@ mod tests {
         for text in ["", "\n", "a\n", "a\nb\n", "a\u{a0}\n", "a\u{2003}\n"] {
             assert!(!has_trailing(text), "{text:?}");
         }
+    }
+
+    #[test]
+    fn line_limited_detection_follows_the_selection() {
+        let text = "a \nb\nc\t\n";
+        assert!(has_trailing_in(text, None));
+        assert!(has_trailing_in(text, Some(0..=0)));
+        assert!(!has_trailing_in(text, Some(1..=1)));
+        assert!(has_trailing_in(text, Some(2..=2)));
+        assert!(!has_trailing_in("a\nb\n", None));
+    }
+
+    #[test]
+    fn trim_plan_reports_every_trailing_run() {
+        assert_eq!(
+            trim_plan("a \n b\t\nc\n", None),
+            vec![
+                TrimChange {
+                    line: 0,
+                    start: 1,
+                    len: 1
+                },
+                TrimChange {
+                    line: 1,
+                    start: 2,
+                    len: 1
+                },
+            ]
+        );
+        assert_eq!(
+            trim_plan("a \n b\t\nc\n", Some(1..=1)),
+            vec![TrimChange {
+                line: 1,
+                start: 2,
+                len: 1
+            }]
+        );
+        assert!(trim_plan("a\nb\n", None).is_empty());
+    }
+
+    #[test]
+    fn trim_plan_handles_whitespace_only_unicode_and_breaks() {
+        assert_eq!(
+            trim_plan("   \n", None),
+            vec![TrimChange {
+                line: 0,
+                start: 0,
+                len: 3
+            }]
+        );
+        assert_eq!(
+            trim_plan("é \r\n", None),
+            vec![TrimChange {
+                line: 0,
+                start: 1,
+                len: 1
+            }]
+        );
+        assert_eq!(
+            trim_plan("\t\r", None),
+            vec![TrimChange {
+                line: 0,
+                start: 0,
+                len: 1
+            }]
+        );
+        assert_eq!(
+            trim_plan("x \u{2029}y\t\u{2029}", None),
+            vec![
+                TrimChange {
+                    line: 0,
+                    start: 1,
+                    len: 1
+                },
+                TrimChange {
+                    line: 1,
+                    start: 1,
+                    len: 1
+                },
+            ]
+        );
     }
 
     #[test]

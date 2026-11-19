@@ -1,7 +1,8 @@
 //! Editing behaviour of the main window: the no-tab paste filter, the Tab
-//! key, indentation editing, Find next trailing whitespace, EOL conversion,
-//! word wrap and the read-only state.
+//! key, indentation editing, trailing-whitespace find and trim, EOL
+//! conversion, word wrap and the read-only state.
 
+use std::ops::RangeInclusive;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -167,6 +168,9 @@ impl AppWindow {
         add_action(window, this, "find-next-trailing-whitespace", |this| {
             this.find_next_trailing_whitespace()
         });
+        add_action(window, this, "trim-trailing-whitespace", |this| {
+            this.trim_trailing_whitespace()
+        });
 
         add_action(window, this, "insert-path", |this| {
             this.request_insert_path()
@@ -206,6 +210,7 @@ impl AppWindow {
             "indent-decrease-no-flattening",
             "indent-double",
             "indent-halve",
+            "trim-trailing-whitespace",
             "insert-path",
             "insert-folder-path",
             "insert-file",
@@ -370,12 +375,7 @@ impl AppWindow {
         }
 
         let text = self.current_text();
-        let lines = self
-            .selection_offsets()
-            .and_then(|(start, end)| textstats::selection_stats(&text, start, end))
-            .map(|selection| selection.line_range());
-
-        let changes = match indent::plan(&text, operation, lines) {
+        let changes = match indent::plan(&text, operation, self.target_lines(&text)) {
             Ok(changes) => changes,
             Err(err @ (IndentError::NothingToScale | IndentError::OddIndent { .. })) => {
                 self.toast(ToastKind::Warning, &err.message(operation));
@@ -402,6 +402,80 @@ impl AppWindow {
             }
         }
         buffer.end_user_action();
+    }
+
+    /// 0-based inclusive lines the selection touches, or `None` for the whole
+    /// document.
+    fn target_lines(&self, text: &str) -> Option<RangeInclusive<usize>> {
+        self.selection_offsets()
+            .and_then(|(start, end)| textstats::selection_stats(text, start, end))
+            .map(|selection| selection.line_range())
+    }
+
+    /// Remove trailing ASCII spaces and tabs from the target lines. The edit is
+    /// one undo step and reports the number of removed characters. Does
+    /// nothing in Diff Mode or for read-only documents.
+    pub(super) fn trim_trailing_whitespace(&self) {
+        if self.diff_active() || self.flags.read_only.get() {
+            return;
+        }
+
+        let text = self.current_text();
+        let changes = whitespace::trim_plan(&text, self.target_lines(&text));
+        if changes.is_empty() {
+            self.toast(ToastKind::Info, "No trailing whitespace to remove");
+            return;
+        }
+        let removed: usize = changes.iter().map(|change| change.len).sum();
+
+        let buffer = &self.editor_buffer;
+        buffer.begin_user_action();
+        for change in changes.iter().rev() {
+            let Some(mut start) =
+                buffer.iter_at_line_offset(change.line as i32, change.start as i32)
+            else {
+                continue;
+            };
+            let mut end = start;
+            end.forward_chars(change.len as i32);
+            buffer.delete(&mut start, &mut end);
+        }
+        buffer.end_user_action();
+
+        let message = if removed == 1 {
+            "1 trailing whitespace character was removed".to_string()
+        } else {
+            format!(
+                "{} trailing whitespace characters were removed",
+                textstats::format_thousands(removed)
+            )
+        };
+        self.toast(ToastKind::Success, &message);
+    }
+
+    /// Refresh context-menu actions whose availability depends on the current
+    /// selection. Called when the editor context menu is about to open.
+    pub(super) fn update_context_menu_actions(&self) {
+        let selected = self.selection_offsets();
+        let has_trailing = self.status_state.measure(
+            || self.buffer_text(),
+            |text, stats| match selected {
+                Some((start, end)) => {
+                    textstats::selection_stats(text, start, end).is_some_and(|selection| {
+                        whitespace::has_trailing_in(text, Some(selection.line_range()))
+                    })
+                }
+                None => stats.has_trailing_whitespace,
+            },
+        );
+        let enabled = has_trailing && !self.diff_active() && !self.flags.read_only.get();
+        if let Some(action) = self
+            .window
+            .lookup_action("trim-trailing-whitespace")
+            .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+        {
+            action.set_enabled(enabled);
+        }
     }
 
     /// Select the next run of trailing spaces or tabs and scroll it onscreen.
