@@ -2522,17 +2522,30 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     ibuf.undo();
     assert_eq!(inserter.current_text(), "keep SELECTED keep\n");
 
+    // The same insertion works unchanged for a directory path.
+    inserter.set_editor_text("keep");
+    ibuf.place_cursor(&ibuf.end_iter());
+    inserter.insert_path(dir);
+    let dir_text = dir.display().to_string();
+    assert_eq!(inserter.current_text(), format!("keep{dir_text}"));
+    ibuf.undo();
+    assert_eq!(inserter.current_text(), "keep");
+
     let insert_path_action = inserter.window.lookup_action("insert-path").unwrap();
+    let insert_folder_action = inserter.window.lookup_action("insert-folder-path").unwrap();
     assert!(insert_path_action.is_enabled());
+    assert!(insert_folder_action.is_enabled());
     inserter.set_editor_text("same\n");
     inserter.set_read_only(true);
     assert!(!insert_path_action.is_enabled());
+    assert!(!insert_folder_action.is_enabled());
     inserter.insert_path(&source);
     assert_eq!(inserter.current_text(), "same\n");
     inserter.insert_file(&source);
     assert_eq!(inserter.current_text(), "same\n");
     inserter.set_read_only(false);
     assert!(insert_path_action.is_enabled());
+    assert!(insert_folder_action.is_enabled());
 
     inserter.window.destroy();
     scaler.window.destroy();

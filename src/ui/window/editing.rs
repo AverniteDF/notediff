@@ -153,6 +153,9 @@ impl AppWindow {
         add_action(window, this, "insert-path", |this| {
             this.request_insert_path()
         });
+        add_action(window, this, "insert-folder-path", |this| {
+            this.request_insert_folder_path()
+        });
         add_action(window, this, "insert-file", |this| {
             this.request_insert_file()
         });
@@ -182,6 +185,7 @@ impl AppWindow {
             "indent-double",
             "indent-halve",
             "insert-path",
+            "insert-folder-path",
             "insert-file",
         ] {
             if let Some(action) = self
@@ -408,6 +412,38 @@ impl AppWindow {
 
         let this = self.clone();
         dialog.open(
+            Some(&self.window),
+            None::<&gio::Cancellable>,
+            move |result| {
+                if let Ok(file) = result
+                    && let Some(path) = file.path()
+                {
+                    this.insert_path(&path);
+                }
+            },
+        );
+    }
+
+    /// Insert Folder Path: let the user pick a folder, then insert its
+    /// absolute path at the cursor (see `insert_path`).
+    pub(super) fn request_insert_folder_path(self: &Rc<Self>) {
+        if !self.can_insert_text() {
+            return;
+        }
+
+        let dialog = gtk::FileDialog::builder()
+            .title("Insert Folder Path")
+            .modal(true)
+            .build();
+        if let Some(folder) = self
+            .path_for_snapshot()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        {
+            dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
+        }
+
+        let this = self.clone();
+        dialog.select_folder(
             Some(&self.window),
             None::<&gio::Cancellable>,
             move |result| {
