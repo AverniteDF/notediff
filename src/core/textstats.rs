@@ -4,7 +4,7 @@
 //! headlessly. Line breaks use the same definition as GtkTextBuffer: `\n`,
 //! `\r\n`, a lone `\r`, and U+2029 PARAGRAPH SEPARATOR.
 
-use super::textlines;
+use super::{textlines, whitespace};
 
 /// The line-ending style of a text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -39,6 +39,8 @@ pub struct TextStats {
     /// line break starts a new, empty last line.
     pub lines: usize,
     pub line_ending: LineEnding,
+    /// True when any line ends in ASCII spaces or tabs.
+    pub has_trailing_whitespace: bool,
 }
 
 impl TextStats {
@@ -232,6 +234,7 @@ pub fn text_stats(text: &str) -> TextStats {
         chars: text.chars().count(),
         lines: textlines::break_count(text) + 1,
         line_ending: detect_line_ending(text),
+        has_trailing_whitespace: whitespace::has_trailing(text),
     }
 }
 
@@ -321,6 +324,16 @@ mod tests {
 
         let trailing = text_stats("ab\n");
         assert_eq!((trailing.bytes, trailing.lines), (3, 2));
+    }
+
+    #[test]
+    fn stats_include_trailing_whitespace_state() {
+        assert!(!text_stats("").has_trailing_whitespace);
+        assert!(!text_stats("a\nb\n").has_trailing_whitespace);
+        assert!(text_stats("a \n").has_trailing_whitespace);
+        assert!(text_stats("a\t\r\n").has_trailing_whitespace);
+        assert!(text_stats("   \n").has_trailing_whitespace);
+        assert!(!text_stats("a\u{a0}\n").has_trailing_whitespace);
     }
 
     #[test]

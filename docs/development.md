@@ -32,13 +32,16 @@ src/
                         link (move/copy) and baseline move
     undo.rs             bounded in-memory undo stack (100 entries or 64 MiB)
     textstats.rs        status-bar numbers: byte and character counts, line count,
-                        line-ending style, cursor line/column/byte position,
-                        selection size, thousands separators
+                        line-ending style, trailing-whitespace flag, cursor
+                        line/column/byte position, selection size, thousands separators
     elapsed.rs          last-edit status text and its refresh schedule
     tabs.rs             no-tab policy helpers: tab detection and conversion
     textlines.rs        GTK-compatible line breaks, splitting and byte offsets
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
-    indent.rs           indentation scaling (double / halve)
+    indent.rs           indentation editing (increase / decrease / double / halve,
+                        with optional skip-empty filtering)
+    whitespace.rs       trailing ASCII space/tab detection and the next wrapped
+                        trailing run
     inline.rs           byte-exact word, line-ending and fallback change units,
                         with the same diff deadline as `diff.rs`
     insert.rs           preparing a file's text for insertion: size limits,
@@ -60,8 +63,8 @@ src/
     window/
       clipboard.rs      header Copy Selected Text button and focused-pane tracking
       editing.rs        insert filter for tabs and document line endings, Tab
-                        key, Scale Indentation, EOL conversion, file insertion,
-                        word wrap, read-only state
+                        key, indentation editing, Find next trailing whitespace,
+                        EOL conversion, file insertion, word wrap, read-only state
       file_actions.rs   new file (including Shift-click to a new window) and
                         open (chooser or recent path first, post-chooser save
                         prompt), save (with external-change overwrite guard),
@@ -125,7 +128,8 @@ cargo test
 
 One ignored UI smoke test runs the editing, file-action and Diff Mode
 scenarios on the same GTK thread with a temporary snapshot store. It covers
-tab handling, read-only mode, Find/Replace, EOL conversion, indentation scaling, Word Wrap,
+tab handling, read-only mode, Find/Replace, EOL conversion, indentation editing, the
+trailing-whitespace dot and find, Word Wrap,
 file and folder path insertion plus text insertion with selection, baseline moves, links and copies, and the Diff
 Mode accept, undo and confirm flow. It exercises inline inspection keys, selection
 highlights, partial-line review, line endings, wrapped selection scrolling, pure

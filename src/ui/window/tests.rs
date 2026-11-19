@@ -9,7 +9,7 @@ use gtk::gio;
 use gtk::glib::variant::ToVariant;
 use sourceview5::prelude::*;
 
-use crate::core::indent::IndentScale;
+use crate::core::indent::IndentOperation;
 use crate::core::inline::ChangeKind;
 use crate::core::recent::RecentDocuments;
 use crate::core::snapshot_store::{LinkMode, SnapshotStore};
@@ -137,6 +137,22 @@ fn gtk_window_smoke() {
         ["<Shift><Control>n"]
     );
     assert_eq!(app.accels_for_action("win.enter-diff").as_slice(), ["F5"]);
+    assert_eq!(
+        app.accels_for_action("win.indent-increase").as_slice(),
+        ["<Control>bracketright"]
+    );
+    assert_eq!(
+        app.accels_for_action("win.indent-decrease").as_slice(),
+        ["<Control>bracketleft"]
+    );
+    assert_eq!(
+        app.accels_for_action("win.indent-double").as_slice(),
+        ["<Shift><Control>bracketright"]
+    );
+    assert_eq!(
+        app.accels_for_action("win.indent-halve").as_slice(),
+        ["<Shift><Control>bracketleft"]
+    );
     let convert_tabs = super::file_actions::convert_tabs_dialog();
     assert_eq!(convert_tabs.default_response().as_deref(), Some("no"));
     assert_eq!(convert_tabs.close_response().as_str(), "cancel");
@@ -160,6 +176,8 @@ fn gtk_window_smoke() {
     transient_focus_scenario(&app, &store);
     gutter_selection_scenario(&app, store.clone());
     editing_scenario(&app, &dir, &store);
+    indentation_scenario(&app, &dir, &store);
+    trailing_whitespace_scenario(&app, &dir, &store);
     clipboard_scenario(&app, &dir, &store);
     title_menu_scenario(&app, &dir, &store);
     search_replace_scenario(&app, &dir, &store);
@@ -2455,19 +2473,19 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     buffer.insert_at_cursor("\n");
     assert_eq!(editor.current_text(), "a\r\nb\r\n\r\n\r\n");
 
-    // Scale Indentation: whole document, abort cases, read-only guard.
+    // Indentation editing: whole document, abort cases, read-only guard.
     let scaler = AppWindow::with_store(app, store.clone());
     scaler.set_editor_text("a\n  b\n    c\n");
-    scaler.scale_indentation(IndentScale::Halve);
+    scaler.edit_indentation(IndentOperation::Halve, true);
     assert_eq!(scaler.current_text(), "a\n b\n  c\n");
-    scaler.scale_indentation(IndentScale::Double);
+    scaler.edit_indentation(IndentOperation::Double, true);
     assert_eq!(scaler.current_text(), "a\n  b\n    c\n");
     scaler.set_editor_text(" odd\n");
-    scaler.scale_indentation(IndentScale::Halve);
+    scaler.edit_indentation(IndentOperation::Halve, true);
     assert_eq!(scaler.current_text(), " odd\n");
     scaler.set_editor_text("  a\n  b\n");
     scaler.set_read_only(true);
-    scaler.scale_indentation(IndentScale::Double);
+    scaler.edit_indentation(IndentOperation::Double, true);
     assert_eq!(scaler.current_text(), "  a\n  b\n");
 
     // Insert Text from File: at the cursor, BOM stripped, line endings
@@ -2550,6 +2568,189 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     inserter.window.destroy();
     scaler.window.destroy();
     editor.window.destroy();
+}
+
+fn click_trailing_dot(dot: &gtk::Label) {
+    let controllers = dot.observe_controllers();
+    let gesture = (0..controllers.n_items())
+        .filter_map(|index| controllers.item(index))
+        .find_map(|controller| controller.downcast::<gtk::GestureClick>().ok())
+        .expect("the dot has a click controller");
+    let args: [&dyn gtk::glib::value::ToValue; 3] = [&1i32, &0f64, &0f64];
+    gesture.emit_by_name::<()>("released", &args);
+}
+
+fn trailing_whitespace_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let window = AppWindow::with_store(app, store.clone());
+    let buffer = window.editor_buffer.clone();
+    let dot = window.status.trailing_label().unwrap().clone();
+    let find = window
+        .window
+        .lookup_action("find-next-trailing-whitespace")
+        .unwrap();
+
+    // A clean document has a green, inert dot and no find action.
+    window.set_editor_text("a\nb\n");
+    window.update_status();
+    assert!(dot.has_css_class("trailing-clean"));
+    assert!(!dot.has_css_class("trailing-dirty"));
+    assert_eq!(
+        dot.tooltip_text().as_deref(),
+        Some("No trailing whitespace")
+    );
+    assert!(!find.is_enabled());
+    buffer.place_cursor(&buffer.start_iter());
+    click_trailing_dot(&dot);
+    find.activate(None);
+    assert!(buffer.selection_bounds().is_none());
+
+    // A yellow dot enables find. Clicking selects the next run and wraps.
+    window.set_editor_text("one \ntwo \t\n");
+    window.update_status();
+    assert!(dot.has_css_class("trailing-dirty"));
+    assert!(!dot.has_css_class("trailing-clean"));
+    assert_eq!(dot.tooltip_text().as_deref(), Some("Trailing whitespace"));
+    assert!(find.is_enabled());
+
+    buffer.place_cursor(&buffer.start_iter());
+    click_trailing_dot(&dot);
+    let (start, end) = buffer.selection_bounds().unwrap();
+    assert_eq!((start.offset(), end.offset()), (3, 4));
+    assert_eq!(buffer.text(&start, &end, true).as_str(), " ");
+
+    click_trailing_dot(&dot);
+    let (start, end) = buffer.selection_bounds().unwrap();
+    assert_eq!(buffer.text(&start, &end, true).as_str(), " \t");
+
+    click_trailing_dot(&dot);
+    let (start, end) = buffer.selection_bounds().unwrap();
+    assert_eq!(buffer.text(&start, &end, true).as_str(), " ");
+
+    // Read-only documents keep find available.
+    window.set_read_only(true);
+    assert!(find.is_enabled());
+    buffer.place_cursor(&buffer.start_iter());
+    click_trailing_dot(&dot);
+    assert!(buffer.selection_bounds().is_some());
+    window.set_read_only(false);
+
+    // Diff Mode does nothing.
+    let path = dir.join("trailing-diff.txt");
+    std::fs::write(&path, "base \n").unwrap();
+    let review = AppWindow::with_store(app, store.clone());
+    let review_buffer = review.editor_buffer.clone();
+    AppWindow::open_path(&review, &path);
+    review.create_baseline();
+    review.set_editor_text("changed \n");
+    review.enter_diff();
+    review_buffer.place_cursor(&review_buffer.start_iter());
+    let review_find = review
+        .window
+        .lookup_action("find-next-trailing-whitespace")
+        .unwrap();
+    review_find.activate(None);
+    assert!(review_buffer.selection_bounds().is_none());
+    review.exit_diff();
+    review.window.destroy();
+
+    window.window.destroy();
+}
+
+fn indentation_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let window = AppWindow::with_store(app, store.clone());
+    let buffer = window.editor_buffer.clone();
+    let increase = window.window.lookup_action("indent-increase").unwrap();
+    let decrease = window.window.lookup_action("indent-decrease").unwrap();
+    let double = window.window.lookup_action("indent-double").unwrap();
+    let halve = window.window.lookup_action("indent-halve").unwrap();
+    let skip = window.window.lookup_action("indent-skip-empty").unwrap();
+
+    assert_eq!(skip.state().unwrap().get::<bool>(), Some(true));
+
+    // Increase and decrease by one leading space, as one undo step.
+    window.set_editor_text("a\n  b\n");
+    increase.activate(None);
+    assert_eq!(window.current_text(), " a\n   b\n");
+    buffer.undo();
+    assert_eq!(window.current_text(), "a\n  b\n");
+
+    window.set_editor_text("a\n b\nc\n");
+    increase.activate(None);
+    assert_eq!(window.current_text(), " a\n  b\n c\n");
+    buffer.undo();
+    assert_eq!(window.current_text(), "a\n b\nc\n");
+
+    // Skip empty lines starts checked. Turning it off lets Increase touch
+    // truly empty lines; whitespace-only lines are always targets.
+    window.set_editor_text("a\n\nb");
+    increase.activate(None);
+    assert_eq!(window.current_text(), " a\n\n b");
+    buffer.undo();
+    skip.activate(None);
+    assert_eq!(skip.state().unwrap().get::<bool>(), Some(false));
+    increase.activate(None);
+    assert_eq!(window.current_text(), " a\n \n b");
+    decrease.activate(None);
+    assert_eq!(window.current_text(), "a\n\nb");
+    skip.activate(None);
+    assert_eq!(skip.state().unwrap().get::<bool>(), Some(true));
+
+    window.set_editor_text("a\n   \n");
+    increase.activate(None);
+    assert_eq!(window.current_text(), " a\n    \n");
+
+    // Decrease is silent when there is nothing to remove.
+    window.set_editor_text("a\nb\n");
+    decrease.activate(None);
+    assert_eq!(window.current_text(), "a\nb\n");
+
+    // Double and Halve keep their warnings and leave the text unchanged.
+    window.set_editor_text("a\nb\n");
+    double.activate(None);
+    assert_eq!(window.current_text(), "a\nb\n");
+    assert_toast(&window, ToastKind::Warning, "No indentation to double");
+    window.set_editor_text(" odd\n");
+    halve.activate(None);
+    assert_eq!(window.current_text(), " odd\n");
+    assert_toast(
+        &window,
+        ToastKind::Warning,
+        "Cannot halve indentation: line 1 has an odd number of leading spaces",
+    );
+
+    // Read-only disables all four operations.
+    window.set_editor_text("  a\n  b\n");
+    window.set_read_only(true);
+    for action in [&increase, &decrease, &double, &halve] {
+        assert!(!action.is_enabled());
+    }
+    increase.activate(None);
+    double.activate(None);
+    assert_eq!(window.current_text(), "  a\n  b\n");
+    window.set_read_only(false);
+    for action in [&increase, &decrease, &double, &halve] {
+        assert!(action.is_enabled());
+    }
+
+    // Diff Mode does nothing.
+    let path = dir.join("indent-diff.txt");
+    std::fs::write(&path, "base\n").unwrap();
+    let review = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&review, &path);
+    review.create_baseline();
+    review.set_editor_text("  changed\n");
+    review.enter_diff();
+    let before = review.current_text();
+    review
+        .window
+        .lookup_action("indent-double")
+        .unwrap()
+        .activate(None);
+    assert_eq!(review.current_text(), before);
+    review.exit_diff();
+    review.window.destroy();
+
+    window.window.destroy();
 }
 
 fn file_actions_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {

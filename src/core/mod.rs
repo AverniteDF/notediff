@@ -24,6 +24,7 @@ pub mod textlines;
 pub mod textstats;
 pub mod themes;
 pub mod undo;
+pub mod whitespace;
 
 pub const LARGE_FILE_WARNING_BYTES: u64 = 1024 * 1024;
 

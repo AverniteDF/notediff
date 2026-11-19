@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::{Instant, SystemTime};
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gio, glib};
 
 use crate::core::elapsed;
 use crate::core::textstats::{self, TextStats};
@@ -188,7 +188,20 @@ impl AppWindow {
         self.status.set_stats(&stats);
         self.status.set_cursor(&cursor, selection.as_ref());
         self.status.set_mode(self.edit_mode());
+        self.set_find_trailing_enabled(stats.has_trailing_whitespace);
         self.update_last_edit();
+    }
+
+    /// The find action is available only while the status dot is yellow. It
+    /// stays enabled for read-only documents.
+    fn set_find_trailing_enabled(&self, enabled: bool) {
+        if let Some(action) = self
+            .window
+            .lookup_action("find-next-trailing-whitespace")
+            .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+        {
+            action.set_enabled(enabled);
+        }
     }
 
     /// Refresh the "Last edit" field from the monotonic elapsed time.

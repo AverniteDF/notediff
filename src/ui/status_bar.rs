@@ -36,6 +36,9 @@ pub struct StatusBar {
     /// Editor bar only: hidden until the first edit.
     last_edit_separator: Option<gtk::Separator>,
     last_edit: Option<gtk::Label>,
+    /// Editor bar only: green when clean, yellow when trailing whitespace
+    /// exists.
+    trailing: Option<gtk::Label>,
     ending: gtk::Label,
     /// Editor bar only.
     mode: Option<gtk::Label>,
@@ -43,7 +46,7 @@ pub struct StatusBar {
 
 impl StatusBar {
     /// Full bar for the editor:
-    /// `bytes chars lines | Ln Col Pos | last edit ... | line ending | UTF-8 | INS`.
+    /// `bytes chars lines | Ln Col Pos | last edit ... | ● | line ending | UTF-8 | INS`.
     pub fn editor() -> Self {
         Self::build(true)
     }
@@ -80,6 +83,18 @@ impl StatusBar {
         spacer.set_hexpand(true);
         root.append(&spacer);
 
+        let trailing = if editor {
+            let label = field("●");
+            label.add_css_class("trailing-dot");
+            label.add_css_class("trailing-clean");
+            label.set_tooltip_text(Some("No trailing whitespace"));
+            root.append(&label);
+            root.append(&separator());
+            Some(label)
+        } else {
+            None
+        };
+
         let ending = field("");
         root.append(&ending);
         root.append(&separator());
@@ -100,6 +115,7 @@ impl StatusBar {
             cursor,
             last_edit_separator,
             last_edit,
+            trailing,
             ending,
             mode,
         }
@@ -109,6 +125,42 @@ impl StatusBar {
     pub fn set_stats(&self, stats: &TextStats) {
         self.stats.set_text(&stats.summary());
         self.ending.set_text(stats.line_ending.label());
+        if let Some(dot) = &self.trailing {
+            if stats.has_trailing_whitespace {
+                dot.remove_css_class("trailing-clean");
+                dot.add_css_class("trailing-dirty");
+                dot.set_tooltip_text(Some("Trailing whitespace"));
+                dot.set_cursor_from_name(Some("pointer"));
+            } else {
+                dot.remove_css_class("trailing-dirty");
+                dot.add_css_class("trailing-clean");
+                dot.set_tooltip_text(Some("No trailing whitespace"));
+                dot.set_cursor_from_name(None);
+            }
+        }
+    }
+
+    /// Make the trailing-whitespace dot activate `action` on a primary click.
+    /// The action is enabled only while the dot is yellow, so a green dot is
+    /// inert.
+    pub fn set_trailing_action(&self, action: &str) {
+        let Some(dot) = &self.trailing else {
+            return;
+        };
+        let action = action.to_string();
+        let label = dot.clone();
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_PRIMARY);
+        click.connect_released(move |_, _, _, _| {
+            let _ = label.activate_action(&action, None);
+        });
+        dot.add_controller(click);
+    }
+
+    /// The trailing-whitespace dot, for the UI smoke test.
+    #[cfg(test)]
+    pub(crate) fn trailing_label(&self) -> Option<&gtk::Label> {
+        self.trailing.as_ref()
     }
 
     /// Update the cursor fields (no-op on a pane bar). With a selection, the

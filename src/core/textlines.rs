@@ -77,7 +77,7 @@ pub fn split_inclusive(text: &str) -> Vec<&str> {
 
 /// Split into every GTK line, including the empty line after a trailing
 /// terminator. Used where line numbers must match `GtkTextIter::line`, such as
-/// indentation scaling and selection line ranges.
+/// indentation editing and selection line ranges.
 pub fn split_all(text: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut start = 0;

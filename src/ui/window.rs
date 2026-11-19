@@ -4,8 +4,8 @@
 //! Feature submodules wire their own signals and actions:
 //!
 //! - `editing`: insert filter for tabs and document line endings, Tab key,
-//!   Scale Indentation, EOL conversion, file insertion, word wrap and
-//!   read-only state.
+//!   indentation editing, Find next trailing whitespace, EOL conversion, file
+//!   insertion, word wrap and read-only state.
 //! - `file_actions`: new file and new window, open, save, save as, rename or
 //!   move, external-change handling and the save-then-continue flow.
 //! - `focus`: in-window focus restoration after menus and dialogs close.
@@ -164,6 +164,9 @@ pub struct AppWindow {
     baseline_differs: Cell<bool>,
     /// Dirty, read-only, close and external-change flags (see `flags`).
     flags: flags::DocumentFlags,
+    /// Whether indentation operations leave truly empty lines alone. Starts
+    /// true and lasts for the life of the window.
+    indent_skip_empty: Cell<bool>,
     /// Measured text, last edit and refresh timer (see `status`).
     status_state: status::StatusState,
     /// Whether theme and font settings are written to disk.
@@ -282,6 +285,7 @@ impl AppWindow {
         let status = StatusBar::editor();
         status.set_ending_menu(&menus::build_eol_menu());
         status.set_mode_menu(&menus::build_mode_menu());
+        status.set_trailing_action("win.find-next-trailing-whitespace");
 
         let editor_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
         editor_page.append(&editor_scroller);
@@ -336,6 +340,7 @@ impl AppWindow {
             baseline: RefCell::new(BaselineCache::default()),
             baseline_differs: Cell::new(false),
             flags: flags::DocumentFlags::default(),
+            indent_skip_empty: Cell::new(true),
             status_state: status::StatusState::default(),
             persist_settings,
             store,

@@ -34,6 +34,19 @@ textview.{{content_class}} border gutter {
     margin: 2px 0;
 }
 
+.status-bar .trailing-dot {
+    font-size: 0.8em;
+    padding: 0 1px;
+}
+
+.status-bar .trailing-dot.trailing-clean {
+    color: #2ec27e;
+}
+
+.status-bar .trailing-dot.trailing-dirty {
+    color: #f5c211;
+}
+
 .diff-pane-divider {
     border-left: 1px solid alpha(currentColor, 0.2);
 }

@@ -8,6 +8,13 @@ versioning.
 
 ### Added
 
+- The editor status bar now shows a trailing-whitespace dot: green with the
+  tooltip **No trailing whitespace**, yellow with **Trailing whitespace**.
+  Clicking a yellow dot selects the next trailing-whitespace run and wraps at
+  the end of the document.
+- The editor context menu now has an **Edit Indentation…** submenu with
+  **Increase** (Ctrl+]), **Decrease** (Ctrl+[), **Double** (Ctrl+Shift+]) and
+  **Halve** (Ctrl+Shift+[), plus a remembered **Skip empty lines** choice.
 - The editor context menu now has an **Insert Path** submenu with **File…** and
   **Folder…**, which insert the chosen absolute path like a paste without
   reading the file or folder.

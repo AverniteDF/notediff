@@ -276,17 +276,24 @@ pub(super) fn build_mode_menu() -> gio::Menu {
 
 /// Extra entries for the editor's right-click menu.
 pub(super) fn build_context_menu() -> gio::Menu {
-    let scale = gio::Menu::new();
-    scale.append(Some("Double"), Some("win.indent-double"));
-    scale.append(Some("Halve"), Some("win.indent-halve"));
+    let indentation = gio::Menu::new();
+    indentation.append(Some("Increase"), Some("win.indent-increase"));
+    indentation.append(Some("Decrease"), Some("win.indent-decrease"));
+    indentation.append(Some("Double"), Some("win.indent-double"));
+    indentation.append(Some("Halve"), Some("win.indent-halve"));
+    let options = gio::Menu::new();
+    options.append(Some("Skip empty lines"), Some("win.indent-skip-empty"));
+    indentation.append_section(None, &options);
+
     let path = gio::Menu::new();
     path.append(Some("File…"), Some("win.insert-path"));
     path.append(Some("Folder…"), Some("win.insert-folder-path"));
     let insert = gio::Menu::new();
     insert.append_submenu(Some("Insert Path"), &path);
     insert.append(Some("Insert Text from File…"), Some("win.insert-file"));
+
     let menu = gio::Menu::new();
-    menu.append_submenu(Some("Scale Indentation"), &scale);
+    menu.append_submenu(Some("Edit Indentation…"), &indentation);
     menu.append_section(None, &insert);
     menu
 }
@@ -302,6 +309,10 @@ pub(super) fn install_accels(app: &adw::Application) {
     app.set_accels_for_action("win.find", &["<Ctrl>f"]);
     app.set_accels_for_action("win.replace", &["<Ctrl>h"]);
     app.set_accels_for_action("win.goto-line", &["<Ctrl>g"]);
+    app.set_accels_for_action("win.indent-increase", &["<Control>bracketright"]);
+    app.set_accels_for_action("win.indent-decrease", &["<Control>bracketleft"]);
+    app.set_accels_for_action("win.indent-double", &["<Control><Shift>bracketright"]);
+    app.set_accels_for_action("win.indent-halve", &["<Control><Shift>bracketleft"]);
     app.set_accels_for_action("win.word-wrap", &["<Alt>z"]);
     app.set_accels_for_action("win.close", &["<Ctrl>w"]);
     app.set_accels_for_action("win.quit", &["<Ctrl>q"]);
@@ -338,12 +349,52 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_offers_insert_path_submenu_above_insert_file() {
+    fn context_menu_offers_indentation_above_insert_actions() {
         let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
             menu.item_attribute_value(index, name, None)
                 .and_then(|value| value.get::<String>())
         };
+
         let menu = build_context_menu();
+        assert_eq!(menu.n_items(), 2);
+        assert_eq!(
+            attribute(menu.upcast_ref(), 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Edit Indentation…")
+        );
+
+        let indentation = menu.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
+        // Four one-shot operations plus the Skip empty lines section.
+        assert_eq!(indentation.n_items(), 5);
+        for (index, (label, action)) in [
+            ("Increase", "win.indent-increase"),
+            ("Decrease", "win.indent-decrease"),
+            ("Double", "win.indent-double"),
+            ("Halve", "win.indent-halve"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let index = index as i32;
+            assert_eq!(
+                attribute(&indentation, index, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+                Some(*label)
+            );
+            assert_eq!(
+                attribute(&indentation, index, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+                Some(*action)
+            );
+        }
+        let options = indentation.item_link(4, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(options.n_items(), 1);
+        assert_eq!(
+            attribute(&options, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Skip empty lines")
+        );
+        assert_eq!(
+            attribute(&options, 0, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.indent-skip-empty")
+        );
+
         let insert = menu.item_link(1, gio::MENU_LINK_SECTION).unwrap();
         assert_eq!(insert.n_items(), 2);
         assert_eq!(

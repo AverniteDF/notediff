@@ -1,5 +1,6 @@
 //! Editing behaviour of the main window: the no-tab paste filter, the Tab
-//! key, Scale Indentation, EOL conversion, word wrap and the read-only state.
+//! key, indentation editing, Find next trailing whitespace, EOL conversion,
+//! word wrap and the read-only state.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -9,11 +10,12 @@ use gtk::glib::variant::ToVariant;
 use gtk::{gdk, gio, glib};
 
 use crate::core::eol;
-use crate::core::indent::{self, IndentError, IndentScale};
+use crate::core::indent::{self, IndentError, IndentOperation};
 use crate::core::insert::{self, InsertError};
 use crate::core::tabs;
 use crate::core::textlines;
 use crate::core::textstats::{self, LineEnding};
+use crate::core::whitespace;
 use crate::ui::dialogs::{self, Response};
 use crate::ui::toast::ToastKind;
 
@@ -144,12 +146,39 @@ impl AppWindow {
         add_action(window, this, "convert-eol-lf", |this| {
             this.convert_line_endings(LineEnding::Lf)
         });
+        add_action(window, this, "indent-increase", |this| {
+            this.edit_indentation(IndentOperation::Increase, this.indent_skip_empty.get())
+        });
+        add_action(window, this, "indent-decrease", |this| {
+            this.edit_indentation(IndentOperation::Decrease, this.indent_skip_empty.get())
+        });
         add_action(window, this, "indent-double", |this| {
-            this.scale_indentation(IndentScale::Double)
+            this.edit_indentation(IndentOperation::Double, this.indent_skip_empty.get())
         });
         add_action(window, this, "indent-halve", |this| {
-            this.scale_indentation(IndentScale::Halve)
+            this.edit_indentation(IndentOperation::Halve, this.indent_skip_empty.get())
         });
+        add_action(window, this, "find-next-trailing-whitespace", |this| {
+            this.find_next_trailing_whitespace()
+        });
+
+        // Skip empty lines: a stateful choice remembered for the life of the
+        // window. It starts checked.
+        let skip_empty =
+            gio::SimpleAction::new_stateful("indent-skip-empty", None, &true.to_variant());
+        let weak = Rc::downgrade(this);
+        skip_empty.connect_change_state(move |action, state| {
+            let (Some(this), Some(state)) = (weak.upgrade(), state) else {
+                return;
+            };
+            let Some(enabled) = state.get::<bool>() else {
+                return;
+            };
+            this.indent_skip_empty.set(enabled);
+            action.set_state(state);
+        });
+        window.add_action(&skip_empty);
+
         add_action(window, this, "insert-path", |this| {
             this.request_insert_path()
         });
@@ -178,10 +207,12 @@ impl AppWindow {
         self.update_title();
     }
 
-    /// Enable or disable the context-menu actions that edit the text (Scale
-    /// Indentation, Insert Path and Insert Text from File).
+    /// Enable or disable the context-menu actions that edit the text
+    /// (indentation operations, Insert Path and Insert Text from File).
     fn set_edit_actions_enabled(&self, enabled: bool) {
         for name in [
+            "indent-increase",
+            "indent-decrease",
             "indent-double",
             "indent-halve",
             "insert-path",
@@ -335,11 +366,15 @@ impl AppWindow {
         );
     }
 
-    /// Double or halve the leading spaces of the target lines: the lines the
-    /// selection touches, or the whole document when nothing is selected.
-    /// Aborts with a toast (changing nothing) when the operation is not
-    /// possible; there is no success toast. The edits are one undo step.
-    pub(super) fn scale_indentation(&self, scale: IndentScale) {
+    /// Increase, decrease, double or halve the leading spaces of the target
+    /// lines: the lines the selection touches, or the whole document when
+    /// nothing is selected. `skip_empty` leaves truly empty lines alone.
+    ///
+    /// Double and Halve abort with a toast (changing nothing) when the
+    /// operation is not possible; Increase and Decrease never report success
+    /// or failure. The edits are one undo step and do nothing in Diff Mode or
+    /// for read-only documents.
+    pub(super) fn edit_indentation(&self, operation: IndentOperation, skip_empty: bool) {
         if self.diff_active() || self.flags.read_only.get() {
             return;
         }
@@ -350,13 +385,16 @@ impl AppWindow {
             .and_then(|(start, end)| textstats::selection_stats(&text, start, end))
             .map(|selection| selection.line_range());
 
-        let changes = match indent::plan(&text, scale, lines) {
+        let changes = match indent::plan(&text, operation, lines, skip_empty) {
             Ok(changes) => changes,
             Err(err @ (IndentError::NothingToScale | IndentError::OddIndent { .. })) => {
-                self.toast(ToastKind::Warning, &err.message(scale));
+                self.toast(ToastKind::Warning, &err.message(operation));
                 return;
             }
         };
+        if changes.is_empty() {
+            return;
+        }
 
         let buffer = &self.editor_buffer;
         buffer.begin_user_action();
@@ -374,6 +412,34 @@ impl AppWindow {
             }
         }
         buffer.end_user_action();
+    }
+
+    /// Select the next run of trailing spaces or tabs and scroll it onscreen.
+    /// The search starts at the selection end, or at the cursor when there is
+    /// no selection, and wraps at the end of the document. The insert mark is
+    /// left at the end of the run, so repeated finds advance. Works for
+    /// read-only documents and does nothing in Diff Mode.
+    pub(super) fn find_next_trailing_whitespace(&self) {
+        if self.diff_active() {
+            return;
+        }
+
+        let text = self.current_text();
+        let from = self.selection_offsets().map_or_else(
+            || self.editor_buffer.cursor_position().max(0) as usize,
+            |(_, end)| end,
+        );
+        let Some(range) = whitespace::next_trailing(&text, from) else {
+            return;
+        };
+
+        let buffer = &self.editor_buffer;
+        let start = buffer.iter_at_offset(range.start as i32);
+        let end = buffer.iter_at_offset(range.end as i32);
+        // The insert mark goes at the end so the next search starts after it.
+        buffer.select_range(&end, &start);
+        self.editor_view.scroll_mark_onscreen(&buffer.get_insert());
+        self.editor_view.grab_focus();
     }
 
     /// True when text may be inserted now. Does nothing (silently) in Diff
