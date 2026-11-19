@@ -1,7 +1,7 @@
 //! Preparing the text of a file for insertion into the editor, free of any
 //! toolkit types.
 //!
-//! "Insert Text from File" puts the whole contents of a chosen file at the
+//! "Add Text from File" puts the whole contents of a chosen file at the
 //! cursor. This module decides whether a file may be inserted (a regular file
 //! below a hard size limit), reads it as UTF-8, drops a leading byte-order
 //! mark and adapts its line endings to the document it goes into. Tabs are

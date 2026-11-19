@@ -277,24 +277,42 @@ pub(super) fn build_mode_menu() -> gio::Menu {
 /// Extra entries for the editor's right-click menu.
 pub(super) fn build_context_menu() -> gio::Menu {
     let indentation = gio::Menu::new();
-    indentation.append(Some("Increase"), Some("win.indent-increase"));
-    indentation.append(Some("Decrease"), Some("win.indent-decrease"));
-    indentation.append(Some("Double"), Some("win.indent-double"));
-    indentation.append(Some("Halve"), Some("win.indent-halve"));
-    let options = gio::Menu::new();
-    options.append(Some("Skip empty lines"), Some("win.indent-skip-empty"));
-    indentation.append_section(None, &options);
+    indentation.append(
+        Some("Increase (skip empty lines)"),
+        Some("win.indent-increase-skip-empty"),
+    );
+    indentation.append(
+        Some("Decrease (allow flattening)"),
+        Some("win.indent-decrease-allow-flattening"),
+    );
+    indentation.append(
+        Some("Increase (include empty lines)"),
+        Some("win.indent-increase-include-empty"),
+    );
+    indentation.append(
+        Some("Decrease (no flattening)"),
+        Some("win.indent-decrease-no-flattening"),
+    );
+
+    let scaling = gio::Menu::new();
+    scaling.append(Some("Double"), Some("win.indent-double"));
+    scaling.append(Some("Halve"), Some("win.indent-halve"));
+    indentation.append_section(None, &scaling);
 
     let path = gio::Menu::new();
     path.append(Some("File…"), Some("win.insert-path"));
-    path.append(Some("Folder…"), Some("win.insert-folder-path"));
-    let insert = gio::Menu::new();
-    insert.append_submenu(Some("Insert Path"), &path);
-    insert.append(Some("Insert Text from File…"), Some("win.insert-file"));
+    path.append(Some("Directory…"), Some("win.insert-folder-path"));
+
+    let insert_section = gio::Menu::new();
+    insert_section.append_submenu(Some("Insert Path"), &path);
+    insert_section.append(Some("Add Text from File…"), Some("win.insert-file"));
+
+    let indentation_section = gio::Menu::new();
+    indentation_section.append_submenu(Some("Edit Indentation…"), &indentation);
 
     let menu = gio::Menu::new();
-    menu.append_submenu(Some("Edit Indentation…"), &indentation);
-    menu.append_section(None, &insert);
+    menu.append_section(None, &insert_section);
+    menu.append_section(None, &indentation_section);
     menu
 }
 
@@ -309,8 +327,22 @@ pub(super) fn install_accels(app: &adw::Application) {
     app.set_accels_for_action("win.find", &["<Ctrl>f"]);
     app.set_accels_for_action("win.replace", &["<Ctrl>h"]);
     app.set_accels_for_action("win.goto-line", &["<Ctrl>g"]);
-    app.set_accels_for_action("win.indent-increase", &["<Control>bracketright"]);
-    app.set_accels_for_action("win.indent-decrease", &["<Control>bracketleft"]);
+    app.set_accels_for_action(
+        "win.indent-increase-skip-empty",
+        &["<Control><Alt>bracketright"],
+    );
+    app.set_accels_for_action(
+        "win.indent-decrease-allow-flattening",
+        &["<Control><Alt>bracketleft"],
+    );
+    app.set_accels_for_action(
+        "win.indent-increase-include-empty",
+        &["<Control>bracketright"],
+    );
+    app.set_accels_for_action(
+        "win.indent-decrease-no-flattening",
+        &["<Control>bracketleft"],
+    );
     app.set_accels_for_action("win.indent-double", &["<Control><Shift>bracketright"]);
     app.set_accels_for_action("win.indent-halve", &["<Control><Shift>bracketleft"]);
     app.set_accels_for_action("win.word-wrap", &["<Alt>z"]);
@@ -349,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn context_menu_offers_indentation_above_insert_actions() {
+    fn context_menu_orders_insert_actions_above_indentation() {
         let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
             menu.item_attribute_value(index, name, None)
                 .and_then(|value| value.get::<String>())
@@ -357,19 +389,72 @@ mod tests {
 
         let menu = build_context_menu();
         assert_eq!(menu.n_items(), 2);
+
+        // The top section has the Insert Path submenu and Add Text from File.
+        let insert_section = menu.item_link(0, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(insert_section.n_items(), 2);
         assert_eq!(
-            attribute(menu.upcast_ref(), 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Edit Indentation…")
+            attribute(&insert_section, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Insert Path")
+        );
+        let path = insert_section.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
+        assert_eq!(path.n_items(), 2);
+        for (index, (label, action)) in [
+            ("File…", "win.insert-path"),
+            ("Directory…", "win.insert-folder-path"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let index = index as i32;
+            assert_eq!(
+                attribute(&path, index, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+                Some(*label)
+            );
+            assert_eq!(
+                attribute(&path, index, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+                Some(*action)
+            );
+        }
+        assert_eq!(
+            attribute(&insert_section, 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Add Text from File…")
+        );
+        assert_eq!(
+            attribute(&insert_section, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.insert-file")
         );
 
-        let indentation = menu.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
-        // Four one-shot operations plus the Skip empty lines section.
+        // The bottom section has Edit Indentation.
+        let indentation_section = menu.item_link(1, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(indentation_section.n_items(), 1);
+        assert_eq!(
+            attribute(&indentation_section, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Edit Indentation…")
+        );
+        let indentation = indentation_section
+            .item_link(0, gio::MENU_LINK_SUBMENU)
+            .unwrap();
+
+        // Four one-space operations, then the scaling operations in a section.
         assert_eq!(indentation.n_items(), 5);
         for (index, (label, action)) in [
-            ("Increase", "win.indent-increase"),
-            ("Decrease", "win.indent-decrease"),
-            ("Double", "win.indent-double"),
-            ("Halve", "win.indent-halve"),
+            (
+                "Increase (skip empty lines)",
+                "win.indent-increase-skip-empty",
+            ),
+            (
+                "Decrease (allow flattening)",
+                "win.indent-decrease-allow-flattening",
+            ),
+            (
+                "Increase (include empty lines)",
+                "win.indent-increase-include-empty",
+            ),
+            (
+                "Decrease (no flattening)",
+                "win.indent-decrease-no-flattening",
+            ),
         ]
         .iter()
         .enumerate()
@@ -384,49 +469,26 @@ mod tests {
                 Some(*action)
             );
         }
-        let options = indentation.item_link(4, gio::MENU_LINK_SECTION).unwrap();
-        assert_eq!(options.n_items(), 1);
-        assert_eq!(
-            attribute(&options, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Skip empty lines")
-        );
-        assert_eq!(
-            attribute(&options, 0, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
-            Some("win.indent-skip-empty")
-        );
 
-        let insert = menu.item_link(1, gio::MENU_LINK_SECTION).unwrap();
-        assert_eq!(insert.n_items(), 2);
-        assert_eq!(
-            attribute(&insert, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Insert Path")
-        );
-        let path = insert.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
-        assert_eq!(path.n_items(), 2);
-        assert_eq!(
-            attribute(&path, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("File…")
-        );
-        assert_eq!(
-            attribute(&path, 0, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
-            Some("win.insert-path")
-        );
-        assert_eq!(
-            attribute(&path, 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Folder…")
-        );
-        assert_eq!(
-            attribute(&path, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
-            Some("win.insert-folder-path")
-        );
-        assert_eq!(
-            attribute(&insert, 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Insert Text from File…")
-        );
-        assert_eq!(
-            attribute(&insert, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
-            Some("win.insert-file")
-        );
+        let scaling = indentation.item_link(4, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(scaling.n_items(), 2);
+        for (index, (label, action)) in [
+            ("Double", "win.indent-double"),
+            ("Halve", "win.indent-halve"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let index = index as i32;
+            assert_eq!(
+                attribute(&scaling, index, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+                Some(*label)
+            );
+            assert_eq!(
+                attribute(&scaling, index, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+                Some(*action)
+            );
+        }
     }
 
     #[test]

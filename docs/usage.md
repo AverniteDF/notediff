@@ -90,14 +90,14 @@ notes for details and workarounds.
 - In the Rename or Move dialog, **...** (to the right of the input field) opens a file browser (starting in the
   file's folder) to pick the new folder and name; the chosen path is filled into
   the field and nothing happens until you press **Rename**.
-- **Insert Path** (right-click menu) has **File…** and **Folder…** choices.
-  **File…** inserts the absolute path of a chosen file; **Folder…** inserts the
-  absolute path of a chosen folder. The path is inserted at the cursor or
+- **Insert Path** (right-click menu) has **File…** and **Directory…**.
+  **File…** inserts the absolute path of a chosen file; **Directory…** inserts
+  the absolute path of a chosen folder. The path is inserted at the cursor or
   replaces the current selection, stays selected, and the whole edit is one
   undo step. Nothing is read, so file size, contents and folder permissions do
   not matter. Both choices are unavailable for read-only documents and in Diff
   Mode.
-- **Insert Text from File…** (right-click menu) inserts the whole contents of a
+- **Add Text from File…** (right-click menu) inserts the whole contents of a
   chosen file at the cursor or replaces the current selection. The inserted text
   stays selected, and the whole edit is one undo step. Tabs become spaces, a
   leading BOM is dropped, and line endings are converted to match a document
@@ -125,19 +125,26 @@ notes for details and workarounds.
 - Toggle **Word Wrap** with **Alt+Z** or in the main menu. It starts checked in each new window.
   When off, long editor lines scroll horizontally. The setting lasts for the
   life of the window, works on read-only documents, and is disabled in Diff Mode.
-- **Edit Indentation…** (right-click menu) has **Increase** (**Ctrl+]**),
-  **Decrease** (**Ctrl+[**), **Double** (**Ctrl+Shift+]**) and **Halve**
-  (**Ctrl+Shift+[**). They change the leading spaces of the lines the selection
-  touches, or of the whole document when nothing is selected. Only ASCII spaces
-  count as indentation. Increase adds one space; Decrease removes one and does
-  nothing when there is nothing to remove. Double and Halve scale the existing
-  indentation: Double does nothing (with a toast) if every target line has no
-  indentation, and Halve does the same, also refusing if any target line has an
-  odd number of leading spaces, naming the first such line. **Skip empty
-  lines**, checked by default, leaves truly empty lines alone;
-  whitespace-only lines still count. Each operation is one undo step, keeps
-  line breaks untouched, and is unavailable for read-only documents and in
-  Diff Mode.
+- **Edit Indentation…** (right-click menu) changes the leading spaces of the
+  lines the selection touches, or of the whole document when nothing is
+  selected. Only ASCII spaces count as indentation. Each operation is one undo
+  step, keeps line breaks untouched, and is unavailable for read-only documents
+  and in Diff Mode.
+  - **Increase (skip empty lines)** (**Ctrl+Alt+]**) adds one space to every
+    target line except truly empty lines. Whitespace-only lines still count.
+  - **Decrease (allow flattening)** (**Ctrl+Alt+[**) removes one space from each
+    target line that has one, leaving unindented lines unchanged.
+  - **Increase (include empty lines)** (**Ctrl+]**) adds one space to every
+    target line, including truly empty ones.
+  - **Decrease (no flattening)** (**Ctrl+[**) removes one space from every
+    target line only when every target line has at least one leading space;
+    otherwise it changes nothing and shows no message. The empty line after a
+    file's terminating line break is ignored, but other empty lines still
+    participate.
+  - **Double** (**Ctrl+Shift+]**) doubles the leading spaces and **Halve**
+    (**Ctrl+Shift+[**) halves them. Double does nothing (with a toast) if every
+    target line has no indentation; Halve does the same, and also refuses if any
+    target line has an odd number of leading spaces, naming the first such line.
 - **EOL Conversion** (click the status-bar line-ending field) converts every line ending in the document to
   Windows (CRLF) or Unix (LF), including mixed endings. It is one undo step and
   leaves the document with unsaved changes. It is unavailable in Diff Mode and
@@ -155,11 +162,12 @@ notes for details and workarounds.
   (for example `Sel: 1,234 bytes, 4 lines`); a selection that ends at the very
   start of a line does not count that line.
   A green `●` left of the line-ending field means the document has no trailing
-  whitespace; it turns yellow when any line ends in spaces or tabs. Clicking a
-  yellow dot selects the next trailing-whitespace run, scrolls it onscreen and
-  wraps at the end of the document; repeated clicks advance through the
-  document. Clicking a green dot does nothing. The find works in read-only
-  documents and does nothing in Diff Mode.
+  whitespace; it turns yellow when any line ends in spaces or tabs, with the
+  tooltip **Find trailing whitespace**. Clicking a yellow dot selects the next
+  trailing-whitespace run, scrolls it onscreen and wraps at the end of the
+  document; repeated clicks advance through the document. Clicking a green dot
+  does nothing. The find works in read-only documents and does nothing in Diff
+  Mode.
   Clicking the line-ending field
   opens the Windows (CRLF) / Unix (LF) conversion choices, clicking the mode
   field (`INS`, `OVR` or `RO`) opens a checkable **Read Only** choice (unlocking a file that

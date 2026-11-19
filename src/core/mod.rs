@@ -31,5 +31,5 @@ pub const LARGE_FILE_WARNING_BYTES: u64 = 1024 * 1024;
 /// Files larger than this are refused at open and reload, and a document above
 /// this size cannot be saved or written as a baseline. GtkTextBuffer copies
 /// the whole text for many operations, so a larger document makes the editor
-/// unresponsive. This matches the hard limit for Insert Text from File.
+/// unresponsive. This matches the hard limit for Add Text from File.
 pub const MAX_OPEN_BYTES: u64 = 16 * 1024 * 1024;

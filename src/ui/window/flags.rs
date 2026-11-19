@@ -14,7 +14,7 @@ pub(super) struct DocumentFlags {
     pub(super) external_dialog_open: Cell<bool>,
     /// Disk mtime for which the user cancelled the reload's tab prompt.
     pub(super) declined_reload_mtime: Cell<Option<SystemTime>>,
-    /// Keep the line endings already chosen by Insert Text from File instead of
+    /// Keep the line endings already chosen by Add Text from File instead of
     /// normalizing them again in the generic insert filter.
     pub(super) keep_inserted_line_endings: Cell<bool>,
     loading: Cell<bool>,

@@ -146,38 +146,27 @@ impl AppWindow {
         add_action(window, this, "convert-eol-lf", |this| {
             this.convert_line_endings(LineEnding::Lf)
         });
-        add_action(window, this, "indent-increase", |this| {
-            this.edit_indentation(IndentOperation::Increase, this.indent_skip_empty.get())
+        add_action(window, this, "indent-increase-skip-empty", |this| {
+            this.edit_indentation(IndentOperation::IncreaseSkipEmpty)
         });
-        add_action(window, this, "indent-decrease", |this| {
-            this.edit_indentation(IndentOperation::Decrease, this.indent_skip_empty.get())
+        add_action(window, this, "indent-decrease-allow-flattening", |this| {
+            this.edit_indentation(IndentOperation::DecreaseAllowFlattening)
+        });
+        add_action(window, this, "indent-increase-include-empty", |this| {
+            this.edit_indentation(IndentOperation::IncreaseIncludeEmpty)
+        });
+        add_action(window, this, "indent-decrease-no-flattening", |this| {
+            this.edit_indentation(IndentOperation::DecreaseNoFlattening)
         });
         add_action(window, this, "indent-double", |this| {
-            this.edit_indentation(IndentOperation::Double, this.indent_skip_empty.get())
+            this.edit_indentation(IndentOperation::Double)
         });
         add_action(window, this, "indent-halve", |this| {
-            this.edit_indentation(IndentOperation::Halve, this.indent_skip_empty.get())
+            this.edit_indentation(IndentOperation::Halve)
         });
         add_action(window, this, "find-next-trailing-whitespace", |this| {
             this.find_next_trailing_whitespace()
         });
-
-        // Skip empty lines: a stateful choice remembered for the life of the
-        // window. It starts checked.
-        let skip_empty =
-            gio::SimpleAction::new_stateful("indent-skip-empty", None, &true.to_variant());
-        let weak = Rc::downgrade(this);
-        skip_empty.connect_change_state(move |action, state| {
-            let (Some(this), Some(state)) = (weak.upgrade(), state) else {
-                return;
-            };
-            let Some(enabled) = state.get::<bool>() else {
-                return;
-            };
-            this.indent_skip_empty.set(enabled);
-            action.set_state(state);
-        });
-        window.add_action(&skip_empty);
 
         add_action(window, this, "insert-path", |this| {
             this.request_insert_path()
@@ -208,11 +197,13 @@ impl AppWindow {
     }
 
     /// Enable or disable the context-menu actions that edit the text
-    /// (indentation operations, Insert Path and Insert Text from File).
+    /// (the indentation operations, Insert Path and Add Text from File).
     fn set_edit_actions_enabled(&self, enabled: bool) {
         for name in [
-            "indent-increase",
-            "indent-decrease",
+            "indent-increase-skip-empty",
+            "indent-decrease-allow-flattening",
+            "indent-increase-include-empty",
+            "indent-decrease-no-flattening",
             "indent-double",
             "indent-halve",
             "insert-path",
@@ -366,15 +357,14 @@ impl AppWindow {
         );
     }
 
-    /// Increase, decrease, double or halve the leading spaces of the target
-    /// lines: the lines the selection touches, or the whole document when
-    /// nothing is selected. `skip_empty` leaves truly empty lines alone.
+    /// Run one indentation operation on the lines the selection touches, or
+    /// on the whole document when nothing is selected.
     ///
     /// Double and Halve abort with a toast (changing nothing) when the
-    /// operation is not possible; Increase and Decrease never report success
-    /// or failure. The edits are one undo step and do nothing in Diff Mode or
-    /// for read-only documents.
-    pub(super) fn edit_indentation(&self, operation: IndentOperation, skip_empty: bool) {
+    /// operation is not possible; the Increase and Decrease variants never
+    /// report success or failure. The edits are one undo step and do nothing
+    /// in Diff Mode or for read-only documents.
+    pub(super) fn edit_indentation(&self, operation: IndentOperation) {
         if self.diff_active() || self.flags.read_only.get() {
             return;
         }
@@ -385,7 +375,7 @@ impl AppWindow {
             .and_then(|(start, end)| textstats::selection_stats(&text, start, end))
             .map(|selection| selection.line_range());
 
-        let changes = match indent::plan(&text, operation, lines, skip_empty) {
+        let changes = match indent::plan(&text, operation, lines) {
             Ok(changes) => changes,
             Err(err @ (IndentError::NothingToScale | IndentError::OddIndent { .. })) => {
                 self.toast(ToastKind::Warning, &err.message(operation));
@@ -458,15 +448,15 @@ impl AppWindow {
         true
     }
 
-    /// Insert Path: let the user pick a file, then insert its absolute path
-    /// at the cursor (see `insert_path`).
+    /// File Path: let the user pick a file, then insert its absolute path at
+    /// the cursor (see `insert_path`).
     pub(super) fn request_insert_path(self: &Rc<Self>) {
         if !self.can_insert_text() {
             return;
         }
 
         let dialog = gtk::FileDialog::builder()
-            .title("Insert Path")
+            .title("Insert File Path")
             .modal(true)
             .build();
         if let Some(folder) = self
@@ -490,15 +480,15 @@ impl AppWindow {
         );
     }
 
-    /// Insert Folder Path: let the user pick a folder, then insert its
-    /// absolute path at the cursor (see `insert_path`).
+    /// Directory Path: let the user pick a folder, then insert its absolute
+    /// path at the cursor (see `insert_path`).
     pub(super) fn request_insert_folder_path(self: &Rc<Self>) {
         if !self.can_insert_text() {
             return;
         }
 
         let dialog = gtk::FileDialog::builder()
-            .title("Insert Folder Path")
+            .title("Insert Directory Path")
             .modal(true)
             .build();
         if let Some(folder) = self
@@ -522,7 +512,7 @@ impl AppWindow {
         );
     }
 
-    /// Insert Text from File: let the user pick a file, then insert its whole
+    /// Add Text from File: let the user pick a file, then insert its whole
     /// contents at the cursor (see `insert_file`).
     pub(super) fn request_insert_file(self: &Rc<Self>) {
         if !self.can_insert_text() {
@@ -530,7 +520,7 @@ impl AppWindow {
         }
 
         let dialog = gtk::FileDialog::builder()
-            .title("Insert Text from File")
+            .title("Add Text from File")
             .modal(true)
             .build();
         if let Some(folder) = self

@@ -138,11 +138,23 @@ fn gtk_window_smoke() {
     );
     assert_eq!(app.accels_for_action("win.enter-diff").as_slice(), ["F5"]);
     assert_eq!(
-        app.accels_for_action("win.indent-increase").as_slice(),
+        app.accels_for_action("win.indent-increase-skip-empty")
+            .as_slice(),
+        ["<Control><Alt>bracketright"]
+    );
+    assert_eq!(
+        app.accels_for_action("win.indent-decrease-allow-flattening")
+            .as_slice(),
+        ["<Control><Alt>bracketleft"]
+    );
+    assert_eq!(
+        app.accels_for_action("win.indent-increase-include-empty")
+            .as_slice(),
         ["<Control>bracketright"]
     );
     assert_eq!(
-        app.accels_for_action("win.indent-decrease").as_slice(),
+        app.accels_for_action("win.indent-decrease-no-flattening")
+            .as_slice(),
         ["<Control>bracketleft"]
     );
     assert_eq!(
@@ -2476,19 +2488,19 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     // Indentation editing: whole document, abort cases, read-only guard.
     let scaler = AppWindow::with_store(app, store.clone());
     scaler.set_editor_text("a\n  b\n    c\n");
-    scaler.edit_indentation(IndentOperation::Halve, true);
+    scaler.edit_indentation(IndentOperation::Halve);
     assert_eq!(scaler.current_text(), "a\n b\n  c\n");
-    scaler.edit_indentation(IndentOperation::Double, true);
+    scaler.edit_indentation(IndentOperation::Double);
     assert_eq!(scaler.current_text(), "a\n  b\n    c\n");
     scaler.set_editor_text(" odd\n");
-    scaler.edit_indentation(IndentOperation::Halve, true);
+    scaler.edit_indentation(IndentOperation::Halve);
     assert_eq!(scaler.current_text(), " odd\n");
     scaler.set_editor_text("  a\n  b\n");
     scaler.set_read_only(true);
-    scaler.edit_indentation(IndentOperation::Double, true);
+    scaler.edit_indentation(IndentOperation::Double);
     assert_eq!(scaler.current_text(), "  a\n  b\n");
 
-    // Insert Text from File: at the cursor, BOM stripped, line endings
+    // Add Text from File: at the cursor, BOM stripped, line endings
     // matched, one undo step, inserted text selected, tabs converted,
     // and read-only documents refused.
     let inserter = AppWindow::with_store(app, store.clone());
@@ -2527,7 +2539,7 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     ibuf.undo();
     assert_eq!(inserter.current_text(), "keep SELECTED keep\n");
 
-    // Insert Path inserts the chosen file's absolute path like a paste,
+    // Insert Path's File… inserts the chosen absolute path like a paste,
     // replacing the selection in one undo step.
     inserter.set_editor_text("keep SELECTED keep\n");
     ibuf.select_range(&ibuf.iter_at_offset(5), &ibuf.iter_at_offset(13));
@@ -2609,7 +2621,10 @@ fn trailing_whitespace_scenario(app: &adw::Application, dir: &Path, store: &Snap
     window.update_status();
     assert!(dot.has_css_class("trailing-dirty"));
     assert!(!dot.has_css_class("trailing-clean"));
-    assert_eq!(dot.tooltip_text().as_deref(), Some("Trailing whitespace"));
+    assert_eq!(
+        dot.tooltip_text().as_deref(),
+        Some("Find trailing whitespace")
+    );
     assert!(find.is_enabled());
 
     buffer.place_cursor(&buffer.start_iter());
@@ -2659,50 +2674,87 @@ fn trailing_whitespace_scenario(app: &adw::Application, dir: &Path, store: &Snap
 fn indentation_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     let window = AppWindow::with_store(app, store.clone());
     let buffer = window.editor_buffer.clone();
-    let increase = window.window.lookup_action("indent-increase").unwrap();
-    let decrease = window.window.lookup_action("indent-decrease").unwrap();
+    let increase_skip = window
+        .window
+        .lookup_action("indent-increase-skip-empty")
+        .unwrap();
+    let decrease_flatten = window
+        .window
+        .lookup_action("indent-decrease-allow-flattening")
+        .unwrap();
+    let increase_include = window
+        .window
+        .lookup_action("indent-increase-include-empty")
+        .unwrap();
+    let decrease_strict = window
+        .window
+        .lookup_action("indent-decrease-no-flattening")
+        .unwrap();
     let double = window.window.lookup_action("indent-double").unwrap();
     let halve = window.window.lookup_action("indent-halve").unwrap();
-    let skip = window.window.lookup_action("indent-skip-empty").unwrap();
+    let all = [
+        &increase_skip,
+        &decrease_flatten,
+        &increase_include,
+        &decrease_strict,
+        &double,
+        &halve,
+    ];
 
-    assert_eq!(skip.state().unwrap().get::<bool>(), Some(true));
-
-    // Increase and decrease by one leading space, as one undo step.
+    // Increase (include empty lines) touches every target line, including the
+    // empty line after a terminating break.
     window.set_editor_text("a\n  b\n");
-    increase.activate(None);
+    increase_include.activate(None);
+    assert_eq!(window.current_text(), " a\n   b\n ");
+    buffer.undo();
+    assert_eq!(window.current_text(), "a\n  b\n");
+
+    // Increase (skip empty lines) leaves truly empty lines alone.
+    increase_skip.activate(None);
     assert_eq!(window.current_text(), " a\n   b\n");
     buffer.undo();
     assert_eq!(window.current_text(), "a\n  b\n");
 
-    window.set_editor_text("a\n b\nc\n");
-    increase.activate(None);
-    assert_eq!(window.current_text(), " a\n  b\n c\n");
+    // A multi-line operation is one undo step.
+    window.set_editor_text("a\n b\nc");
+    increase_include.activate(None);
+    assert_eq!(window.current_text(), " a\n  b\n c");
     buffer.undo();
-    assert_eq!(window.current_text(), "a\n b\nc\n");
+    assert_eq!(window.current_text(), "a\n b\nc");
 
-    // Skip empty lines starts checked. Turning it off lets Increase touch
-    // truly empty lines; whitespace-only lines are always targets.
-    window.set_editor_text("a\n\nb");
-    increase.activate(None);
-    assert_eq!(window.current_text(), " a\n\n b");
+    // Strict Decrease ignores the terminating line.
+    window.set_editor_text(" a\n b\n");
+    decrease_strict.activate(None);
+    assert_eq!(window.current_text(), "a\nb\n");
     buffer.undo();
-    skip.activate(None);
-    assert_eq!(skip.state().unwrap().get::<bool>(), Some(false));
-    increase.activate(None);
-    assert_eq!(window.current_text(), " a\n \n b");
-    decrease.activate(None);
-    assert_eq!(window.current_text(), "a\n\nb");
-    skip.activate(None);
-    assert_eq!(skip.state().unwrap().get::<bool>(), Some(true));
+    assert_eq!(window.current_text(), " a\n b\n");
 
+    // A deliberate middle empty line still blocks it.
+    window.set_editor_text(" a\n\n b\n");
+    decrease_strict.activate(None);
+    assert_eq!(window.current_text(), " a\n\n b\n");
+
+    // An unindented non-empty line blocks it too.
+    window.set_editor_text("a\n b\n");
+    decrease_strict.activate(None);
+    assert_eq!(window.current_text(), "a\n b\n");
+
+    // Decrease (allow flattening) removes a space where one exists.
+    window.set_editor_text(" a\n\n b\n");
+    decrease_flatten.activate(None);
+    assert_eq!(window.current_text(), "a\n\nb\n");
+
+    // Whitespace-only lines stay targets for skip-empty Increase.
     window.set_editor_text("a\n   \n");
-    increase.activate(None);
+    increase_skip.activate(None);
     assert_eq!(window.current_text(), " a\n    \n");
 
-    // Decrease is silent when there is nothing to remove.
-    window.set_editor_text("a\nb\n");
-    decrease.activate(None);
-    assert_eq!(window.current_text(), "a\nb\n");
+    // Empty lines indented by include-empty can then be decreased normally.
+    window.set_editor_text("a\n\nb");
+    increase_include.activate(None);
+    assert_eq!(window.current_text(), " a\n \n b");
+    decrease_strict.activate(None);
+    assert_eq!(window.current_text(), "a\n\nb");
 
     // Double and Halve keep their warnings and leave the text unchanged.
     window.set_editor_text("a\nb\n");
@@ -2718,17 +2770,17 @@ fn indentation_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         "Cannot halve indentation: line 1 has an odd number of leading spaces",
     );
 
-    // Read-only disables all four operations.
+    // Read-only disables all six operations.
     window.set_editor_text("  a\n  b\n");
     window.set_read_only(true);
-    for action in [&increase, &decrease, &double, &halve] {
+    for action in &all {
         assert!(!action.is_enabled());
     }
-    increase.activate(None);
+    increase_include.activate(None);
     double.activate(None);
     assert_eq!(window.current_text(), "  a\n  b\n");
     window.set_read_only(false);
-    for action in [&increase, &decrease, &double, &halve] {
+    for action in &all {
         assert!(action.is_enabled());
     }
 

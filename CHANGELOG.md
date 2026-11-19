@@ -9,15 +9,19 @@ versioning.
 ### Added
 
 - The editor status bar now shows a trailing-whitespace dot: green with the
-  tooltip **No trailing whitespace**, yellow with **Trailing whitespace**.
+  tooltip **No trailing whitespace**, yellow with **Find trailing whitespace**.
   Clicking a yellow dot selects the next trailing-whitespace run and wraps at
   the end of the document.
-- The editor context menu now has an **Edit Indentation…** submenu with
-  **Increase** (Ctrl+]), **Decrease** (Ctrl+[), **Double** (Ctrl+Shift+]) and
-  **Halve** (Ctrl+Shift+[), plus a remembered **Skip empty lines** choice.
+- The editor context menu now has an **Edit Indentation…** submenu at the
+  bottom, below a separator, with **Increase (skip empty lines)** (Ctrl+Alt+]),
+  **Decrease (allow flattening)** (Ctrl+Alt+[),
+  **Increase (include empty lines)** (Ctrl+]),
+  **Decrease (no flattening)** (Ctrl+[), **Double** (Ctrl+Shift+]) and
+  **Halve** (Ctrl+Shift+[). **Double** and **Halve** sit below their own
+  separator.
 - The editor context menu now has an **Insert Path** submenu with **File…** and
-  **Folder…**, which insert the chosen absolute path like a paste without
-  reading the file or folder.
+  **Directory…**, plus a top-level **Add Text from File…** item, which insert a
+  path or a file's text like a paste without reading path targets.
 - Diff Mode pane headers show the live document's full canonical path and
   right-aligned local timestamps for the last document edit (or save) and the
   saved baseline.

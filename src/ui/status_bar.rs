@@ -129,7 +129,7 @@ impl StatusBar {
             if stats.has_trailing_whitespace {
                 dot.remove_css_class("trailing-clean");
                 dot.add_css_class("trailing-dirty");
-                dot.set_tooltip_text(Some("Trailing whitespace"));
+                dot.set_tooltip_text(Some("Find trailing whitespace"));
                 dot.set_cursor_from_name(Some("pointer"));
             } else {
                 dot.remove_css_class("trailing-dirty");

@@ -38,8 +38,8 @@ src/
     tabs.rs             no-tab policy helpers: tab detection and conversion
     textlines.rs        GTK-compatible line breaks, splitting and byte offsets
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
-    indent.rs           indentation editing (increase / decrease / double / halve,
-                        with optional skip-empty filtering)
+    indent.rs           indentation editing: increase with or without empty
+                        lines, strict or flattening decrease, double and halve
     whitespace.rs       trailing ASCII space/tab detection and the next wrapped
                         trailing run
     inline.rs           byte-exact word, line-ending and fallback change units,
@@ -128,9 +128,10 @@ cargo test
 
 One ignored UI smoke test runs the editing, file-action and Diff Mode
 scenarios on the same GTK thread with a temporary snapshot store. It covers
-tab handling, read-only mode, Find/Replace, EOL conversion, indentation editing, the
-trailing-whitespace dot and find, Word Wrap,
-file and folder path insertion plus text insertion with selection, baseline moves, links and copies, and the Diff
+tab handling, read-only mode, Find/Replace, EOL conversion, all six indentation
+operations, the trailing-whitespace dot and find, Word Wrap,
+the Insert Path submenu and Add Text from File insertion with selection,
+baseline moves, links and copies, and the Diff
 Mode accept, undo and confirm flow. It exercises inline inspection keys, selection
 highlights, partial-line review, line endings, wrapped selection scrolling, pure
 insertions and deletions, and long-document scroll placement after repeated

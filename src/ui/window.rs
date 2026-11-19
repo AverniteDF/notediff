@@ -164,9 +164,6 @@ pub struct AppWindow {
     baseline_differs: Cell<bool>,
     /// Dirty, read-only, close and external-change flags (see `flags`).
     flags: flags::DocumentFlags,
-    /// Whether indentation operations leave truly empty lines alone. Starts
-    /// true and lasts for the life of the window.
-    indent_skip_empty: Cell<bool>,
     /// Measured text, last edit and refresh timer (see `status`).
     status_state: status::StatusState,
     /// Whether theme and font settings are written to disk.
@@ -340,7 +337,6 @@ impl AppWindow {
             baseline: RefCell::new(BaselineCache::default()),
             baseline_differs: Cell::new(false),
             flags: flags::DocumentFlags::default(),
-            indent_skip_empty: Cell::new(true),
             status_state: status::StatusState::default(),
             persist_settings,
             store,

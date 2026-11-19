@@ -6,8 +6,16 @@
 //! exactly as GtkTextBuffer numbers them, including the empty line after a
 //! trailing break.
 //!
-//! `Skip empty lines` excludes only truly empty lines; whitespace-only lines
-//! still count as targets.
+//! The two Increase variants differ only in whether truly empty lines are
+//! targets. The two Decrease variants differ in how they treat unindented
+//! lines: no-flattening requires every participating line to have at least one
+//! leading space and silently changes nothing otherwise, while
+//! allow-flattening removes a space wherever one exists and leaves unindented
+//! lines alone.
+//!
+//! Decrease (no flattening) ignores the empty line after a terminating line
+//! break, so a normal newline-terminated file does not block the operation.
+//! Other empty lines still participate.
 
 use std::ops::RangeInclusive;
 
@@ -15,20 +23,25 @@ use super::textlines;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndentOperation {
-    Increase,
-    Decrease,
+    IncreaseIncludeEmpty,
+    IncreaseSkipEmpty,
+    DecreaseNoFlattening,
+    DecreaseAllowFlattening,
     Double,
     Halve,
 }
 
 impl IndentOperation {
-    /// Toast shown when every target line has zero indentation. Increase and
-    /// Decrease never fail, so they have no message.
+    /// Toast shown when every target line has zero indentation. The Increase
+    /// and Decrease variants never fail, so they have no message.
     pub fn nothing_message(self) -> Option<&'static str> {
         match self {
             IndentOperation::Double => Some("No indentation to double"),
             IndentOperation::Halve => Some("No indentation to halve"),
-            IndentOperation::Increase | IndentOperation::Decrease => None,
+            IndentOperation::IncreaseIncludeEmpty
+            | IndentOperation::IncreaseSkipEmpty
+            | IndentOperation::DecreaseNoFlattening
+            | IndentOperation::DecreaseAllowFlattening => None,
         }
     }
 
@@ -36,8 +49,12 @@ impl IndentOperation {
     /// the line does not change.
     fn changed(self, old: usize) -> Option<usize> {
         match self {
-            IndentOperation::Increase => Some(old + 1),
-            IndentOperation::Decrease => (old > 0).then(|| old - 1),
+            IndentOperation::IncreaseIncludeEmpty | IndentOperation::IncreaseSkipEmpty => {
+                Some(old + 1)
+            }
+            IndentOperation::DecreaseNoFlattening | IndentOperation::DecreaseAllowFlattening => {
+                (old > 0).then(|| old - 1)
+            }
             IndentOperation::Double => (old > 0).then_some(old * 2),
             IndentOperation::Halve => (old > 0).then_some(old / 2),
         }
@@ -85,27 +102,38 @@ pub fn leading_spaces(line: &str) -> usize {
 /// inclusive range of target lines, or `None` for the whole text. Only lines
 /// that actually change are returned.
 ///
-/// `skip_empty` excludes lines whose content is truly empty before the target
-/// list is checked. Whitespace-only lines are not empty and stay in.
-///
-/// Increase and Decrease never fail. Double and Halve are all-or-nothing and
-/// return `NothingToScale` or `OddIndent` without a change list.
+/// The Increase and Decrease variants never fail. Double and Halve are
+/// all-or-nothing and return `NothingToScale` or `OddIndent` without a change
+/// list.
 pub fn plan(
     text: &str,
     operation: IndentOperation,
     lines: Option<RangeInclusive<usize>>,
-    skip_empty: bool,
 ) -> Result<Vec<IndentChange>, IndentError> {
-    let targets: Vec<(usize, usize)> = textlines::split_all(text)
+    let text_lines = textlines::split_all(text);
+    let last_line = text_lines.len().saturating_sub(1);
+    let ignore_terminating_line =
+        operation == IndentOperation::DecreaseNoFlattening && textlines::ends_with_break(text);
+    let skip_empty = operation == IndentOperation::IncreaseSkipEmpty;
+
+    let targets: Vec<(usize, usize)> = text_lines
         .into_iter()
         .enumerate()
         .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .filter(|(index, _)| !(ignore_terminating_line && *index == last_line))
         .filter(|(_, line)| !skip_empty || !textlines::content(line).is_empty())
         .map(|(index, line)| (index, leading_spaces(line)))
         .collect();
 
+    // Non-flattening Decrease only works when every participating line can
+    // lose a space. It fails silently, without a toast.
+    if operation == IndentOperation::DecreaseNoFlattening
+        && targets.iter().any(|&(_, spaces)| spaces == 0)
+    {
+        return Ok(Vec::new());
+    }
+
     match operation {
-        IndentOperation::Increase | IndentOperation::Decrease => Ok(changes(targets, operation)),
         IndentOperation::Double | IndentOperation::Halve => {
             if targets.iter().all(|&(_, spaces)| spaces == 0) {
                 return Err(IndentError::NothingToScale);
@@ -119,6 +147,10 @@ pub fn plan(
 
             Ok(changes(targets, operation))
         }
+        IndentOperation::IncreaseIncludeEmpty
+        | IndentOperation::IncreaseSkipEmpty
+        | IndentOperation::DecreaseNoFlattening
+        | IndentOperation::DecreaseAllowFlattening => Ok(changes(targets, operation)),
     }
 }
 
@@ -152,13 +184,8 @@ mod tests {
         out
     }
 
-    fn run(
-        text: &str,
-        operation: IndentOperation,
-        lines: Option<RangeInclusive<usize>>,
-        skip_empty: bool,
-    ) -> String {
-        apply(text, &plan(text, operation, lines, skip_empty).unwrap())
+    fn run(text: &str, operation: IndentOperation, lines: Option<RangeInclusive<usize>>) -> String {
+        apply(text, &plan(text, operation, lines).unwrap())
     }
 
     #[test]
@@ -173,49 +200,128 @@ mod tests {
     }
 
     #[test]
-    fn increases_and_decreases_by_one_space() {
+    fn increase_include_empty_adds_to_every_target_line() {
         assert_eq!(
-            run("a\n  b\n", IndentOperation::Increase, None, true),
-            " a\n   b\n"
+            run("a\n  b\n", IndentOperation::IncreaseIncludeEmpty, None),
+            " a\n   b\n "
         );
         assert_eq!(
-            run(" a\n   b\n", IndentOperation::Decrease, None, true),
-            "a\n  b\n"
+            run("a\n  b", IndentOperation::IncreaseIncludeEmpty, None),
+            " a\n   b"
         );
     }
 
     #[test]
-    fn increase_includes_empty_lines_unless_skipped() {
+    fn increase_skip_empty_leaves_truly_empty_lines_alone() {
         assert_eq!(
-            run("  a\n\n  b\n", IndentOperation::Increase, None, false),
-            "   a\n \n   b\n "
-        );
-        assert_eq!(
-            run("  a\n\n  b\n", IndentOperation::Increase, None, true),
+            run("  a\n\n  b\n", IndentOperation::IncreaseSkipEmpty, None),
             "   a\n\n   b\n"
         );
-    }
-
-    #[test]
-    fn skip_empty_keeps_whitespace_only_lines() {
+        // Whitespace-only lines are not empty and still count.
         assert_eq!(
-            run("a\n   \n", IndentOperation::Increase, None, true),
+            run("a\n   \n", IndentOperation::IncreaseSkipEmpty, None),
             " a\n    \n"
         );
+    }
+
+    #[test]
+    fn strict_decrease_ignores_the_terminating_line() {
         assert_eq!(
-            run(" a\n    \n", IndentOperation::Decrease, None, true),
-            "a\n   \n"
+            run(" a\n   b\n", IndentOperation::DecreaseNoFlattening, None),
+            "a\n  b\n"
+        );
+        assert_eq!(
+            run(" a\n   b", IndentOperation::DecreaseNoFlattening, None),
+            "a\n  b"
+        );
+        assert_eq!(
+            run(" a\r\n b\r\n", IndentOperation::DecreaseNoFlattening, None),
+            "a\r\nb\r\n"
+        );
+        assert_eq!(
+            run(
+                " a\u{2029} b\u{2029}",
+                IndentOperation::DecreaseNoFlattening,
+                None
+            ),
+            "a\u{2029}b\u{2029}"
         );
     }
 
     #[test]
-    fn decrease_is_a_silent_no_op_when_nothing_can_be_removed() {
+    fn strict_decrease_fails_silently_on_any_zero_indent_line() {
         assert_eq!(
-            plan("a\nb\n", IndentOperation::Decrease, None, true),
+            plan("a\n  b\n", IndentOperation::DecreaseNoFlattening, None),
             Ok(Vec::new())
         );
+        // The terminating line is ignored, but a deliberate middle empty line
+        // still participates and blocks the operation.
         assert_eq!(
-            plan("a\n  b\n", IndentOperation::Decrease, Some(0..=0), true),
+            plan("  a\n\n  b\n", IndentOperation::DecreaseNoFlattening, None),
+            Ok(Vec::new())
+        );
+        // With only indented lines, the terminating line is no obstacle.
+        assert_eq!(
+            plan("  a\n", IndentOperation::DecreaseNoFlattening, None),
+            Ok(vec![IndentChange {
+                line: 0,
+                old: 2,
+                new: 1
+            }])
+        );
+        // A selection that includes only the terminating empty line does
+        // nothing because that line is ignored.
+        assert_eq!(
+            plan(" a\n", IndentOperation::DecreaseNoFlattening, Some(1..=1)),
+            Ok(Vec::new())
+        );
+        // A selection containing an unindented non-empty line fails silently.
+        assert_eq!(
+            plan(
+                " a\nb\n c\n",
+                IndentOperation::DecreaseNoFlattening,
+                Some(0..=1)
+            ),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn strict_decrease_works_across_selected_indented_lines() {
+        assert_eq!(
+            run(
+                " a\n b\n c\n",
+                IndentOperation::DecreaseNoFlattening,
+                Some(1..=2)
+            ),
+            " a\nb\nc\n"
+        );
+    }
+
+    #[test]
+    fn flattening_decrease_removes_a_space_where_one_exists() {
+        assert_eq!(
+            run(" a\n   b\n", IndentOperation::DecreaseAllowFlattening, None),
+            "a\n  b\n"
+        );
+        assert_eq!(
+            run("a\n  b\n", IndentOperation::DecreaseAllowFlattening, None),
+            "a\n b\n"
+        );
+        assert_eq!(
+            run(
+                " a\n\n  b\n",
+                IndentOperation::DecreaseAllowFlattening,
+                None
+            ),
+            "a\n\n b\n"
+        );
+    }
+
+    #[test]
+    fn decrease_allow_flattening_is_a_silent_no_op_when_nothing_can_be_removed() {
+        assert_eq!(
+            plan("a\nb\n", IndentOperation::DecreaseAllowFlattening, None),
             Ok(Vec::new())
         );
     }
@@ -223,23 +329,46 @@ mod tests {
     #[test]
     fn increase_never_fails() {
         assert_eq!(
-            plan("", IndentOperation::Increase, None, true),
+            plan("", IndentOperation::IncreaseSkipEmpty, None),
             Ok(Vec::new())
         );
         assert_eq!(
-            plan("a\n", IndentOperation::Increase, None, true),
+            plan("", IndentOperation::IncreaseIncludeEmpty, None),
             Ok(vec![IndentChange {
                 line: 0,
                 old: 0,
                 new: 1
             }])
         );
+        assert_eq!(
+            plan("a\n", IndentOperation::IncreaseSkipEmpty, None),
+            Ok(vec![IndentChange {
+                line: 0,
+                old: 0,
+                new: 1
+            }])
+        );
+        assert_eq!(
+            plan("a\n", IndentOperation::IncreaseIncludeEmpty, None),
+            Ok(vec![
+                IndentChange {
+                    line: 0,
+                    old: 0,
+                    new: 1
+                },
+                IndentChange {
+                    line: 1,
+                    old: 0,
+                    new: 1
+                }
+            ])
+        );
     }
 
     #[test]
     fn doubles_the_whole_text() {
         assert_eq!(
-            run("a\n  b\n    c\n", IndentOperation::Double, None, true),
+            run("a\n  b\n    c\n", IndentOperation::Double, None),
             "a\n    b\n        c\n"
         );
     }
@@ -247,7 +376,7 @@ mod tests {
     #[test]
     fn halves_the_whole_text() {
         assert_eq!(
-            run("a\n    b\n  c\n", IndentOperation::Halve, None, true),
+            run("a\n    b\n  c\n", IndentOperation::Halve, None),
             "a\n  b\n c\n"
         );
     }
@@ -257,30 +386,16 @@ mod tests {
         // Odd indentation outside the range does not block halving.
         let text = " x\n  y\n    z\n   w\n";
         assert_eq!(
-            run(text, IndentOperation::Halve, Some(1..=2), true),
+            run(text, IndentOperation::Halve, Some(1..=2)),
             " x\n y\n  z\n   w\n"
         );
         assert_eq!(
-            run(text, IndentOperation::Double, Some(2..=2), true),
+            run(text, IndentOperation::Double, Some(2..=2)),
             " x\n  y\n        z\n   w\n"
         );
         assert_eq!(
-            run(text, IndentOperation::Increase, Some(1..=1), true),
+            run(text, IndentOperation::IncreaseIncludeEmpty, Some(1..=1)),
             " x\n   y\n    z\n   w\n"
-        );
-    }
-
-    #[test]
-    fn skip_empty_is_applied_before_the_scaling_checks() {
-        // The selected range contains only a truly empty line.
-        assert_eq!(
-            plan("  a\n\n", IndentOperation::Double, Some(1..=1), true),
-            Err(IndentError::NothingToScale)
-        );
-        // A non-empty target still scales while empty lines stay filtered out.
-        assert_eq!(
-            run("  a\n\n", IndentOperation::Double, Some(0..=1), true),
-            "    a\n\n"
         );
     }
 
@@ -288,20 +403,17 @@ mod tests {
     fn all_zero_indentation_aborts() {
         for operation in [IndentOperation::Double, IndentOperation::Halve] {
             assert_eq!(
-                plan("a\nb\n", operation, None, true),
+                plan("a\nb\n", operation, None),
                 Err(IndentError::NothingToScale)
             );
-            assert_eq!(
-                plan("", operation, None, true),
-                Err(IndentError::NothingToScale)
-            );
+            assert_eq!(plan("", operation, None), Err(IndentError::NothingToScale));
         }
         assert_eq!(
-            plan("a\n  b\n", IndentOperation::Double, Some(0..=0), true),
+            plan("a\n  b\n", IndentOperation::Double, Some(0..=0)),
             Err(IndentError::NothingToScale)
         );
         assert_eq!(
-            plan("a\n  b\n", IndentOperation::Halve, Some(0..=0), true),
+            plan("a\n  b\n", IndentOperation::Halve, Some(0..=0)),
             Err(IndentError::NothingToScale)
         );
     }
@@ -309,7 +421,7 @@ mod tests {
     #[test]
     fn halve_reports_first_odd_line_one_based() {
         assert_eq!(
-            plan("  a\n   b\n c\n", IndentOperation::Halve, None, true),
+            plan("  a\n   b\n c\n", IndentOperation::Halve, None),
             Err(IndentError::OddIndent { line: 2 })
         );
         assert_eq!(
@@ -330,27 +442,27 @@ mod tests {
     fn whitespace_only_lines_count_literally() {
         // A whitespace-only line with an odd number of spaces blocks Halve.
         assert_eq!(
-            plan("    a\n   \n", IndentOperation::Halve, None, true),
+            plan("    a\n   \n", IndentOperation::Halve, None),
             Err(IndentError::OddIndent { line: 2 })
         );
         // An empty line is zero indentation and is left alone.
         assert_eq!(
-            run("  a\n\n  b\n", IndentOperation::Double, None, true),
+            run("  a\n\n  b\n", IndentOperation::Double, None),
             "    a\n\n    b\n"
         );
         // Whitespace-only lines with an even count are scaled.
-        assert_eq!(run("  \n", IndentOperation::Double, None, true), "    \n");
-        assert_eq!(run("    \n", IndentOperation::Halve, None, true), "  \n");
+        assert_eq!(run("  \n", IndentOperation::Double, None), "    \n");
+        assert_eq!(run("    \n", IndentOperation::Halve, None), "  \n");
     }
 
     #[test]
     fn crlf_and_trailing_line_are_handled() {
         assert_eq!(
-            run("  a\r\n  b\r\n", IndentOperation::Double, None, true),
+            run("  a\r\n  b\r\n", IndentOperation::Double, None),
             "    a\r\n    b\r\n"
         );
         // The empty last line (after a trailing break) is a zero-indent line.
-        let changes = plan("  a\n", IndentOperation::Double, Some(0..=1), true).unwrap();
+        let changes = plan("  a\n", IndentOperation::Double, Some(0..=1)).unwrap();
         assert_eq!(changes.len(), 1);
     }
 
@@ -360,19 +472,19 @@ mod tests {
             ("  a\r  b\r", "    a\r    b\r"),
             ("  a\u{2029}  b\u{2029}", "    a\u{2029}    b\u{2029}"),
         ] {
-            assert_eq!(run(text, IndentOperation::Double, None, true), expected);
+            assert_eq!(run(text, IndentOperation::Double, None), expected);
         }
         // The line after a trailing break is empty and has no indentation.
-        assert_eq!(run("  a\r", IndentOperation::Double, None, true), "    a\r");
+        assert_eq!(run("  a\r", IndentOperation::Double, None), "    a\r");
         assert_eq!(
-            plan("  a\r", IndentOperation::Double, Some(1..=1), true),
+            plan("  a\r", IndentOperation::Double, Some(1..=1)),
             Err(IndentError::NothingToScale)
         );
     }
 
     #[test]
     fn only_changing_lines_are_reported() {
-        let changes = plan("a\n  b\n", IndentOperation::Double, None, true).unwrap();
+        let changes = plan("a\n  b\n", IndentOperation::Double, None).unwrap();
         assert_eq!(
             changes,
             vec![IndentChange {
@@ -386,7 +498,7 @@ mod tests {
     #[test]
     fn halve_then_double_roundtrips_even_indentation() {
         let text = "a\n    b\n        c\n  d\n";
-        let halved = run(text, IndentOperation::Halve, None, true);
-        assert_eq!(run(&halved, IndentOperation::Double, None, true), text);
+        let halved = run(text, IndentOperation::Halve, None);
+        assert_eq!(run(&halved, IndentOperation::Double, None), text);
     }
 }
