@@ -202,6 +202,7 @@ impl AppWindow {
                     return;
                 }
                 *self.diff_state.borrow_mut() = Some(DiffSession::new(baseline, live));
+                self.diff.set_document_path(Some(&path));
                 self.diff.begin_review();
                 self.stack.set_visible_child_name("diff");
                 self.render_diff();
@@ -220,8 +221,23 @@ impl AppWindow {
         let Some(session) = state.as_ref() else {
             return;
         };
+        self.update_diff_timestamps();
         self.diff.render(session);
         self.diff.active_left_view().grab_focus();
+    }
+
+    /// Refresh the absolute times in both pane headers. The live side uses
+    /// the last in-memory edit, or the file mtime before the first edit; the
+    /// baseline side uses the snapshot file's mtime.
+    pub(super) fn update_diff_timestamps(&self) {
+        let edited = self.status_state.last_edit_wall();
+        let left = edited.or_else(|| self.doc.borrow().disk_mtime());
+        self.diff.set_document_time(left, edited.is_some());
+
+        let right = self
+            .path_for_snapshot()
+            .and_then(|path| self.store.mtime_for_canonical(&path));
+        self.diff.set_baseline_time(right);
     }
 
     fn is_inspecting(&self) -> bool {
@@ -425,12 +441,15 @@ impl AppWindow {
         if complete {
             self.close_diff_view();
         } else {
-            let mut state = self.diff_state.borrow_mut();
-            let session = state.as_mut().unwrap();
-            session.mark_committed();
-            self.diff
-                .update_toolbar(DiffToolbarState::for_session(session));
-            self.diff.active_left_view().grab_focus();
+            {
+                let mut state = self.diff_state.borrow_mut();
+                let session = state.as_mut().unwrap();
+                session.mark_committed();
+                self.diff
+                    .update_toolbar(DiffToolbarState::for_session(session));
+                self.diff.active_left_view().grab_focus();
+            }
+            self.update_diff_timestamps();
         }
     }
 

@@ -137,7 +137,7 @@ prompt after the chooser (including Open New Window and no Cancel button),
 recent-menu ordering, lazy pruning, open-recent and per-entry removal, the
 document title tooltip and copy menu (including tooltip suppression while the
 menu is open and focus restoration after dismissing it or choosing either copy
-action), the Document/Baseline diff headers,
+action), the Diff Mode path and timestamp headers,
 Shift-click New, disabled New/Open actions and hidden header tooltips in Diff
 Mode, duplicate-path redirection to the owning window, same-window reload
 confirmation and identical-content detection, the Open menu's tooltip

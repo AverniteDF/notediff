@@ -510,6 +510,9 @@ impl AppWindow {
         match self.persist(None) {
             Ok(()) => {
                 self.toast(ToastKind::Success, "Saved");
+                if self.diff_active() {
+                    self.update_diff_timestamps();
+                }
                 if let Some(action) = then {
                     self.run_pending(action);
                 }

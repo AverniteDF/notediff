@@ -4,6 +4,19 @@ All notable changes to notediff are documented here. The project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses semantic
 versioning.
 
+## [Unreleased]
+
+### Added
+
+- Diff Mode pane headers show the live document's full canonical path and
+  right-aligned local timestamps for the last document edit (or save) and the
+  saved baseline.
+
+### Changed
+
+- The Appearance tab explanation is shorter, and the user-theme restart note
+  uses the same subdued style as the other explanatory text.
+
 ## [1.1.0] - 2026-11-18
 
 ### Added

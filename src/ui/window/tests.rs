@@ -245,6 +245,18 @@ fn assert_toast(window: &AppWindow, kind: ToastKind, text: &str) {
     toast.dismiss();
 }
 
+fn assert_timestamp(text: &str) {
+    assert_eq!(text.chars().count(), 16, "{text}");
+    for (index, ch) in text.chars().enumerate() {
+        match index {
+            4 | 7 => assert_eq!(ch, '-', "{text}"),
+            10 => assert_eq!(ch, ' ', "{text}"),
+            13 => assert_eq!(ch, ':', "{text}"),
+            _ => assert!(ch.is_ascii_digit(), "{text}"),
+        }
+    }
+}
+
 fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
         let mut widgets = vec![root.clone()];
@@ -298,9 +310,10 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
     );
     assert!(!copy.gets_focus_on_click());
     let clock = std::time::Instant::now();
-    window
-        .status_state
-        .note_edit(clock - std::time::Duration::from_secs(5));
+    window.status_state.note_edit(
+        clock - std::time::Duration::from_secs(5),
+        std::time::SystemTime::now(),
+    );
 
     select(&window.editor_view, 8, 10);
     // Keyboard activation can focus the button without losing the source pane.
@@ -3162,6 +3175,20 @@ fn inspection_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
     let full = gtk::WrapMode::None;
 
     window.enter_diff();
+    assert_eq!(
+        window.diff.header_texts().0,
+        canonical.display().to_string()
+    );
+    let (left_time, right_time) = window.diff.header_times();
+    assert_timestamp(&left_time);
+    assert_timestamp(&right_time);
+    assert_eq!(
+        window.diff.header_tooltips(),
+        (
+            Some("Last saved".to_string()),
+            Some("Last saved".to_string())
+        )
+    );
     assert!(!window.diff.inspect_button.is_sensitive());
     assert_eq!(window.diff.exit_button.label().as_deref(), Some("Close"));
     // The toolbar is immediately followed by the panes, with no information
@@ -3294,7 +3321,10 @@ fn inspection_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
             .kind,
         ChangeKind::Block
     );
-    assert_eq!(window.diff.header_texts().0, "Document");
+    assert_eq!(
+        window.diff.header_texts().0,
+        canonical.display().to_string()
+    );
     assert!(press(Key::Up));
     assert_panes(added, "", wrapped);
 
@@ -3978,6 +4008,21 @@ fn restore_appearance_scenario(app: &adw::Application, store: &SnapshotStore) {
         stack.set_visible_child_name("appearance");
         let page = stack.child_by_name("appearance").unwrap();
         let descendants = widgets(&page);
+        let label = |text: &str| {
+            descendants.iter().find_map(|widget| {
+                let label = widget.clone().downcast::<gtk::Label>().ok()?;
+                (label.label().as_str() == text).then_some(label)
+            })
+        };
+        let explanation =
+            label("Appearance changes affect every open window and are remembered for next time.")
+                .expect("appearance explanation");
+        assert!(explanation.has_css_class("dim-label"));
+        let policy = label(
+            "User themes are loaded at startup. Restart notediff after adding or editing a theme.",
+        )
+        .expect("user-theme policy");
+        assert!(policy.has_css_class("dim-label"));
         let family = descendants
             .iter()
             .find_map(|w| w.clone().downcast::<gtk::Entry>().ok())

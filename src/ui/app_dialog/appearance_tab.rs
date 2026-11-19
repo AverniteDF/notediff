@@ -25,8 +25,7 @@ impl AppearanceTab {
         persist_font: bool,
     ) -> Self {
         let page = CleanupPage::new(
-            "Themes apply immediately. Edit the font settings and choose Apply Font. \
-             Appearance changes affect every open window and are remembered for next time.",
+            "Appearance changes affect every open window and are remembered for next time.",
         );
         let restore = &page.delete_button;
         restore.set_label("Restore Defaults");
@@ -90,6 +89,7 @@ impl AppearanceTab {
         ));
         policy.set_wrap(true);
         policy.set_xalign(0.0);
+        policy.add_css_class("dim-label");
         page.list.append(&policy);
         let selected = theme::current().id.clone();
         let mut group: Option<gtk::CheckButton> = None;

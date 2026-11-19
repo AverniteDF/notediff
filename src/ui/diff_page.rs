@@ -6,7 +6,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use adw::prelude::*;
 use gtk::glib;
@@ -47,6 +49,9 @@ pub struct DiffPage {
     right_buffer: sourceview5::Buffer,
     left_title: gtk::Label,
     right_title: gtk::Label,
+    left_time: gtk::Label,
+    right_time: gtk::Label,
+    document_path: RefCell<Option<PathBuf>>,
     left_status: StatusBar,
     right_status: StatusBar,
     left_scroller: gtk::ScrolledWindow,
@@ -175,10 +180,14 @@ impl DiffPage {
 
         let left_title = pane_title("Document");
         let right_title = pane_title("Baseline");
+        let left_time = pane_time();
+        let right_time = pane_time();
+        let left_header = pane_header(&left_title, &left_time);
+        let right_header = pane_header(&right_title, &right_time);
 
         let left_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let left_status = StatusBar::pane();
-        left_box.append(&left_title);
+        left_box.append(&left_header);
         left_box.append(&left_stack);
         left_box.append(&left_status.root);
         left_box.set_hexpand(true);
@@ -186,7 +195,7 @@ impl DiffPage {
 
         let right_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let right_status = StatusBar::pane();
-        right_box.append(&right_title);
+        right_box.append(&right_header);
         right_box.append(&right_stack);
         right_box.append(&right_status.root);
         right_box.set_hexpand(true);
@@ -247,6 +256,9 @@ impl DiffPage {
             right_buffer,
             left_title,
             right_title,
+            left_time,
+            right_time,
+            document_path: RefCell::new(None),
             left_status,
             right_status,
             left_scroller,
@@ -1028,10 +1040,47 @@ impl DiffPage {
         )
     }
 
-    /// Pane titles stay the same in full diff and inspection, even on empty
-    /// sides. The document path remains available as a tooltip.
+    #[cfg(test)]
+    pub fn header_times(&self) -> (String, String) {
+        (
+            self.left_time.text().to_string(),
+            self.right_time.text().to_string(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn header_tooltips(&self) -> (Option<String>, Option<String>) {
+        (
+            self.left_time.tooltip_text().map(|text| text.to_string()),
+            self.right_time.tooltip_text().map(|text| text.to_string()),
+        )
+    }
+
+    /// The live document path is shown in the left header for this review.
+    pub(super) fn set_document_path(&self, path: Option<&Path>) {
+        self.document_path.replace(path.map(Path::to_path_buf));
+    }
+
+    /// The live side's timestamp and whether it came from an in-memory edit
+    /// rather than the file's last save.
+    pub(super) fn set_document_time(&self, at: Option<SystemTime>, edited: bool) {
+        let tooltip = if edited { "Last edit" } else { "Last saved" };
+        set_time_label(&self.left_time, at, tooltip);
+    }
+
+    pub(super) fn set_baseline_time(&self, at: Option<SystemTime>) {
+        set_time_label(&self.right_time, at, "Last saved");
+    }
+
+    /// Pane headers stay the same in full diff and inspection, even on empty
+    /// sides. The left title is the document's canonical path, with the full
+    /// path as its tooltip, or "Document" if no path was supplied.
     fn set_headers(&self) {
-        self.left_title.set_text("Document");
+        let path = self.document_path.borrow();
+        let text = path.as_deref().map(|path| path.display().to_string());
+        self.left_title
+            .set_text(text.as_deref().unwrap_or("Document"));
+        self.left_title.set_tooltip_text(text.as_deref());
         self.right_title.set_text("Baseline");
     }
 }
@@ -1097,6 +1146,44 @@ fn pane_title(text: &str) -> gtk::Label {
     label.add_css_class("dim-label");
     label.add_css_class("caption-heading");
     label
+}
+
+fn pane_header(title: &gtk::Label, time: &gtk::Label) -> gtk::Box {
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    header.set_hexpand(true);
+    title.set_hexpand(true);
+    header.append(title);
+    header.append(time);
+    header
+}
+
+fn pane_time() -> gtk::Label {
+    let label = gtk::Label::new(None);
+    label.set_halign(gtk::Align::End);
+    label.set_valign(gtk::Align::Center);
+    label.set_margin_end(10);
+    label.set_margin_top(4);
+    label.set_margin_bottom(4);
+    label.add_css_class("dim-label");
+    label.add_css_class("caption");
+    label.set_visible(false);
+    label
+}
+
+fn set_time_label(label: &gtk::Label, at: Option<SystemTime>, tooltip: &str) {
+    let text = at.and_then(format_time);
+    label.set_text(text.as_deref().unwrap_or(""));
+    label.set_tooltip_text(text.as_ref().map(|_| tooltip));
+    label.set_visible(text.is_some());
+}
+
+fn format_time(at: SystemTime) -> Option<String> {
+    let secs = at.duration_since(UNIX_EPOCH).ok()?.as_secs();
+    let secs = i64::try_from(secs).ok()?;
+    let date = glib::DateTime::from_unix_local(secs).ok()?;
+    date.format("%Y-%m-%d %H:%M")
+        .ok()
+        .map(|text| text.to_string())
 }
 
 fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {

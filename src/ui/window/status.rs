@@ -9,7 +9,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use adw::prelude::*;
 use gtk::glib;
@@ -33,6 +33,8 @@ pub(super) struct StatusState {
     /// When the user last edited the buffer since loading; `None` until the
     /// first edit.
     last_edit: Cell<Option<Instant>>,
+    /// Wall-clock time of the most recent edit, for absolute display.
+    last_edit_wall: Cell<Option<SystemTime>>,
     refresh_pending: Cell<bool>,
     /// The one-shot timer that refreshes the elapsed time.
     last_edit_timer: RefCell<Option<glib::SourceId>>,
@@ -70,13 +72,20 @@ impl StatusState {
         self.refresh_pending.set(false);
     }
 
-    pub fn note_edit(&self, now: Instant) {
+    pub fn note_edit(&self, now: Instant, wall: SystemTime) {
         self.last_edit.set(Some(now));
+        self.last_edit_wall.set(Some(wall));
+    }
+
+    /// The wall-clock time of the most recent edit, if any.
+    pub fn last_edit_wall(&self) -> Option<SystemTime> {
+        self.last_edit_wall.get()
     }
 
     /// Forget the last edit and stop the refresh timer.
     pub fn clear_edit(&self) {
         self.last_edit.set(None);
+        self.last_edit_wall.set(None);
         self.cancel_timer();
     }
 
@@ -190,7 +199,8 @@ impl AppWindow {
 
     /// The user edited the buffer: restart the elapsed time and its timer.
     pub(super) fn note_edit(self: &Rc<Self>) {
-        self.status_state.note_edit(Instant::now());
+        self.status_state
+            .note_edit(Instant::now(), SystemTime::now());
         // A background window has no timer; it refreshes on focus.
         if self.window.is_active() {
             self.schedule_last_edit_tick(1);
@@ -234,6 +244,7 @@ mod tests {
         let now = Instant::now();
         assert_eq!(state.last_edit_text(now), None);
         assert_eq!(state.next_tick_secs(now), None);
+        assert_eq!(state.last_edit_wall(), None);
         assert!(!state.has_edit());
     }
 
@@ -241,7 +252,7 @@ mod tests {
     fn last_edit_text_follows_the_elapsed_time() {
         let state = StatusState::default();
         let start = Instant::now();
-        state.note_edit(start);
+        state.note_edit(start, SystemTime::UNIX_EPOCH);
         let at = |secs| start + Duration::from_secs(secs);
         assert_eq!(state.last_edit_text(start).as_deref(), Some("just now"));
         assert_eq!(
@@ -267,12 +278,16 @@ mod tests {
     fn a_new_edit_restarts_the_clock_and_clearing_removes_it() {
         let state = StatusState::default();
         let start = Instant::now();
-        state.note_edit(start);
+        let wall = SystemTime::UNIX_EPOCH;
+        state.note_edit(start, wall);
         let later = start + Duration::from_secs(120);
-        state.note_edit(later);
+        let later_wall = wall + Duration::from_secs(120);
+        state.note_edit(later, later_wall);
         assert_eq!(state.last_edit_text(later).as_deref(), Some("just now"));
+        assert_eq!(state.last_edit_wall(), Some(later_wall));
         state.clear_edit();
         assert!(!state.has_edit());
+        assert_eq!(state.last_edit_wall(), None);
         assert_eq!(state.last_edit_text(later), None);
     }
 

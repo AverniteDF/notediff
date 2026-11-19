@@ -223,8 +223,14 @@ document's dominant ending so a CRLF file stays CRLF.
 Press **F5** or click **Review Changes (F5)** in the header bar.
 Diff Mode compares the baseline with the current editor text, so unsaved edits
 can be reviewed without writing them first. The left pane is the live document
-(read-only) and its header reads `Document`; the right pane is the baseline and
-its header reads `Baseline`. The Confirm button shows how many
+(read-only) and its header shows the document's full path; the right pane is
+the baseline and its header reads `Baseline`. Each header has a right-aligned
+local timestamp in `YYYY-MM-DD HH:MM` form. The live side shows the last
+in-memory edit, or the file's last-save time before any edit; its tooltip says
+**Last edit** after an edit, or **Last saved** before one. The baseline side
+shows the saved snapshot's modification time, with the tooltip **Last saved**.
+Accepts and undos in memory do not change the baseline timestamp.
+The Confirm button shows how many
 changes have been accepted since the last Confirm, for example `Confirm (3 changes)`.
 Each whole-hunk accept or inline accept counts as one change; Accept All counts
 the pending whole hunks as changes and remains one undo step.
@@ -304,9 +310,9 @@ cursor and insert-mode fields are omitted because the panes are read-only.
 
 Focus a hunk, then press **Enter** or click **Inspect** just left of **Accept**.
 Each pane shows only its side of that hunk, wraps long lines and scrolls
-independently. Insertions and deletions leave one pane empty. Its header says
-the same thing in either view: `Document` or `Baseline`, without
-an empty-side suffix. The pane statistics describe the excerpts.
+independently. Insertions and deletions leave one pane empty. Its header keeps
+the same document path or `Baseline` label and timestamp in either view,
+without an empty-side suffix. The pane statistics describe the excerpts.
 
 Inspection reviews **individual changes within paired lines**, rather than
 accepting the entire line. Pure inserted/deleted blocks remain atomic.

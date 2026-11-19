@@ -98,6 +98,14 @@ impl SnapshotStore {
         self.snapshot_path_for_canonical(canonical).is_file()
     }
 
+    /// The baseline file's modification time, for the Diff Mode header.
+    pub fn mtime_for_canonical(&self, canonical: &Path) -> Option<SystemTime> {
+        fs::metadata(self.snapshot_path_for_canonical(canonical))
+            .ok()?
+            .modified()
+            .ok()
+    }
+
     pub fn write_for_canonical(&self, canonical: &Path, text: &str) -> io::Result<()> {
         if text.len() as u64 > MAX_OPEN_BYTES {
             return Err(io::Error::new(
@@ -382,6 +390,7 @@ mod tests {
             Some("baseline\r\n")
         );
         assert!(store.snapshot_path_for_canonical(&canonical).exists());
+        assert!(store.mtime_for_canonical(&canonical).is_some());
 
         store.delete_for_canonical(&canonical).unwrap();
         assert_eq!(store.read_for_canonical(&canonical).unwrap(), None);
