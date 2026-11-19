@@ -209,8 +209,9 @@ notes for details and workarounds.
   line numbers, current-line highlighting and bracket matching. Find uses the
   buffer's normal selection colours. Theme schemes supply the text, selection,
   gutter, current-line and review colours.
-- A document with unsaved changes shows a dot before its name in the title, and
-  only the header bar gets a subtle scheme-derived accent tint until it is saved or reverted.
+- A document with unsaved changes shows a larger `●` followed by two spaces
+  before its name in the title, and only the header bar gets a subtle
+  scheme-derived accent tint until it is saved or reverted.
   A read-only document also shows **(Read-Only)** after its name. Hovering the
   title shows the full path; the tooltip is hidden while the right-click menu
   is showing. Right-clicking it offers **Copy file name** and

@@ -92,7 +92,7 @@ struct BaselineCache {
 /// optional read-only suffix. The title describes the document, not the view
 /// mode, so entering Diff Mode does not change it.
 fn title_text(name: &str, dirty: bool, read_only: bool) -> String {
-    let dot = if dirty { "• " } else { "" };
+    let dot = if dirty { "●  " } else { "" };
     let read_only = if read_only { " (Read-Only)" } else { "" };
     format!("{dot}{name}{read_only}")
 }

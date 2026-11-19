@@ -46,7 +46,7 @@ fn untitled_save_prompt_offers_save_as() {
 #[test]
 fn window_title_puts_the_dirty_marker_first() {
     assert_eq!(title_text("notes.md", false, false), "notes.md");
-    assert_eq!(title_text("notes.md", true, false), "• notes.md");
+    assert_eq!(title_text("notes.md", true, false), "●  notes.md");
     assert_eq!(title_text("Untitled", false, false), "Untitled");
     assert_eq!(
         title_text("notes.txt", false, true),
@@ -54,7 +54,7 @@ fn window_title_puts_the_dirty_marker_first() {
     );
     assert_eq!(
         title_text("notes.txt", true, true),
-        "• notes.txt (Read-Only)"
+        "●  notes.txt (Read-Only)"
     );
 }
 

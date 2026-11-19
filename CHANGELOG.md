@@ -36,6 +36,8 @@ versioning.
 
 ### Changed
 
+- The dirty-document marker before the title is now a larger `●` followed by
+  two spaces.
 - The Appearance tab explanation is shorter, and the user-theme restart note
   uses the same subdued style as the other explanatory text.
 
