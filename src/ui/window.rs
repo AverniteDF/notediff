@@ -139,6 +139,11 @@ pub struct AppWindow {
     toast_overlay: adw::ToastOverlay,
     editor_view: sourceview5::View,
     editor_buffer: sourceview5::Buffer,
+    /// Keeps the editor view's child observer alive so the lazily created
+    /// context-menu popover can be hooked for focus restoration.
+    editor_children: gio::ListModel,
+    /// True once the editor's context-menu popover has been hooked.
+    context_menu_hooked: Cell<bool>,
     status: StatusBar,
     search_bar: gtk::SearchBar,
     search_entry: gtk::SearchEntry,
@@ -273,6 +278,11 @@ impl AppWindow {
         editor_view.set_top_margin(6);
         editor_view.set_bottom_margin(6);
 
+        // The text view creates its context-menu popover lazily as a child.
+        // Keep the observer alive so focus restoration can hook it when it
+        // first appears.
+        let editor_children = editor_view.observe_children();
+
         let editor_scroller = gtk::ScrolledWindow::new();
         editor_scroller.set_child(Some(&editor_view));
         editor_scroller.set_hexpand(true);
@@ -319,6 +329,8 @@ impl AppWindow {
             toast_overlay,
             editor_view,
             editor_buffer,
+            editor_children,
+            context_menu_hooked: Cell::new(false),
             status,
             search_bar,
             search_entry,

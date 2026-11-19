@@ -186,6 +186,7 @@ fn gtk_window_smoke() {
     let store = SnapshotStore::at(dir.join("store"));
     crate::ui::app_dialog::snapshots_tab::link_buttons_smoke(&store, &dir);
     transient_focus_scenario(&app, &store);
+    context_menu_focus_scenario(&app, &store);
     gutter_selection_scenario(&app, store.clone());
     editing_scenario(&app, &dir, &store);
     indentation_scenario(&app, &dir, &store);
@@ -832,6 +833,20 @@ fn wait_for(condition: impl Fn() -> bool) {
     }
 }
 
+/// The text view parents its lazily created context-menu popover directly to
+/// itself.
+fn editor_context_menu(view: &sourceview5::View) -> Option<gtk::PopoverMenu> {
+    let mut child = view.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Ok(popover) = widget.downcast::<gtk::PopoverMenu>() {
+            return Some(popover);
+        }
+        child = next;
+    }
+    None
+}
+
 fn transient_focus_scenario(app: &adw::Application, store: &SnapshotStore) {
     fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
         let mut widgets = vec![root.clone()];
@@ -956,6 +971,34 @@ fn transient_focus_scenario(app: &adw::Application, store: &SnapshotStore) {
             && gtk::prelude::GtkWindowExt::focus(&window.window)
                 == Some(window.diff.left_view.clone().upcast::<gtk::Widget>())
     });
+    window.window.destroy();
+}
+
+fn context_menu_focus_scenario(app: &adw::Application, store: &SnapshotStore) {
+    let window = AppWindow::with_store(app, store.clone());
+    window.window.present();
+    wait_for(|| window.window.is_mapped());
+    let editor_focused = || {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            == Some(window.editor_view.clone().upcast::<gtk::Widget>())
+    };
+
+    assert!(
+        window
+            .editor_view
+            .activate_action("menu.popup", None)
+            .is_ok()
+    );
+    wait_for(|| {
+        editor_context_menu(&window.editor_view).is_some_and(|popover| popover.is_mapped())
+    });
+    let context = editor_context_menu(&window.editor_view).unwrap();
+    context.popdown();
+    // Keep focus outside the editor until the deferred restoration runs, as a
+    // click-away leaves it. Without the hook it would stay on this button.
+    window.open_button.grab_focus();
+    assert!(!editor_focused());
+    wait_for(editor_focused);
     window.window.destroy();
 }
 

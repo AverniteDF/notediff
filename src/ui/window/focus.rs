@@ -41,22 +41,9 @@ impl AppWindow {
             }
         }
         for popover in popovers {
-            let shown = action_chosen.clone();
-            popover.connect_show(move |_| shown.set(false));
-            let weak = Rc::downgrade(this);
-            let chosen = action_chosen.clone();
-            popover.connect_closed(move |_| {
-                let weak = weak.clone();
-                let chosen = chosen.clone();
-                glib::idle_add_local_once(move || {
-                    if let Some(this) = weak.upgrade()
-                        && (!chosen.get() || this.search_bar.is_search_mode())
-                    {
-                        this.restore_content_focus();
-                    }
-                });
-            });
+            Self::connect_popover_focus(this, &popover, action_chosen.clone());
         }
+        Self::watch_editor_context_menu(this, action_chosen.clone());
 
         // Covers Cancel/Escape on save prompts, Manage Snapshots, About and
         // other Adwaita dialogs, after their own close handlers have run.
@@ -70,6 +57,61 @@ impl AppWindow {
                     }
                 });
             }
+        });
+    }
+
+    /// The text view creates its context-menu popover lazily as a child.
+    /// Watch for that child and hook it into the same focus restoration as
+    /// the window-owned popovers.
+    fn watch_editor_context_menu(this: &Rc<Self>, action_chosen: Rc<Cell<bool>>) {
+        let weak = Rc::downgrade(this);
+        let chosen = action_chosen.clone();
+        this.editor_children
+            .connect_items_changed(move |_, _, _, _| {
+                if let Some(this) = weak.upgrade() {
+                    Self::hook_editor_context_menu(&this, &chosen);
+                }
+            });
+        Self::hook_editor_context_menu(this, &action_chosen);
+    }
+
+    fn hook_editor_context_menu(this: &Rc<Self>, action_chosen: &Rc<Cell<bool>>) {
+        if this.context_menu_hooked.get() {
+            return;
+        }
+        let mut child = this.editor_view.first_child();
+        while let Some(widget) = child {
+            let next = widget.next_sibling();
+            if let Ok(popover) = widget.downcast::<gtk::PopoverMenu>() {
+                this.context_menu_hooked.set(true);
+                Self::connect_popover_focus(this, popover.upcast_ref(), action_chosen.clone());
+                return;
+            }
+            child = next;
+        }
+    }
+
+    /// Restore content focus when `popover` closes, unless the action that
+    /// closed it has its own focus target.
+    fn connect_popover_focus(
+        this: &Rc<Self>,
+        popover: &gtk::Popover,
+        action_chosen: Rc<Cell<bool>>,
+    ) {
+        let shown = action_chosen.clone();
+        popover.connect_show(move |_| shown.set(false));
+        let weak = Rc::downgrade(this);
+        let chosen = action_chosen;
+        popover.connect_closed(move |_| {
+            let weak = weak.clone();
+            let chosen = chosen.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(this) = weak.upgrade()
+                    && (!chosen.get() || this.search_bar.is_search_mode())
+                {
+                    this.restore_content_focus();
+                }
+            });
         });
     }
 
