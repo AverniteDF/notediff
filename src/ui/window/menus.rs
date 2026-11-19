@@ -280,6 +280,7 @@ pub(super) fn build_context_menu() -> gio::Menu {
     scale.append(Some("Double"), Some("win.indent-double"));
     scale.append(Some("Halve"), Some("win.indent-halve"));
     let insert = gio::Menu::new();
+    insert.append(Some("Insert Path…"), Some("win.insert-path"));
     insert.append(Some("Insert Text from File…"), Some("win.insert-file"));
     let menu = gio::Menu::new();
     menu.append_submenu(Some("Scale Indentation"), &scale);
@@ -330,6 +331,33 @@ mod tests {
         assert_eq!(
             attribute(menu.upcast_ref(), 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
             Some("win.copy-full-path")
+        );
+    }
+
+    #[test]
+    fn context_menu_offers_insert_path_above_insert_file() {
+        let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
+            menu.item_attribute_value(index, name, None)
+                .and_then(|value| value.get::<String>())
+        };
+        let menu = build_context_menu();
+        let insert = menu.item_link(1, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(insert.n_items(), 2);
+        assert_eq!(
+            attribute(&insert, 0, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Insert Path…")
+        );
+        assert_eq!(
+            attribute(&insert, 0, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.insert-path")
+        );
+        assert_eq!(
+            attribute(&insert, 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+            Some("Insert Text from File…")
+        );
+        assert_eq!(
+            attribute(&insert, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+            Some("win.insert-file")
         );
     }
 

@@ -8,6 +8,8 @@ versioning.
 
 ### Added
 
+- The editor context menu now has **Insert Path…**, which inserts the absolute
+  path of a chosen file like a paste, without reading the file.
 - Diff Mode pane headers show the live document's full canonical path and
   right-aligned local timestamps for the last document edit (or save) and the
   saved baseline.

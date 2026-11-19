@@ -126,7 +126,7 @@ cargo test
 One ignored UI smoke test runs the editing, file-action and Diff Mode
 scenarios on the same GTK thread with a temporary snapshot store. It covers
 tab handling, read-only mode, Find/Replace, EOL conversion, indentation scaling, Word Wrap,
-file insertion and selection, baseline moves, links and copies, and the Diff
+path and file insertion with selection, baseline moves, links and copies, and the Diff
 Mode accept, undo and confirm flow. It exercises inline inspection keys, selection
 highlights, partial-line review, line endings, wrapped selection scrolling, pure
 insertions and deletions, and long-document scroll placement after repeated

@@ -2509,11 +2509,30 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     ibuf.undo();
     assert_eq!(inserter.current_text(), "keep SELECTED keep\n");
 
+    // Insert Path inserts the chosen file's absolute path like a paste,
+    // replacing the selection in one undo step.
+    inserter.set_editor_text("keep SELECTED keep\n");
+    ibuf.select_range(&ibuf.iter_at_offset(5), &ibuf.iter_at_offset(13));
+    inserter.insert_path(&source);
+    let path_text = source.display().to_string();
+    assert_eq!(inserter.current_text(), format!("keep {path_text} keep\n"));
+    let (start, end) = ibuf.selection_bounds().unwrap();
+    assert_eq!(ibuf.text(&start, &end, true).as_str(), path_text);
+    assert!(inserter.flags.dirty.get());
+    ibuf.undo();
+    assert_eq!(inserter.current_text(), "keep SELECTED keep\n");
+
+    let insert_path_action = inserter.window.lookup_action("insert-path").unwrap();
+    assert!(insert_path_action.is_enabled());
     inserter.set_editor_text("same\n");
     inserter.set_read_only(true);
+    assert!(!insert_path_action.is_enabled());
+    inserter.insert_path(&source);
+    assert_eq!(inserter.current_text(), "same\n");
     inserter.insert_file(&source);
     assert_eq!(inserter.current_text(), "same\n");
     inserter.set_read_only(false);
+    assert!(insert_path_action.is_enabled());
 
     inserter.window.destroy();
     scaler.window.destroy();

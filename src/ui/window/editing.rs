@@ -150,6 +150,9 @@ impl AppWindow {
         add_action(window, this, "indent-halve", |this| {
             this.scale_indentation(IndentScale::Halve)
         });
+        add_action(window, this, "insert-path", |this| {
+            this.request_insert_path()
+        });
         add_action(window, this, "insert-file", |this| {
             this.request_insert_file()
         });
@@ -173,9 +176,14 @@ impl AppWindow {
     }
 
     /// Enable or disable the context-menu actions that edit the text (Scale
-    /// Indentation and Insert Text from File).
+    /// Indentation, Insert Path and Insert Text from File).
     fn set_edit_actions_enabled(&self, enabled: bool) {
-        for name in ["indent-double", "indent-halve", "insert-file"] {
+        for name in [
+            "indent-double",
+            "indent-halve",
+            "insert-path",
+            "insert-file",
+        ] {
             if let Some(action) = self
                 .window
                 .lookup_action(name)
@@ -380,6 +388,38 @@ impl AppWindow {
         true
     }
 
+    /// Insert Path: let the user pick a file, then insert its absolute path
+    /// at the cursor (see `insert_path`).
+    pub(super) fn request_insert_path(self: &Rc<Self>) {
+        if !self.can_insert_text() {
+            return;
+        }
+
+        let dialog = gtk::FileDialog::builder()
+            .title("Insert Path")
+            .modal(true)
+            .build();
+        if let Some(folder) = self
+            .path_for_snapshot()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        {
+            dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
+        }
+
+        let this = self.clone();
+        dialog.open(
+            Some(&self.window),
+            None::<&gio::Cancellable>,
+            move |result| {
+                if let Ok(file) = result
+                    && let Some(path) = file.path()
+                {
+                    this.insert_path(&path);
+                }
+            },
+        );
+    }
+
     /// Insert Text from File: let the user pick a file, then insert its whole
     /// contents at the cursor (see `insert_file`).
     pub(super) fn request_insert_file(self: &Rc<Self>) {
@@ -491,13 +531,30 @@ impl AppWindow {
         }
 
         let text = insert::match_line_endings(&loaded, &self.current_text());
+        self.flags
+            .with_inserted_line_endings(|| self.insert_text_like_paste(&text));
+        self.toast(ToastKind::Success, &format!("Inserted {name}"));
+    }
+
+    /// Insert the selected file's absolute path at the cursor. The path is
+    /// plain text: no quoting, canonicalization or file-content checks.
+    pub(super) fn insert_path(&self, path: &Path) {
+        if !self.can_insert_text() {
+            return;
+        }
+        self.insert_text_like_paste(&path.display().to_string());
+    }
+
+    /// Insert `text` like a paste as one undo step: replace the selection,
+    /// select the inserted text, scroll it onscreen and focus the editor.
+    fn insert_text_like_paste(&self, text: &str) {
         let buffer = &self.editor_buffer;
-        let insert_mark = self.flags.with_inserted_line_endings(|| {
+        let insert_mark = {
             buffer.begin_user_action();
             buffer.delete_selection(true, true);
             let insert_mark = buffer.get_insert();
             let start_offset = buffer.iter_at_mark(&insert_mark).offset();
-            buffer.insert_at_cursor(&text);
+            buffer.insert_at_cursor(text);
 
             // Resolve both ends after the edit. The insert mark follows the
             // actual insertion even when the tab filter rewrites the text.
@@ -506,10 +563,9 @@ impl AppWindow {
             buffer.select_range(&end, &start);
             buffer.end_user_action();
             insert_mark
-        });
+        };
 
         self.editor_view.scroll_mark_onscreen(&insert_mark);
         self.editor_view.grab_focus();
-        self.toast(ToastKind::Success, &format!("Inserted {name}"));
     }
 }

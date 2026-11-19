@@ -90,6 +90,11 @@ notes for details and workarounds.
 - In the Rename or Move dialog, **...** (to the right of the input field) opens a file browser (starting in the
   file's folder) to pick the new folder and name; the chosen path is filled into
   the field and nothing happens until you press **Rename**.
+- **Insert Path…** (right-click menu) inserts the absolute path of a chosen
+  file at the cursor or replaces the current selection. The inserted path stays
+  selected, and the whole edit is one undo step. The file is not read, so its
+  size and contents do not matter. This action is unavailable for read-only
+  documents and in Diff Mode.
 - **Insert Text from File…** (right-click menu) inserts the whole contents of a
   chosen file at the cursor or replaces the current selection. The inserted text
   stays selected, and the whole edit is one undo step. Tabs become spaces, a
