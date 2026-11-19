@@ -165,8 +165,7 @@ notes for details and workarounds.
   is selected).
 - **About notediff** (menu) shows everything at once: the version (a blue
   button; click it to copy the version number), a short description, the
-  initial release date, the copyright line and the no-warranty / MIT License
-  notice.
+  release date, the copyright line and the no-warranty / MIT License notice.
 - **Plain-text rendering.** Every file is shown as plain text. No language is
   attached to the editor or Diff Mode buffers, so Markdown headings, emphasis,
   code spans and list markers appear literally, and a `.rs`, `.md` or

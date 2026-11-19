@@ -4,7 +4,7 @@ All notable changes to notediff are documented here. The project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and uses semantic
 versioning.
 
-## [Unreleased]
+## [1.1.0] - 2026-11-18
 
 ### Added
 
@@ -19,6 +19,15 @@ versioning.
   hidden from the tooltip and menus.
 - The document title shows the full path in a tooltip and has a right-click menu
   with **Copy file name** and **Copy full path**.
+- A canonical file path is now open in at most one window. Opening it from
+  another window raises the existing window with **File is already open in this
+  window**, and the requesting window shows **File is already open in another
+  window**.
+- Reopening the current window's file reloads it from disk. A dirty document
+  first asks **Reload from Disk?** with **The document has unsaved changes.**
+  before discarding edits. When the disk text is identical, the editor is left
+  untouched and shows **Document is identical with its file on disk**, preserving
+  the cursor, scroll position and undo history.
 
 ### Changed
 
@@ -32,6 +41,9 @@ versioning.
   untouched; Esc still aborts the pending action.
 - Every **Save changes?** prompt, including Close Window and Quit, now reads
   **The document has unsaved changes.**
+- The Open button and document title hide their tooltips while their menus are
+  showing. Closing the title copy menu restores editor focus after Esc, an
+  outside click, or either copy action.
 
 ## [1.0.0] - 2026-11-16
 
@@ -62,5 +74,6 @@ The first public release.
 - An installer and uninstaller, desktop entry, application icon and GitHub
   Actions CI.
 
-[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/AverniteDF/notediff/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AverniteDF/notediff/releases/tag/v1.0.0

@@ -9,7 +9,7 @@ const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHOR: &str = env!("CARGO_PKG_AUTHORS");
 const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
-const RELEASE_DATE: &str = "November 16, 2026";
+const RELEASE_DATE: &str = "November 18, 2026";
 const LICENSE_NAME: &str = "MIT License";
 const LICENSE_URL: &str = "https://opensource.org/licenses/MIT";
 
@@ -43,7 +43,7 @@ pub fn present(parent: &adw::ApplicationWindow) {
          accept changes into the baseline one hunk at a time."
     ));
 
-    let released = centered_label(&format!("Initially released {RELEASE_DATE}."));
+    let released = centered_label(&format!("Released {RELEASE_DATE}."));
     released.add_css_class("dim-label");
 
     let copyright = centered_label(&format!("© 2026 {AUTHOR}"));
