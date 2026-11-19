@@ -61,6 +61,8 @@ its submodules. See `docs/development.md` for the full map.
 
 ## Release checks
 
+- Follow `docs/releasing.md` for the complete release SOP, including `gh`
+  authentication, tag creation and GitHub release publishing.
 - `cargo fmt --check`, clippy, unit tests, the smoke test and the 1.92 check are
   green.
 - Version and release date agree in `Cargo.toml`, `CHANGELOG.md` and

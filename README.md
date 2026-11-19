@@ -131,6 +131,7 @@ tooltips. New Window remains available.
   behaviour.
 - [Design](docs/design.md) — architecture, invariants and product decisions.
 - [Development](docs/development.md) — module layout, tests and CI.
+- [Releasing](docs/releasing.md) — versioning, release checks and publishing.
 - [Changelog](CHANGELOG.md)
 - [GitHub repository](https://github.com/AverniteDF/notediff)
 

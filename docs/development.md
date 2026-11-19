@@ -201,6 +201,9 @@ cargo install --locked --path . --config 'profile.release.lto="fat"' \
 a smaller local install, and a tagged release may commit the settings to
 `[profile.release]` instead.
 
+For the full versioning, verification, tagging and GitHub publishing checklist,
+see [Releasing](releasing.md).
+
 Startup is dominated by GTK and the desktop's display bridge, not by the binary
 size: a bare GTK window takes ~140 ms to appear on this ChromeOS/Sommelier
 setup, and an empty notediff window ~300 ms. The scheme files under
