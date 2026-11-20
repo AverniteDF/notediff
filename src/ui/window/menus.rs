@@ -290,12 +290,12 @@ pub(super) fn build_context_menu() -> gio::Menu {
     trim.append(Some("Leading"), Some("win.trim-leading-whitespace"));
     trim.append(Some("Trailing"), Some("win.trim-trailing-whitespace"));
     trim.append(
-        Some("Blank Lines (remove)"),
-        Some("win.trim-blank-lines-remove"),
-    );
-    trim.append(
         Some("Blank Lines (strip)"),
         Some("win.trim-blank-lines-strip"),
+    );
+    trim.append(
+        Some("Blank Lines (remove)"),
+        Some("win.trim-blank-lines-remove"),
     );
 
     let edit_section = gio::Menu::new();
@@ -459,8 +459,8 @@ mod tests {
         for (index, (label, action)) in [
             ("Leading", "win.trim-leading-whitespace"),
             ("Trailing", "win.trim-trailing-whitespace"),
-            ("Blank Lines (remove)", "win.trim-blank-lines-remove"),
             ("Blank Lines (strip)", "win.trim-blank-lines-strip"),
+            ("Blank Lines (remove)", "win.trim-blank-lines-remove"),
         ]
         .iter()
         .enumerate()

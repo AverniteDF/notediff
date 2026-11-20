@@ -157,9 +157,9 @@ notes for details and workarounds.
   - **Leading** removes the leading ASCII spaces and tabs from each target line.
   - **Trailing** removes the trailing ASCII spaces and tabs from each target
     line.
-  - **Blank Lines (remove)** deletes every blank target line.
   - **Blank Lines (strip)** keeps each blank target line but removes all ASCII
     spaces and tabs from it, leaving the line break.
+  - **Blank Lines (remove)** deletes every blank target line.
   Example toasts include `5 leading whitespace characters were removed`,
   `3 blank lines were removed`, and
   `3 blank lines were stripped of 5 whitespace characters`.
