@@ -6,16 +6,11 @@
 //! exactly as GtkTextBuffer numbers them, including the empty line after a
 //! trailing break.
 //!
-//! The two Increase variants differ only in whether truly empty lines are
-//! targets. The two Decrease variants differ in how they treat unindented
-//! lines: no-flattening requires every participating line to have at least one
-//! leading space and silently changes nothing otherwise, while
-//! allow-flattening removes a space wherever one exists and leaves unindented
-//! lines alone.
-//!
-//! Decrease (no flattening) ignores the empty line after a terminating line
-//! break, so a normal newline-terminated file does not block the operation.
-//! Other empty lines still participate.
+//! Increase adds one space to every target line, including truly empty ones.
+//! Decrease requires every participating line to have at least one leading
+//! space and silently changes nothing otherwise. It ignores the empty line
+//! after a terminating line break, so a normal newline-terminated file does not
+//! block the operation; other empty lines still participate.
 
 use std::ops::RangeInclusive;
 
@@ -24,24 +19,19 @@ use super::textlines;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndentOperation {
     IncreaseIncludeEmpty,
-    IncreaseSkipEmpty,
     DecreaseNoFlattening,
-    DecreaseAllowFlattening,
     Double,
     Halve,
 }
 
 impl IndentOperation {
-    /// Toast shown when every target line has zero indentation. The Increase
-    /// and Decrease variants never fail, so they have no message.
+    /// Toast shown when every target line has zero indentation. Increase and
+    /// Decrease never fail, so they have no message.
     pub fn nothing_message(self) -> Option<&'static str> {
         match self {
             IndentOperation::Double => Some("No indentation to double"),
             IndentOperation::Halve => Some("No indentation to halve"),
-            IndentOperation::IncreaseIncludeEmpty
-            | IndentOperation::IncreaseSkipEmpty
-            | IndentOperation::DecreaseNoFlattening
-            | IndentOperation::DecreaseAllowFlattening => None,
+            IndentOperation::IncreaseIncludeEmpty | IndentOperation::DecreaseNoFlattening => None,
         }
     }
 
@@ -49,12 +39,8 @@ impl IndentOperation {
     /// the line does not change.
     fn changed(self, old: usize) -> Option<usize> {
         match self {
-            IndentOperation::IncreaseIncludeEmpty | IndentOperation::IncreaseSkipEmpty => {
-                Some(old + 1)
-            }
-            IndentOperation::DecreaseNoFlattening | IndentOperation::DecreaseAllowFlattening => {
-                (old > 0).then(|| old - 1)
-            }
+            IndentOperation::IncreaseIncludeEmpty => Some(old + 1),
+            IndentOperation::DecreaseNoFlattening => (old > 0).then(|| old - 1),
             IndentOperation::Double => (old > 0).then_some(old * 2),
             IndentOperation::Halve => (old > 0).then_some(old / 2),
         }
@@ -102,9 +88,8 @@ pub fn leading_spaces(line: &str) -> usize {
 /// inclusive range of target lines, or `None` for the whole text. Only lines
 /// that actually change are returned.
 ///
-/// The Increase and Decrease variants never fail. Double and Halve are
-/// all-or-nothing and return `NothingToScale` or `OddIndent` without a change
-/// list.
+/// Increase and Decrease never fail. Double and Halve are all-or-nothing and
+/// return `NothingToScale` or `OddIndent` without a change list.
 pub fn plan(
     text: &str,
     operation: IndentOperation,
@@ -114,19 +99,17 @@ pub fn plan(
     let last_line = text_lines.len().saturating_sub(1);
     let ignore_terminating_line =
         operation == IndentOperation::DecreaseNoFlattening && textlines::ends_with_break(text);
-    let skip_empty = operation == IndentOperation::IncreaseSkipEmpty;
 
     let targets: Vec<(usize, usize)> = text_lines
         .into_iter()
         .enumerate()
         .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
         .filter(|(index, _)| !(ignore_terminating_line && *index == last_line))
-        .filter(|(_, line)| !skip_empty || !textlines::content(line).is_empty())
         .map(|(index, line)| (index, leading_spaces(line)))
         .collect();
 
-    // Non-flattening Decrease only works when every participating line can
-    // lose a space. It fails silently, without a toast.
+    // Decrease only works when every participating line can lose a space. It
+    // fails silently, without a toast.
     if operation == IndentOperation::DecreaseNoFlattening
         && targets.iter().any(|&(_, spaces)| spaces == 0)
     {
@@ -147,10 +130,9 @@ pub fn plan(
 
             Ok(changes(targets, operation))
         }
-        IndentOperation::IncreaseIncludeEmpty
-        | IndentOperation::IncreaseSkipEmpty
-        | IndentOperation::DecreaseNoFlattening
-        | IndentOperation::DecreaseAllowFlattening => Ok(changes(targets, operation)),
+        IndentOperation::IncreaseIncludeEmpty | IndentOperation::DecreaseNoFlattening => {
+            Ok(changes(targets, operation))
+        }
     }
 }
 
@@ -208,19 +190,6 @@ mod tests {
         assert_eq!(
             run("a\n  b", IndentOperation::IncreaseIncludeEmpty, None),
             " a\n   b"
-        );
-    }
-
-    #[test]
-    fn increase_skip_empty_leaves_truly_empty_lines_alone() {
-        assert_eq!(
-            run("  a\n\n  b\n", IndentOperation::IncreaseSkipEmpty, None),
-            "   a\n\n   b\n"
-        );
-        // Whitespace-only lines are not empty and still count.
-        assert_eq!(
-            run("a\n   \n", IndentOperation::IncreaseSkipEmpty, None),
-            " a\n    \n"
         );
     }
 
@@ -299,49 +268,9 @@ mod tests {
     }
 
     #[test]
-    fn flattening_decrease_removes_a_space_where_one_exists() {
-        assert_eq!(
-            run(" a\n   b\n", IndentOperation::DecreaseAllowFlattening, None),
-            "a\n  b\n"
-        );
-        assert_eq!(
-            run("a\n  b\n", IndentOperation::DecreaseAllowFlattening, None),
-            "a\n b\n"
-        );
-        assert_eq!(
-            run(
-                " a\n\n  b\n",
-                IndentOperation::DecreaseAllowFlattening,
-                None
-            ),
-            "a\n\n b\n"
-        );
-    }
-
-    #[test]
-    fn decrease_allow_flattening_is_a_silent_no_op_when_nothing_can_be_removed() {
-        assert_eq!(
-            plan("a\nb\n", IndentOperation::DecreaseAllowFlattening, None),
-            Ok(Vec::new())
-        );
-    }
-
-    #[test]
     fn increase_never_fails() {
         assert_eq!(
-            plan("", IndentOperation::IncreaseSkipEmpty, None),
-            Ok(Vec::new())
-        );
-        assert_eq!(
             plan("", IndentOperation::IncreaseIncludeEmpty, None),
-            Ok(vec![IndentChange {
-                line: 0,
-                old: 0,
-                new: 1
-            }])
-        );
-        assert_eq!(
-            plan("a\n", IndentOperation::IncreaseSkipEmpty, None),
             Ok(vec![IndentChange {
                 line: 0,
                 old: 0,

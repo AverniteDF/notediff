@@ -277,27 +277,10 @@ pub(super) fn build_mode_menu() -> gio::Menu {
 /// Extra entries for the editor's right-click menu.
 pub(super) fn build_context_menu() -> gio::Menu {
     let indentation = gio::Menu::new();
-    indentation.append(
-        Some("Increase (skip empty lines)"),
-        Some("win.indent-increase-skip-empty"),
-    );
-    indentation.append(
-        Some("Decrease (allow flattening)"),
-        Some("win.indent-decrease-allow-flattening"),
-    );
-    indentation.append(
-        Some("Increase (include empty lines)"),
-        Some("win.indent-increase-include-empty"),
-    );
-    indentation.append(
-        Some("Decrease (no flattening)"),
-        Some("win.indent-decrease-no-flattening"),
-    );
-
-    let scaling = gio::Menu::new();
-    scaling.append(Some("Double"), Some("win.indent-double"));
-    scaling.append(Some("Halve"), Some("win.indent-halve"));
-    indentation.append_section(None, &scaling);
+    indentation.append(Some("Increase"), Some("win.indent-increase-include-empty"));
+    indentation.append(Some("Decrease"), Some("win.indent-decrease-no-flattening"));
+    indentation.append(Some("Double"), Some("win.indent-double"));
+    indentation.append(Some("Halve"), Some("win.indent-halve"));
 
     let path = gio::Menu::new();
     path.append(Some("File…"), Some("win.insert-path"));
@@ -331,14 +314,6 @@ pub(super) fn install_accels(app: &adw::Application) {
     app.set_accels_for_action("win.find", &["<Ctrl>f"]);
     app.set_accels_for_action("win.replace", &["<Ctrl>h"]);
     app.set_accels_for_action("win.goto-line", &["<Ctrl>g"]);
-    app.set_accels_for_action(
-        "win.indent-increase-skip-empty",
-        &["<Control><Alt>bracketright"],
-    );
-    app.set_accels_for_action(
-        "win.indent-decrease-allow-flattening",
-        &["<Control><Alt>bracketleft"],
-    );
     app.set_accels_for_action(
         "win.indent-increase-include-empty",
         &["<Control>bracketright"],
@@ -442,25 +417,12 @@ mod tests {
         );
         let indentation = edit_section.item_link(0, gio::MENU_LINK_SUBMENU).unwrap();
 
-        // Four one-space operations, then the scaling operations in a section.
-        assert_eq!(indentation.n_items(), 5);
+        assert_eq!(indentation.n_items(), 4);
         for (index, (label, action)) in [
-            (
-                "Increase (skip empty lines)",
-                "win.indent-increase-skip-empty",
-            ),
-            (
-                "Decrease (allow flattening)",
-                "win.indent-decrease-allow-flattening",
-            ),
-            (
-                "Increase (include empty lines)",
-                "win.indent-increase-include-empty",
-            ),
-            (
-                "Decrease (no flattening)",
-                "win.indent-decrease-no-flattening",
-            ),
+            ("Increase", "win.indent-increase-include-empty"),
+            ("Decrease", "win.indent-decrease-no-flattening"),
+            ("Double", "win.indent-double"),
+            ("Halve", "win.indent-halve"),
         ]
         .iter()
         .enumerate()
@@ -472,26 +434,6 @@ mod tests {
             );
             assert_eq!(
                 attribute(&indentation, index, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
-                Some(*action)
-            );
-        }
-
-        let scaling = indentation.item_link(4, gio::MENU_LINK_SECTION).unwrap();
-        assert_eq!(scaling.n_items(), 2);
-        for (index, (label, action)) in [
-            ("Double", "win.indent-double"),
-            ("Halve", "win.indent-halve"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            let index = index as i32;
-            assert_eq!(
-                attribute(&scaling, index, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-                Some(*label)
-            );
-            assert_eq!(
-                attribute(&scaling, index, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
                 Some(*action)
             );
         }

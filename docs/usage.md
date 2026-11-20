@@ -130,14 +130,10 @@ notes for details and workarounds.
   selected. Only ASCII spaces count as indentation. Each operation is one undo
   step, keeps line breaks untouched, and is unavailable for read-only documents
   and in Diff Mode.
-  - **Increase (skip empty lines)** (**Ctrl+Alt+]**) adds one space to every
-    target line except truly empty lines. Whitespace-only lines still count.
-  - **Decrease (allow flattening)** (**Ctrl+Alt+[**) removes one space from each
-    target line that has one, leaving unindented lines unchanged.
-  - **Increase (include empty lines)** (**Ctrl+]**) adds one space to every
-    target line, including truly empty ones.
-  - **Decrease (no flattening)** (**Ctrl+[**) removes one space from every
-    target line only when every target line has at least one leading space;
+  - **Increase** (**Ctrl+]**) adds one space to every target line, including
+    truly empty ones.
+  - **Decrease** (**Ctrl+[**) removes one space from every target line only
+    when every target line has at least one leading space;
     otherwise it changes nothing and shows no message. The empty line after a
     file's terminating line break is ignored, but other empty lines still
     participate.

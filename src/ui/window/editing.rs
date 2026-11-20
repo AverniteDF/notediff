@@ -153,12 +153,6 @@ impl AppWindow {
         add_action(window, this, "convert-eol-lf", |this| {
             this.convert_line_endings(LineEnding::Lf)
         });
-        add_action(window, this, "indent-increase-skip-empty", |this| {
-            this.edit_indentation(IndentOperation::IncreaseSkipEmpty)
-        });
-        add_action(window, this, "indent-decrease-allow-flattening", |this| {
-            this.edit_indentation(IndentOperation::DecreaseAllowFlattening)
-        });
         add_action(window, this, "indent-increase-include-empty", |this| {
             this.edit_indentation(IndentOperation::IncreaseIncludeEmpty)
         });
@@ -215,8 +209,6 @@ impl AppWindow {
     /// (the indentation operations, Insert Path and Add Text from File).
     fn set_edit_actions_enabled(&self, enabled: bool) {
         for name in [
-            "indent-increase-skip-empty",
-            "indent-decrease-allow-flattening",
             "indent-increase-include-empty",
             "indent-decrease-no-flattening",
             "indent-double",

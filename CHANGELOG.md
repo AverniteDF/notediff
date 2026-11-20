@@ -13,12 +13,8 @@ versioning.
   Clicking a yellow dot selects the next trailing-whitespace run and wraps at
   the end of the document.
 - The editor context menu now has an **Edit Indentation** submenu at the
-  bottom, below a separator, with **Increase (skip empty lines)** (Ctrl+Alt+]),
-  **Decrease (allow flattening)** (Ctrl+Alt+[),
-  **Increase (include empty lines)** (Ctrl+]),
-  **Decrease (no flattening)** (Ctrl+[), **Double** (Ctrl+Shift+]) and
-  **Halve** (Ctrl+Shift+[). **Double** and **Halve** sit below their own
-  separator.
+  bottom, below a separator, with **Increase** (Ctrl+]), **Decrease** (Ctrl+[),
+  **Double** (Ctrl+Shift+]) and **Halve** (Ctrl+Shift+[).
 - The editor context menu now has an **Insert Path** submenu with **File…** and
   **Directory…**, plus a top-level **Add Text from File…** item, which insert a
   path or a file's text like a paste without reading path targets.
