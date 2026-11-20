@@ -187,7 +187,7 @@ fn gtk_window_smoke() {
     crate::ui::app_dialog::snapshots_tab::link_buttons_smoke(&store, &dir);
     transient_focus_scenario(&app, &store);
     context_menu_focus_scenario(&app, &store);
-    trim_trailing_whitespace_scenario(&app, &store);
+    trim_whitespace_scenario(&app, &store);
     gutter_selection_scenario(&app, store.clone());
     editing_scenario(&app, &dir, &store);
     indentation_scenario(&app, &dir, &store);
@@ -848,6 +848,24 @@ fn editor_context_menu(view: &sourceview5::View) -> Option<gtk::PopoverMenu> {
     None
 }
 
+fn context_menu_model_button(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+    let mut widgets = vec![root.clone()];
+    while let Some(widget) = widgets.pop() {
+        if widget.is_mapped()
+            && widget.type_().name() == "GtkModelButton"
+            && widget.property::<String>("text") == text
+        {
+            return Some(widget);
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            widgets.push(widget);
+        }
+    }
+    None
+}
+
 fn open_editor_context_menu(window: &AppWindow) {
     assert!(
         window
@@ -1021,38 +1039,87 @@ fn context_menu_focus_scenario(app: &adw::Application, store: &SnapshotStore) {
     window.window.destroy();
 }
 
-fn trim_trailing_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
+fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     let window = AppWindow::with_store(app, store.clone());
     window.window.present();
     wait_for(|| window.window.is_mapped());
     let buffer = window.editor_buffer.clone();
-    let trim = window
+    let leading = window
+        .window
+        .lookup_action("trim-leading-whitespace")
+        .unwrap();
+    let trailing = window
         .window
         .lookup_action("trim-trailing-whitespace")
         .unwrap();
+    let submenu = window.window.lookup_action("trim-whitespace-menu").unwrap();
 
-    // A clean document disables the context-menu item.
+    // A clean document disables both items and the submenu heading.
     window.set_editor_text("a\nb\n");
     open_editor_context_menu(&window);
-    assert!(!trim.is_enabled());
+    assert!(!leading.is_enabled());
+    assert!(!trailing.is_enabled());
+    assert!(!submenu.is_enabled());
+    let context = editor_context_menu(&window.editor_view).unwrap();
+    assert!(
+        !context_menu_model_button(context.upcast_ref(), "Trim Whitespace")
+            .unwrap()
+            .is_sensitive()
+    );
     close_editor_context_menu(&window);
 
-    // Whole-document trim, success toast and one undo step.
-    window.set_editor_text("a \n b \n");
+    // Whole-document leading trim, success toast and one undo step.
+    window.set_editor_text(" a\n  b\n");
     open_editor_context_menu(&window);
-    assert!(trim.is_enabled());
+    assert!(leading.is_enabled());
+    assert!(!trailing.is_enabled());
+    assert!(submenu.is_enabled());
+    let context = editor_context_menu(&window.editor_view).unwrap();
+    assert!(
+        context_menu_model_button(context.upcast_ref(), "Trim Whitespace")
+            .unwrap()
+            .is_sensitive()
+    );
     close_editor_context_menu(&window);
-    trim.activate(None);
-    assert_eq!(window.current_text(), "a\n b\n");
+    leading.activate(None);
+    assert_eq!(window.current_text(), "a\nb\n");
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "3 leading whitespace characters were removed",
+    );
+    buffer.undo();
+    assert_eq!(window.current_text(), " a\n  b\n");
+
+    // Whole-document trailing trim, success toast and one undo step.
+    window.set_editor_text("a \nb \n");
+    open_editor_context_menu(&window);
+    assert!(!leading.is_enabled());
+    assert!(trailing.is_enabled());
+    assert!(submenu.is_enabled());
+    close_editor_context_menu(&window);
+    trailing.activate(None);
+    assert_eq!(window.current_text(), "a\nb\n");
     assert_toast(
         &window,
         ToastKind::Success,
         "2 trailing whitespace characters were removed",
     );
     buffer.undo();
-    assert_eq!(window.current_text(), "a \n b \n");
+    assert_eq!(window.current_text(), "a \nb \n");
 
-    // Singular wording.
+    // Singular wording for each side.
+    window.set_editor_text(" a\n");
+    window.trim_leading_whitespace();
+    assert_eq!(window.current_text(), "a\n");
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "1 leading whitespace character was removed",
+    );
+    buffer.undo();
+    assert_eq!(window.current_text(), " a\n");
+
     window.set_editor_text("a \n");
     window.trim_trailing_whitespace();
     assert_eq!(window.current_text(), "a\n");
@@ -1064,31 +1131,63 @@ fn trim_trailing_whitespace_scenario(app: &adw::Application, store: &SnapshotSto
     buffer.undo();
     assert_eq!(window.current_text(), "a \n");
 
-    // A selection limits the target lines.
-    window.set_editor_text("a \nb \nc \n");
+    // A selection limits the target lines for both sides.
+    window.set_editor_text(" a \n b \n c \n");
     buffer.select_range(
         &buffer.iter_at_line(0).unwrap(),
         &buffer.iter_at_line(1).unwrap(),
     );
     open_editor_context_menu(&window);
-    assert!(trim.is_enabled());
+    assert!(leading.is_enabled());
+    assert!(trailing.is_enabled());
+    assert!(submenu.is_enabled());
     close_editor_context_menu(&window);
-    trim.activate(None);
-    assert_eq!(window.current_text(), "a\nb \nc \n");
+    leading.activate(None);
+    assert_eq!(window.current_text(), "a \n b \n c \n");
+    buffer.undo();
+    assert_eq!(window.current_text(), " a \n b \n c \n");
 
-    // A clean selection disables Trim even though other lines have whitespace.
+    buffer.select_range(
+        &buffer.iter_at_line(0).unwrap(),
+        &buffer.iter_at_line(1).unwrap(),
+    );
+    open_editor_context_menu(&window);
+    close_editor_context_menu(&window);
+    trailing.activate(None);
+    assert_eq!(window.current_text(), " a\n b \n c \n");
+
+    // Trailing-only selection keeps the submenu enabled.
+    window.set_editor_text("a \nb\nc \n");
+    buffer.select_range(
+        &buffer.iter_at_line(0).unwrap(),
+        &buffer.iter_at_line(1).unwrap(),
+    );
+    open_editor_context_menu(&window);
+    assert!(!leading.is_enabled());
+    assert!(trailing.is_enabled());
+    assert!(submenu.is_enabled());
+    close_editor_context_menu(&window);
+
+    // A selection with neither side disables both items and the heading.
     window.set_editor_text("a \nb\nc \n");
     buffer.select_range(
         &buffer.iter_at_line(1).unwrap(),
         &buffer.iter_at_line(2).unwrap(),
     );
-    assert!(buffer.selection_bounds().is_some());
     open_editor_context_menu(&window);
-    assert!(!trim.is_enabled());
+    assert!(!leading.is_enabled());
+    assert!(!trailing.is_enabled());
+    assert!(!submenu.is_enabled());
     close_editor_context_menu(&window);
 
-    // Direct invocation still reports the no-op. Restore the selection because
-    // closing a programmatically opened popup may move focus.
+    // Direct invocation still reports each no-op. Restore the selection
+    // because closing a programmatically opened popup may move focus.
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    window.trim_leading_whitespace();
+    assert_toast(&window, ToastKind::Info, "No leading whitespace to remove");
     buffer.select_range(
         &buffer.iter_at_line(1).unwrap(),
         &buffer.iter_at_line(2).unwrap(),
@@ -1097,20 +1196,24 @@ fn trim_trailing_whitespace_scenario(app: &adw::Application, store: &SnapshotSto
     assert_eq!(window.current_text(), "a \nb\nc \n");
     assert_toast(&window, ToastKind::Info, "No trailing whitespace to remove");
 
-    // Read-only disables the action and the operation does nothing.
-    window.set_editor_text("a \n");
+    // Read-only disables both actions and the heading, and does nothing.
+    window.set_editor_text(" a \n");
     window.set_read_only(true);
     open_editor_context_menu(&window);
-    assert!(!trim.is_enabled());
+    assert!(!leading.is_enabled());
+    assert!(!trailing.is_enabled());
+    assert!(!submenu.is_enabled());
     close_editor_context_menu(&window);
+    window.trim_leading_whitespace();
     window.trim_trailing_whitespace();
-    assert_eq!(window.current_text(), "a \n");
+    assert_eq!(window.current_text(), " a \n");
     window.set_read_only(false);
 
     // Diff Mode does nothing.
     window.stack.set_visible_child_name("diff");
+    window.trim_leading_whitespace();
     window.trim_trailing_whitespace();
-    assert_eq!(window.current_text(), "a \n");
+    assert_eq!(window.current_text(), " a \n");
     window.stack.set_visible_child_name("editor");
 
     window.window.destroy();

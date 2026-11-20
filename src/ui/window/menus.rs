@@ -303,12 +303,15 @@ pub(super) fn build_context_menu() -> gio::Menu {
     path.append(Some("File…"), Some("win.insert-path"));
     path.append(Some("Directory…"), Some("win.insert-folder-path"));
 
+    let trim = gio::Menu::new();
+    trim.append(Some("Leading"), Some("win.trim-leading-whitespace"));
+    trim.append(Some("Trailing"), Some("win.trim-trailing-whitespace"));
+
     let edit_section = gio::Menu::new();
     edit_section.append_submenu(Some("Edit Indentation"), &indentation);
-    edit_section.append(
-        Some("Trim Trailing Whitespace"),
-        Some("win.trim-trailing-whitespace"),
-    );
+    let trim_item = gio::MenuItem::new_submenu(Some("Trim Whitespace"), &trim);
+    trim_item.set_action_and_target_value(Some("win.trim-whitespace-menu"), None);
+    edit_section.append_item(&trim_item);
 
     let menu = gio::Menu::new();
     menu.append_submenu(Some("Insert Path"), &path);
@@ -430,7 +433,7 @@ mod tests {
             Some("win.insert-file")
         );
 
-        // The bottom section has Edit Indentation, then Trim Trailing Whitespace.
+        // The bottom section has Edit Indentation, then Trim Whitespace.
         let edit_section = menu.item_link(2, gio::MENU_LINK_SECTION).unwrap();
         assert_eq!(edit_section.n_items(), 2);
         assert_eq!(
@@ -495,12 +498,31 @@ mod tests {
 
         assert_eq!(
             attribute(&edit_section, 1, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
-            Some("Trim Trailing Whitespace")
+            Some("Trim Whitespace")
         );
         assert_eq!(
             attribute(&edit_section, 1, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
-            Some("win.trim-trailing-whitespace")
+            Some("win.trim-whitespace-menu")
         );
+        let trim = edit_section.item_link(1, gio::MENU_LINK_SUBMENU).unwrap();
+        assert_eq!(trim.n_items(), 2);
+        for (index, (label, action)) in [
+            ("Leading", "win.trim-leading-whitespace"),
+            ("Trailing", "win.trim-trailing-whitespace"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let index = index as i32;
+            assert_eq!(
+                attribute(&trim, index, gio::MENU_ATTRIBUTE_LABEL).as_deref(),
+                Some(*label)
+            );
+            assert_eq!(
+                attribute(&trim, index, gio::MENU_ATTRIBUTE_ACTION).as_deref(),
+                Some(*action)
+            );
+        }
     }
 
     #[test]

@@ -40,8 +40,8 @@ src/
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
     indent.rs           indentation editing: increase with or without empty
                         lines, strict or flattening decrease, double and halve
-    whitespace.rs       trailing ASCII space/tab detection, the next wrapped
-                        trailing run, and per-line trim plans
+    whitespace.rs       leading/trailing ASCII space/tab detection, the next
+                        wrapped trailing run, and leading/trailing trim plans
     inline.rs           byte-exact word, line-ending and fallback change units,
                         with the same diff deadline as `diff.rs`
     insert.rs           preparing a file's text for insertion: size limits,
@@ -129,7 +129,7 @@ cargo test
 One ignored UI smoke test runs the editing, file-action and Diff Mode
 scenarios on the same GTK thread with a temporary snapshot store. It covers
 tab handling, read-only mode, Find/Replace, EOL conversion, all six indentation
-operations, the trailing-whitespace dot, find and trim, Word Wrap,
+operations, the trailing-whitespace dot, find, leading and trailing trim, Word Wrap,
 the Insert Path submenu and Add Text from File insertion with selection,
 baseline moves, links and copies, and the Diff
 Mode accept, undo and confirm flow. It exercises inline inspection keys, selection

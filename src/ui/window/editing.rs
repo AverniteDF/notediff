@@ -22,6 +22,12 @@ use crate::ui::toast::ToastKind;
 
 use super::{AppWindow, add_action};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrimSide {
+    Leading,
+    Trailing,
+}
+
 impl AppWindow {
     /// Connect the editing signals and actions. Called once from
     /// `connect_signals`; every handler holds the window weakly.
@@ -168,9 +174,14 @@ impl AppWindow {
         add_action(window, this, "find-next-trailing-whitespace", |this| {
             this.find_next_trailing_whitespace()
         });
+        add_action(window, this, "trim-leading-whitespace", |this| {
+            this.trim_leading_whitespace()
+        });
         add_action(window, this, "trim-trailing-whitespace", |this| {
             this.trim_trailing_whitespace()
         });
+        // Sensitivity-only action for the Trim Whitespace submenu heading.
+        add_action(window, this, "trim-whitespace-menu", |_| {});
 
         add_action(window, this, "insert-path", |this| {
             this.request_insert_path()
@@ -210,7 +221,9 @@ impl AppWindow {
             "indent-decrease-no-flattening",
             "indent-double",
             "indent-halve",
+            "trim-leading-whitespace",
             "trim-trailing-whitespace",
+            "trim-whitespace-menu",
             "insert-path",
             "insert-folder-path",
             "insert-file",
@@ -412,18 +425,37 @@ impl AppWindow {
             .map(|selection| selection.line_range())
     }
 
+    /// Remove leading ASCII spaces and tabs from the target lines. The edit is
+    /// one undo step and reports the number of removed characters. Does
+    /// nothing in Diff Mode or for read-only documents.
+    pub(super) fn trim_leading_whitespace(&self) {
+        self.trim_whitespace(TrimSide::Leading);
+    }
+
     /// Remove trailing ASCII spaces and tabs from the target lines. The edit is
     /// one undo step and reports the number of removed characters. Does
     /// nothing in Diff Mode or for read-only documents.
     pub(super) fn trim_trailing_whitespace(&self) {
+        self.trim_whitespace(TrimSide::Trailing);
+    }
+
+    fn trim_whitespace(&self, side: TrimSide) {
         if self.diff_active() || self.flags.read_only.get() {
             return;
         }
 
         let text = self.current_text();
-        let changes = whitespace::trim_plan(&text, self.target_lines(&text));
+        let lines = self.target_lines(&text);
+        let changes = match side {
+            TrimSide::Leading => whitespace::trim_leading_plan(&text, lines),
+            TrimSide::Trailing => whitespace::trim_trailing_plan(&text, lines),
+        };
         if changes.is_empty() {
-            self.toast(ToastKind::Info, "No trailing whitespace to remove");
+            let message = match side {
+                TrimSide::Leading => "No leading whitespace to remove",
+                TrimSide::Trailing => "No trailing whitespace to remove",
+            };
+            self.toast(ToastKind::Info, message);
             return;
         }
         let removed: usize = changes.iter().map(|change| change.len).sum();
@@ -442,11 +474,15 @@ impl AppWindow {
         }
         buffer.end_user_action();
 
+        let side_name = match side {
+            TrimSide::Leading => "leading",
+            TrimSide::Trailing => "trailing",
+        };
         let message = if removed == 1 {
-            "1 trailing whitespace character was removed".to_string()
+            format!("1 {side_name} whitespace character was removed")
         } else {
             format!(
-                "{} trailing whitespace characters were removed",
+                "{} {side_name} whitespace characters were removed",
                 textstats::format_thousands(removed)
             )
         };
@@ -457,24 +493,40 @@ impl AppWindow {
     /// selection. Called when the editor context menu is about to open.
     pub(super) fn update_context_menu_actions(&self) {
         let selected = self.selection_offsets();
-        let has_trailing = self.status_state.measure(
+        let (has_leading, has_trailing) = self.status_state.measure(
             || self.buffer_text(),
             |text, stats| match selected {
-                Some((start, end)) => {
-                    textstats::selection_stats(text, start, end).is_some_and(|selection| {
-                        whitespace::has_trailing_in(text, Some(selection.line_range()))
-                    })
-                }
-                None => stats.has_trailing_whitespace,
+                Some((start, end)) => textstats::selection_stats(text, start, end).map_or(
+                    (false, false),
+                    |selection| {
+                        let lines = selection.line_range();
+                        (
+                            whitespace::has_leading_in(text, Some(lines.clone())),
+                            whitespace::has_trailing_in(text, Some(lines)),
+                        )
+                    },
+                ),
+                None => (
+                    whitespace::has_leading_in(text, None),
+                    stats.has_trailing_whitespace,
+                ),
             },
         );
-        let enabled = has_trailing && !self.diff_active() && !self.flags.read_only.get();
-        if let Some(action) = self
-            .window
-            .lookup_action("trim-trailing-whitespace")
-            .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-        {
-            action.set_enabled(enabled);
+        let editable = !self.diff_active() && !self.flags.read_only.get();
+        let leading = has_leading && editable;
+        let trailing = has_trailing && editable;
+        for (name, enabled) in [
+            ("trim-leading-whitespace", leading),
+            ("trim-trailing-whitespace", trailing),
+            ("trim-whitespace-menu", leading || trailing),
+        ] {
+            if let Some(action) = self
+                .window
+                .lookup_action(name)
+                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+            {
+                action.set_enabled(enabled);
+            }
         }
     }
 

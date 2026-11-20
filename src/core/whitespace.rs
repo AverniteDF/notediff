@@ -1,9 +1,10 @@
-//! Trailing-whitespace detection, free of any toolkit types.
+//! Leading and trailing whitespace detection and trimming, free of any
+//! toolkit types.
 //!
-//! Trailing whitespace means ASCII spaces and tabs at the end of a line's
-//! content, before its line terminator. Lines use the GTK line model from
-//! `textlines`, so `\r\n`, a lone `\r` and U+2029 PARAGRAPH SEPARATOR are
-//! terminators. A whitespace-only line counts; a truly empty line does not.
+//! Whitespace means ASCII spaces and tabs at the start or end of a line's
+//! content. Lines use the GTK line model from `textlines`, so `\r\n`, a lone
+//! `\r` and U+2029 PARAGRAPH SEPARATOR are terminators. A whitespace-only line
+//! counts; a truly empty line does not.
 
 use std::ops::{Range, RangeInclusive};
 
@@ -35,8 +36,18 @@ pub fn has_trailing_in(text: &str, lines: Option<RangeInclusive<usize>>) -> bool
         .any(|(_, line)| trailing_len(textlines::content(line)) > 0)
 }
 
-/// One line whose trailing-whitespace run is removed. `line` is 0-based;
-/// `start` and `len` are character offsets and counts.
+/// True when any line in `lines` (0-based, inclusive) begins with ASCII spaces
+/// or tabs. `None` checks the whole text.
+pub fn has_leading_in(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
+    textlines::split_all(text)
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .any(|(_, line)| leading_len(textlines::content(line)) > 0)
+}
+
+/// One line whose leading- or trailing-whitespace run is removed. `line` is
+/// 0-based; `start` and `len` are character offsets and counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrimChange {
     pub line: usize,
@@ -44,9 +55,30 @@ pub struct TrimChange {
     pub len: usize,
 }
 
+/// Leading-whitespace removals for `lines` (0-based, inclusive), or for the
+/// whole text when `None`. Only lines that change are returned.
+pub fn trim_leading_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<TrimChange> {
+    textlines::split_all(text)
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .filter_map(|(line, text)| {
+            let len = leading_len(textlines::content(text));
+            if len == 0 {
+                return None;
+            }
+            Some(TrimChange {
+                line,
+                start: 0,
+                len,
+            })
+        })
+        .collect()
+}
+
 /// Trailing-whitespace removals for `lines` (0-based, inclusive), or for the
 /// whole text when `None`. Only lines that change are returned.
-pub fn trim_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<TrimChange> {
+pub fn trim_trailing_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<TrimChange> {
     textlines::split_all(text)
         .into_iter()
         .enumerate()
@@ -96,6 +128,12 @@ pub fn next_trailing(text: &str, from_char: usize) -> Option<Range<usize>> {
     first
 }
 
+/// Byte length of the run of ASCII spaces and tabs at the start of `content`.
+/// Spaces and tabs are one byte each, so this is also the length in characters.
+fn leading_len(content: &str) -> usize {
+    content.len() - content.trim_start_matches([' ', '\t']).len()
+}
+
 /// Byte length of the run of ASCII spaces and tabs at the end of `content`.
 /// Spaces and tabs are one byte each, so this is also the length in characters.
 fn trailing_len(content: &str) -> usize {
@@ -141,9 +179,90 @@ mod tests {
     }
 
     #[test]
+    fn line_limited_leading_detection_follows_the_selection() {
+        let text = " a\nb\n\tc\n";
+        assert!(has_leading_in(text, None));
+        assert!(has_leading_in(text, Some(0..=0)));
+        assert!(!has_leading_in(text, Some(1..=1)));
+        assert!(has_leading_in(text, Some(2..=2)));
+        assert!(!has_leading_in("a\nb\n", None));
+    }
+
+    #[test]
+    fn trim_leading_plan_reports_every_leading_run() {
+        assert_eq!(
+            trim_leading_plan(" a\n\tb\t\nc\n", None),
+            vec![
+                TrimChange {
+                    line: 0,
+                    start: 0,
+                    len: 1
+                },
+                TrimChange {
+                    line: 1,
+                    start: 0,
+                    len: 1
+                },
+            ]
+        );
+        assert_eq!(
+            trim_leading_plan(" a\n\tb\t\nc\n", Some(1..=1)),
+            vec![TrimChange {
+                line: 1,
+                start: 0,
+                len: 1
+            }]
+        );
+        assert!(trim_leading_plan("a\nb\n", None).is_empty());
+    }
+
+    #[test]
+    fn trim_leading_plan_handles_whitespace_only_unicode_and_breaks() {
+        assert_eq!(
+            trim_leading_plan("   \n", None),
+            vec![TrimChange {
+                line: 0,
+                start: 0,
+                len: 3
+            }]
+        );
+        assert_eq!(
+            trim_leading_plan(" \té\r\n", None),
+            vec![TrimChange {
+                line: 0,
+                start: 0,
+                len: 2
+            }]
+        );
+        assert_eq!(
+            trim_leading_plan("\t\r", None),
+            vec![TrimChange {
+                line: 0,
+                start: 0,
+                len: 1
+            }]
+        );
+        assert_eq!(
+            trim_leading_plan(" x\u{2029}\ty\u{2029}", None),
+            vec![
+                TrimChange {
+                    line: 0,
+                    start: 0,
+                    len: 1
+                },
+                TrimChange {
+                    line: 1,
+                    start: 0,
+                    len: 1
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn trim_plan_reports_every_trailing_run() {
         assert_eq!(
-            trim_plan("a \n b\t\nc\n", None),
+            trim_trailing_plan("a \n b\t\nc\n", None),
             vec![
                 TrimChange {
                     line: 0,
@@ -158,20 +277,20 @@ mod tests {
             ]
         );
         assert_eq!(
-            trim_plan("a \n b\t\nc\n", Some(1..=1)),
+            trim_trailing_plan("a \n b\t\nc\n", Some(1..=1)),
             vec![TrimChange {
                 line: 1,
                 start: 2,
                 len: 1
             }]
         );
-        assert!(trim_plan("a\nb\n", None).is_empty());
+        assert!(trim_trailing_plan("a\nb\n", None).is_empty());
     }
 
     #[test]
     fn trim_plan_handles_whitespace_only_unicode_and_breaks() {
         assert_eq!(
-            trim_plan("   \n", None),
+            trim_trailing_plan("   \n", None),
             vec![TrimChange {
                 line: 0,
                 start: 0,
@@ -179,7 +298,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            trim_plan("é \r\n", None),
+            trim_trailing_plan("é \r\n", None),
             vec![TrimChange {
                 line: 0,
                 start: 1,
@@ -187,7 +306,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            trim_plan("\t\r", None),
+            trim_trailing_plan("\t\r", None),
             vec![TrimChange {
                 line: 0,
                 start: 0,
@@ -195,7 +314,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            trim_plan("x \u{2029}y\t\u{2029}", None),
+            trim_trailing_plan("x \u{2029}y\t\u{2029}", None),
             vec![
                 TrimChange {
                     line: 0,
