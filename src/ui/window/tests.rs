@@ -341,12 +341,14 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
     // Keyboard activation can focus the button without losing the source pane.
     copy.grab_focus();
     copy.emit_clicked();
+    assert_eq!(copy.icon_name().as_deref(), Some("object-select-symbolic"));
     assert_eq!(clipboard_text(&window), "γδ");
     assert_toast(
         &window,
         ToastKind::Success,
         "Copied 2 characters to clipboard",
     );
+    wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
     assert_eq!(
         window
             .editor_buffer
@@ -356,11 +358,46 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
     );
     assert!(!window.flags.dirty.get());
 
+    // Copying the title path uses the same checkmark feedback.
+    window.copy_file_name();
+    assert_eq!(copy.icon_name().as_deref(), Some("object-select-symbolic"));
+    assert_eq!(clipboard_text(&window), "clipboard.txt");
+    assert_toast(&window, ToastKind::Success, "Copied file name");
+    wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
+
+    // Outside Diff Mode an empty editor selection selects and copies the whole
+    // document, leaving it selected so the copied range is visible.
+    select(&window.editor_view, 0, 0);
+    // Let the queued focus move settle before the button runs; otherwise the
+    // focus change can clear the selection the button installs.
+    wait_for(|| window.editor_view.is_focus());
+    copy.emit_clicked();
+    assert_eq!(copy.icon_name().as_deref(), Some("object-select-symbolic"));
+    assert_eq!(clipboard_text(&window), "changed γδ\nsecond line\n");
+    assert_eq!(
+        window
+            .editor_buffer
+            .selection_bounds()
+            .map(|(a, b)| (a.offset(), b.offset())),
+        Some((0, 23))
+    );
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "Copied 23 characters (2 lines) to clipboard",
+    );
+
+    wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
+    // An empty document selects nothing, so the warning, clipboard and icon
+    // stay as they are.
+    window.set_editor_text("");
     select(&window.editor_view, 0, 0);
     window.window.clipboard().set_text("keep me");
     copy.emit_clicked();
     assert_toast(&window, ToastKind::Warning, "No selected text to copy!");
     assert_eq!(clipboard_text(&window), "keep me");
+    assert_eq!(copy.icon_name().as_deref(), Some("edit-copy-symbolic"));
+    window.set_editor_text("changed γδ\nsecond line\n");
 
     select(&window.editor_view, 0, 1);
     copy.emit_clicked();
@@ -401,6 +438,16 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
         ToastKind::Success,
         "Copied 2 characters to clipboard",
     );
+    // Read-only editors still select all when nothing is selected.
+    select(&window.editor_view, 0, 0);
+    copy.emit_clicked();
+    assert_eq!(clipboard_text(&window), "changed γδ\nsecond line\n");
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "Copied 23 characters (2 lines) to clipboard",
+    );
+    select(&window.editor_view, 8, 10);
     window.set_read_only(false);
     assert!(
         window
@@ -408,13 +455,16 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
             .title()
             .is_none_or(|title| !title.contains("(Read-Only)"))
     );
+    wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
     window.last_toast.take();
     window.editor_view.emit_by_name::<()>("copy-clipboard", &[]);
+    assert_eq!(copy.icon_name().as_deref(), Some("object-select-symbolic"));
     assert_eq!(clipboard_text(&window), "γδ");
     assert!(
         window.last_toast.borrow().is_none(),
         "native Ctrl+C must not gain a toast"
     );
+    wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
 
     window.enter_diff();
     select(window.diff.active_left_view(), 0, 7);
@@ -439,6 +489,15 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
     copy.emit_clicked();
     assert_toast(&window, ToastKind::Warning, "No selected text to copy!");
     assert_eq!(clipboard_text(&window), "editor");
+
+    // Native pane copies omit display-only markers and flash the icon too.
+    wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
+    let left = window.diff.active_left_view();
+    select(left, 0, 7);
+    left.emit_by_name::<()>("copy-clipboard", &[]);
+    assert_eq!(copy.icon_name().as_deref(), Some("object-select-symbolic"));
+    assert_eq!(clipboard_text(&window), "changed");
+    wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
 
     window.focus_relative(1);
     window.diff.inspect_button.emit_clicked();

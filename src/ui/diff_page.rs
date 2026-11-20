@@ -1118,14 +1118,6 @@ fn make_pane() -> (sourceview5::Buffer, sourceview5::View, gtk::ScrolledWindow) 
     view.set_bottom_margin(6);
     view.set_hexpand(true);
     view.set_vexpand(true);
-    // Ctrl+C and the context menu must not copy the display-only markers.
-    view.connect_copy_clipboard(|view| {
-        view.stop_signal_emission_by_name("copy-clipboard");
-        if let Some(text) = selected_text(view.buffer().upcast_ref()) {
-            view.clipboard().set_text(&text);
-        }
-    });
-
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_child(Some(&view));
     scroller.set_hexpand(true);

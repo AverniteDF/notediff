@@ -58,11 +58,18 @@ notes for details and workarounds.
   **Copied 3 characters to clipboard**, or **Copied 45 characters (6 lines) to
   clipboard** for multiple selected lines. Counts use Unicode characters, not
   bytes; a selection ending at the start of a line does not count that line.
-  Singular counts read **Copied 1 character to clipboard**. With no selection it
-  says **No selected text to copy!** (the clipboard is left unchanged). Review
-  highlighting alone is not a text selection. In the editor native Ctrl+C is
-  unchanged and shows no toast; Diff Mode panes intercept the copy signal only
-  to leave out display-only markers.
+  Singular counts read **Copied 1 character to clipboard**. With no selection
+  in the editor outside Diff Mode it selects the whole document first, so the
+  copied range is visible, and then copies it; an empty document says **No
+  selected text to copy!** (the clipboard is left unchanged). A Diff Mode or
+  inspection pane with no selection says the same warning without selecting
+  anything. After content reaches the clipboard the copy icon briefly becomes a
+  checkmark for about one second; this covers the button, Ctrl+C, the
+  right-click Copy, and the title menu's **Copy file name** / **Copy full
+  path**. A warning leaves the icon unchanged. Review highlighting alone is not
+  a text selection. In the editor native Ctrl+C is unchanged and shows no
+  toast; Diff Mode panes intercept the copy signal only to leave out
+  display-only markers.
 - Start a new document with **Ctrl+N**, the header-bar button beside Open, or
   **New File** in the menu. It replaces the document in the current window; an
   unsaved document first shows the same **Save changes?** prompt with
@@ -171,7 +178,8 @@ notes for details and workarounds.
   counts bytes. While text is selected, `Sel:` replaces `Pos:` and shows the
   number of bytes selected and the number of lines the selection touches
   (for example `Sel: 1,234 bytes, 4 lines`); a selection that ends at the very
-  start of a line does not count that line.
+  start of a line does not count that line. When the whole document is
+  selected, `Sel:` reads `All` instead of the counts.
   A green `●` left of the line-ending field means the document has no trailing
   whitespace; it turns yellow when any line ends in spaces or tabs, with the
   tooltip **Find trailing whitespace**. Clicking a yellow dot selects the next

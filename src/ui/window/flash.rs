@@ -1,5 +1,6 @@
-//! The brief "No Changes" label flash on the Diff Mode header button, as plain
-//! state so its generation logic is unit-tested without a display.
+//! Brief header-button feedback flashes, as plain state so their generation
+//! logic is unit-tested without a display: the Diff Mode button's "No Changes"
+//! label and the copy button's checkmark.
 //!
 //! Each flash gets a generation number. Only the timer of the newest flash may
 //! end it, so an older timer never cuts a newer flash short.
@@ -32,7 +33,7 @@ impl FlashState {
         }
     }
 
-    /// True while a flash owns the button label.
+    /// True while a flash owns the button.
     pub(super) fn is_active(&self) -> bool {
         self.active.get()
     }

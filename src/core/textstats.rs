@@ -67,8 +67,9 @@ pub struct CursorPosition {
 
 impl CursorPosition {
     /// `Ln: <line>  Col: <col>  Pos: <pos>`, or, when something is selected,
-    /// `Ln: <line>  Col: <col>  Sel: <bytes> bytes, <lines> lines`. Numbers
-    /// use thousands separators.
+    /// `Ln: <line>  Col: <col>  Sel: <bytes> bytes, <lines> lines`, or
+    /// `Sel: All` when the whole text is selected. Numbers use thousands
+    /// separators.
     pub fn summary(&self, selection: Option<&SelectionStats>) -> String {
         match selection {
             Some(selection) => format!(
@@ -98,11 +99,16 @@ pub struct SelectionStats {
     pub lines: usize,
     /// 0-based index of the first line the selection touches.
     pub first_line: usize,
+    /// True when the selection covers the whole text.
+    pub whole: bool,
 }
 
 impl SelectionStats {
-    /// `Sel: <bytes> bytes, <lines> lines`
+    /// `Sel: All`, or `Sel: <bytes> bytes, <lines> lines`.
     pub fn summary(&self) -> String {
+        if self.whole {
+            return "Sel: All".to_string();
+        }
         format!(
             "Sel: {} {}, {} {}",
             format_thousands(self.bytes),
@@ -147,6 +153,7 @@ pub fn selection_stats(text: &str, start_char: usize, end_char: usize) -> Option
         bytes: selected.len(),
         lines,
         first_line,
+        whole: start == 0 && end == text.len(),
     })
 }
 
@@ -472,12 +479,23 @@ mod tests {
 
     #[test]
     fn selection_summaries() {
-        let sel = selection_stats("a\nb\nc", 0, 5).unwrap();
-        assert_eq!(sel.summary(), "Sel: 5 bytes, 3 lines");
+        let partial = selection_stats("a\nb\nc", 0, 4).unwrap();
+        assert_eq!(partial.summary(), "Sel: 4 bytes, 2 lines");
         assert_eq!(
-            cursor_position("a\nb\nc", 5).summary(Some(&sel)),
-            "Ln: 3  Col: 2  Sel: 5 bytes, 3 lines"
+            cursor_position("a\nb\nc", 5).summary(Some(&partial)),
+            "Ln: 3  Col: 2  Sel: 4 bytes, 2 lines"
         );
+
+        let whole = selection_stats("a\nb\nc", 0, 5).unwrap();
+        assert_eq!(whole.summary(), "Sel: All");
+        assert_eq!(
+            cursor_position("a\nb\nc", 5).summary(Some(&whole)),
+            "Ln: 3  Col: 2  Sel: All"
+        );
+        // Covering everything except the final line break is not whole.
+        let without_final_break = selection_stats("abc\n", 0, 3).unwrap();
+        assert_eq!(without_final_break.summary(), "Sel: 3 bytes, 1 line");
+
         let one = selection_stats("abc", 1, 2).unwrap();
         assert_eq!(one.summary(), "Sel: 1 byte, 1 line");
     }

@@ -155,10 +155,13 @@ pub struct AppWindow {
     /// Custom two-line rows currently installed in the Open menu.
     open_recent_rows: RefCell<Vec<menus::RecentRow>>,
     diff_button: gtk::Button,
+    copy_button: gtk::Button,
     title_label: gtk::Label,
     title_popover: gtk::PopoverMenu,
     /// The "No Changes" label flash on the header button (see `flash`).
     flash: flash::FlashState,
+    /// The checkmark flash on the copy button (see `flash`).
+    copy_flash: flash::FlashState,
     doc: RefCell<Document>,
     /// Canonical path reserved while the asynchronous Convert Tabs prompt is
     /// open, before the document itself is loaded into `doc`.
@@ -247,7 +250,7 @@ impl AppWindow {
         }
         header.pack_start(&open_button);
 
-        let copy_button = gtk::Button::from_icon_name("edit-copy-symbolic");
+        let copy_button = gtk::Button::from_icon_name(clipboard::COPY_ICON);
         copy_button.set_tooltip_text(Some("Copy Selected Text (Ctrl+C)"));
         copy_button.add_css_class("flat");
         copy_button.set_focus_on_click(false);
@@ -341,9 +344,11 @@ impl AppWindow {
             open_popover: open_popover.clone(),
             open_recent_rows: RefCell::new(Vec::new()),
             diff_button: diff_button.clone(),
+            copy_button: copy_button.clone(),
             title_label: title_label.clone(),
             title_popover: title_popover.clone(),
             flash: flash::FlashState::default(),
+            copy_flash: flash::FlashState::default(),
             doc: RefCell::new(Document::new()),
             pending_open: RefCell::new(None),
             baseline: RefCell::new(BaselineCache::default()),
