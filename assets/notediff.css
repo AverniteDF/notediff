@@ -47,6 +47,10 @@ textview.{{content_class}} border gutter {
     color: #f5c211;
 }
 
+.status-bar .trailing-dot.trailing-blank {
+    color: #e01b24;
+}
+
 .diff-pane-divider {
     border-left: 1px solid alpha(currentColor, 0.2);
 }

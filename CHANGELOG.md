@@ -12,6 +12,9 @@ versioning.
   tooltip **No trailing whitespace**, yellow with **Find trailing whitespace**.
   Clicking a yellow dot selects the next trailing-whitespace run and wraps at
   the end of the document.
+- The status dot turns red when a line contains only spaces or tabs. Clicking it
+  selects the next non-empty blank line; holding Alt shows the yellow
+  trailing-whitespace state and clicking then selects the next trailing run.
 - The editor context menu now has an **Edit Indentation** submenu at the
   bottom, below a separator, with **Increase** (Ctrl+]), **Decrease** (Ctrl+[),
   **Double** (Ctrl+Shift+]) and **Halve** (Ctrl+Shift+[).

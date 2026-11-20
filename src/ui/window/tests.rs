@@ -3044,6 +3044,10 @@ fn trailing_whitespace_scenario(app: &adw::Application, dir: &Path, store: &Snap
         .window
         .lookup_action("find-next-trailing-whitespace")
         .unwrap();
+    let find_blank = window
+        .window
+        .lookup_action("find-next-non-empty-blank-line")
+        .unwrap();
 
     // A clean document has a green, inert dot and no find action.
     window.set_editor_text("a\nb\n");
@@ -3055,9 +3059,11 @@ fn trailing_whitespace_scenario(app: &adw::Application, dir: &Path, store: &Snap
         Some("No trailing whitespace")
     );
     assert!(!find.is_enabled());
+    assert!(!find_blank.is_enabled());
     buffer.place_cursor(&buffer.start_iter());
     click_trailing_dot(&dot);
     find.activate(None);
+    find_blank.activate(None);
     assert!(buffer.selection_bounds().is_none());
 
     // A yellow dot enables find. Clicking selects the next run and wraps.
@@ -3070,6 +3076,7 @@ fn trailing_whitespace_scenario(app: &adw::Application, dir: &Path, store: &Snap
         Some("Find trailing whitespace")
     );
     assert!(find.is_enabled());
+    assert!(!find_blank.is_enabled());
 
     buffer.place_cursor(&buffer.start_iter());
     click_trailing_dot(&dot);
@@ -3093,21 +3100,98 @@ fn trailing_whitespace_scenario(app: &adw::Application, dir: &Path, store: &Snap
     assert!(buffer.selection_bounds().is_some());
     window.set_read_only(false);
 
-    // Diff Mode does nothing.
+    // A non-empty blank line turns the dot red. Clicking it finds blank lines;
+    // Alt shows the yellow state and finds trailing whitespace instead.
+    window.set_editor_text("one \n \ntwo\n\t\n");
+    window.update_status();
+    assert!(dot.has_css_class("trailing-blank"));
+    assert!(!dot.has_css_class("trailing-dirty"));
+    assert!(!dot.has_css_class("trailing-clean"));
+    assert_eq!(
+        dot.tooltip_text().as_deref(),
+        Some("Find non-empty blank line")
+    );
+    assert!(find.is_enabled());
+    assert!(find_blank.is_enabled());
+
+    buffer.place_cursor(&buffer.start_iter());
+    click_trailing_dot(&dot);
+    let (start, end) = buffer.selection_bounds().unwrap();
+    assert_eq!((start.offset(), end.offset()), (5, 6));
+    assert_eq!(buffer.text(&start, &end, true).as_str(), " ");
+    click_trailing_dot(&dot);
+    let (start, end) = buffer.selection_bounds().unwrap();
+    assert_eq!((start.offset(), end.offset()), (11, 12));
+    assert_eq!(buffer.text(&start, &end, true).as_str(), "\t");
+    click_trailing_dot(&dot);
+    let (start, end) = buffer.selection_bounds().unwrap();
+    assert_eq!((start.offset(), end.offset()), (5, 6));
+
+    let controllers = window.window.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .filter_map(|index| controllers.item(index))
+        .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .find(|controller| controller.name().as_deref() == Some("notediff-alt-indicator"))
+        .unwrap();
+    let _ = keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &gtk::gdk::Key::Alt_L,
+            &0u32,
+            &gtk::gdk::ModifierType::ALT_MASK,
+        ],
+    );
+    assert!(dot.has_css_class("trailing-dirty"));
+    assert!(!dot.has_css_class("trailing-blank"));
+    assert_eq!(
+        dot.tooltip_text().as_deref(),
+        Some("Find trailing whitespace")
+    );
+    buffer.place_cursor(&buffer.start_iter());
+    click_trailing_dot(&dot);
+    let (start, end) = buffer.selection_bounds().unwrap();
+    assert_eq!((start.offset(), end.offset()), (3, 4));
+    assert_eq!(buffer.text(&start, &end, true).as_str(), " ");
+
+    keys.emit_by_name::<()>(
+        "key-released",
+        &[
+            &gtk::gdk::Key::Alt_L,
+            &0u32,
+            &gtk::gdk::ModifierType::ALT_MASK,
+        ],
+    );
+    assert!(dot.has_css_class("trailing-blank"));
+
+    // Read-only documents keep the red find available.
+    window.set_read_only(true);
+    assert!(find.is_enabled());
+    assert!(find_blank.is_enabled());
+    buffer.place_cursor(&buffer.start_iter());
+    click_trailing_dot(&dot);
+    assert!(buffer.selection_bounds().is_some());
+    window.set_read_only(false);
+
+    // Diff Mode does nothing for either find.
     let path = dir.join("trailing-diff.txt");
     std::fs::write(&path, "base \n").unwrap();
     let review = AppWindow::with_store(app, store.clone());
     let review_buffer = review.editor_buffer.clone();
     AppWindow::open_path(&review, &path);
     review.create_baseline();
-    review.set_editor_text("changed \n");
+    review.set_editor_text("changed \n \n");
     review.enter_diff();
     review_buffer.place_cursor(&review_buffer.start_iter());
     let review_find = review
         .window
         .lookup_action("find-next-trailing-whitespace")
         .unwrap();
+    let review_blank = review
+        .window
+        .lookup_action("find-next-non-empty-blank-line")
+        .unwrap();
     review_find.activate(None);
+    review_blank.activate(None);
     assert!(review_buffer.selection_bounds().is_none());
     review.exit_diff();
     review.window.destroy();

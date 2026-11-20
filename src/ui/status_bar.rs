@@ -3,6 +3,7 @@
 //! Presentation only: the numbers come from `core::textstats`.
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio};
@@ -10,6 +11,26 @@ use gtk::{gdk, gio};
 use crate::core::textstats::{CursorPosition, SelectionStats, TextStats};
 
 const ENCODING_LABEL: &str = "UTF-8";
+
+/// What the editor status dot is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DotState {
+    Clean,
+    Trailing,
+    Blank,
+}
+
+/// Red (non-empty blank line) takes precedence unless Alt is held while
+/// trailing whitespace also exists.
+fn dot_state(trailing: bool, blank: bool, alt: bool) -> DotState {
+    if blank && !(trailing && alt) {
+        DotState::Blank
+    } else if trailing {
+        DotState::Trailing
+    } else {
+        DotState::Clean
+    }
+}
 
 /// What the right-most field of the editor bar shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,9 +62,11 @@ pub struct StatusBar {
     /// Editor bar only: hidden until the first edit.
     last_edit_separator: Option<gtk::Separator>,
     last_edit: Option<gtk::Label>,
-    /// Editor bar only: green when clean, yellow when trailing whitespace
-    /// exists.
+    /// Editor bar only: green when clean, yellow for trailing whitespace and
+    /// red for non-empty blank lines.
     trailing: Option<gtk::Label>,
+    dot_state: Rc<Cell<DotState>>,
+    alt_held: Cell<bool>,
     ending: gtk::Label,
     /// Editor bar only.
     mode: Option<gtk::Label>,
@@ -122,6 +145,8 @@ impl StatusBar {
             last_edit_separator,
             last_edit,
             trailing,
+            dot_state: Rc::new(Cell::new(DotState::Clean)),
+            alt_held: Cell::new(false),
             ending,
             mode,
         }
@@ -130,7 +155,7 @@ impl StatusBar {
     /// Update byte and character counts, line count and line-ending style.
     /// A measurement identical to the one already displayed is ignored, so
     /// cursor and selection refreshes do not re-format labels or restyle the
-    /// trailing-whitespace dot.
+    /// whitespace dot.
     pub fn set_stats(&self, stats: &TextStats) {
         if self.last_stats.get() == Some(*stats) {
             return;
@@ -138,36 +163,73 @@ impl StatusBar {
         self.last_stats.set(Some(*stats));
         self.stats.set_text(&stats.summary());
         self.ending.set_text(stats.line_ending.label());
-        if let Some(dot) = &self.trailing {
-            if stats.has_trailing_whitespace {
-                dot.remove_css_class("trailing-clean");
-                dot.add_css_class("trailing-dirty");
-                dot.set_tooltip_text(Some("Find trailing whitespace"));
-                dot.set_cursor_from_name(Some("pointer"));
-            } else {
-                dot.remove_css_class("trailing-dirty");
+        self.refresh_dot();
+    }
+
+    /// Set whether an Alt key is currently held. While it is, a red dot with
+    /// trailing whitespace shows the yellow state instead.
+    pub fn set_alt_held(&self, held: bool) {
+        if self.alt_held.replace(held) != held {
+            self.refresh_dot();
+        }
+    }
+
+    /// Make the dot activate the trailing-whitespace action (yellow) or the
+    /// non-empty-blank-line action (red) on a primary click. The green state is
+    /// inert.
+    pub fn set_dot_actions(&self, trailing: &str, blank: &str) {
+        let Some(dot) = &self.trailing else {
+            return;
+        };
+        let trailing = trailing.to_string();
+        let blank = blank.to_string();
+        let label = dot.clone();
+        let state = self.dot_state.clone();
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_PRIMARY);
+        click.connect_released(move |_, _, _, _| {
+            let action = match state.get() {
+                DotState::Clean => return,
+                DotState::Trailing => &trailing,
+                DotState::Blank => &blank,
+            };
+            let _ = label.activate_action(action, None);
+        });
+        dot.add_controller(click);
+    }
+
+    fn refresh_dot(&self) {
+        let Some(dot) = &self.trailing else {
+            return;
+        };
+        let stats = self.last_stats.get();
+        let trailing = stats.is_some_and(|stats| stats.has_trailing_whitespace);
+        let blank = stats.is_some_and(|stats| stats.has_non_empty_blank_line);
+        let next = dot_state(trailing, blank, self.alt_held.get());
+        if self.dot_state.get() == next {
+            return;
+        }
+        self.dot_state.set(next);
+        dot.remove_css_class("trailing-clean");
+        dot.remove_css_class("trailing-dirty");
+        dot.remove_css_class("trailing-blank");
+        match next {
+            DotState::Clean => {
                 dot.add_css_class("trailing-clean");
                 dot.set_tooltip_text(Some("No trailing whitespace"));
                 dot.set_cursor_from_name(None);
             }
+            DotState::Trailing => {
+                dot.add_css_class("trailing-dirty");
+                dot.set_tooltip_text(Some("Find trailing whitespace"));
+                dot.set_cursor_from_name(Some("pointer"));
+            }
+            DotState::Blank => {
+                dot.add_css_class("trailing-blank");
+                dot.set_tooltip_text(Some("Find non-empty blank line"));
+                dot.set_cursor_from_name(Some("pointer"));
+            }
         }
-    }
-
-    /// Make the trailing-whitespace dot activate `action` on a primary click.
-    /// The action is enabled only while the dot is yellow, so a green dot is
-    /// inert.
-    pub fn set_trailing_action(&self, action: &str) {
-        let Some(dot) = &self.trailing else {
-            return;
-        };
-        let action = action.to_string();
-        let label = dot.clone();
-        let click = gtk::GestureClick::new();
-        click.set_button(gdk::BUTTON_PRIMARY);
-        click.connect_released(move |_, _, _, _| {
-            let _ = label.activate_action(&action, None);
-        });
-        dot.add_controller(click);
     }
 
     /// The trailing-whitespace dot, for the UI smoke test.
@@ -244,4 +306,22 @@ fn field(text: &str) -> gtk::Label {
 
 fn separator() -> gtk::Separator {
     gtk::Separator::new(gtk::Orientation::Vertical)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dot_state_prefers_blank_unless_alt_shows_trailing() {
+        assert_eq!(dot_state(false, false, false), DotState::Clean);
+        assert_eq!(dot_state(false, false, true), DotState::Clean);
+        assert_eq!(dot_state(true, false, false), DotState::Trailing);
+        assert_eq!(dot_state(true, false, true), DotState::Trailing);
+        assert_eq!(dot_state(true, true, false), DotState::Blank);
+        assert_eq!(dot_state(true, true, true), DotState::Trailing);
+        // Red implies yellow, but keep the general rule explicit.
+        assert_eq!(dot_state(false, true, false), DotState::Blank);
+        assert_eq!(dot_state(false, true, true), DotState::Blank);
+    }
 }

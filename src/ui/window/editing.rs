@@ -168,6 +168,9 @@ impl AppWindow {
         add_action(window, this, "find-next-trailing-whitespace", |this| {
             this.find_next_trailing_whitespace()
         });
+        add_action(window, this, "find-next-non-empty-blank-line", |this| {
+            this.find_next_non_empty_blank_line()
+        });
         add_action(window, this, "trim-leading-whitespace", |this| {
             this.trim_leading_whitespace()
         });
@@ -645,6 +648,32 @@ impl AppWindow {
         let start = buffer.iter_at_offset(range.start as i32);
         let end = buffer.iter_at_offset(range.end as i32);
         // The insert mark goes at the end so the next search starts after it.
+        buffer.select_range(&end, &start);
+        self.editor_view.scroll_mark_onscreen(&buffer.get_insert());
+        self.editor_view.grab_focus();
+    }
+
+    /// Select the next non-empty blank line's whitespace, scroll it onscreen
+    /// and wrap at the end. Works for read-only documents and does nothing in
+    /// Diff Mode.
+    pub(super) fn find_next_non_empty_blank_line(&self) {
+        if self.diff_active() {
+            return;
+        }
+
+        let text = self.current_text();
+        let from = self.selection_offsets().map_or_else(
+            || self.editor_buffer.cursor_position().max(0) as usize,
+            |(_, end)| end,
+        );
+        let Some(range) = whitespace::next_non_empty_blank(&text, from) else {
+            return;
+        };
+
+        let buffer = &self.editor_buffer;
+        let start = buffer.iter_at_offset(range.start as i32);
+        let end = buffer.iter_at_offset(range.end as i32);
+        // The insert mark goes at the end so repeated finds advance.
         buffer.select_range(&end, &start);
         self.editor_view.scroll_mark_onscreen(&buffer.get_insert());
         self.editor_view.grab_focus();

@@ -82,7 +82,8 @@ notediff/
     app_dialog/font_controls   font family and size fields, Apply Font and persistence
     about_dialog      About dialog (name, version, description, copyright and license notice)
     dialogs           shared AlertDialog builder and response helpers (heading, body, responses, default, close)
-    status_bar        status bar widget shared by the editor and the diff panes (presentation only)
+    status_bar        status bar widget shared by the editor and the diff panes, including the
+                      green/yellow/red whitespace dot (presentation only)
     toast             shared toast construction and category emoji
     theme_catalog     startup-only owned catalog, isolated scheme managers and load diagnostics
     theme_palette     fixed/XML review colours, effective-style dirty tint and previews
@@ -107,8 +108,9 @@ notediff/
     eol               line-ending conversion to LF or CRLF, including lone CR/U+2029 (no GTK)
     indent            indentation editing: plans increasing, decreasing, doubling or halving
                       leading spaces, with optional skip-empty filtering (no GTK)
-    whitespace        leading/trailing ASCII space/tab detection, the next wrapped trailing
-                      run and per-line leading/trailing trim plans (no GTK)
+    whitespace        leading/trailing ASCII space/tab detection, non-empty blank-line
+                      detection, the next wrapped trailing or blank-line run, and per-line
+                      leading/trailing trim plans (no GTK)
     insert            preparing a file's text for insertion into the editor: regular-file and size
                       checks, UTF-8 read, BOM removal, line-ending matching (no GTK)
     pending           PendingAction enum (including OpenPath(PathBuf)): actions that wait for the
@@ -121,8 +123,8 @@ notediff/
     rename            planning a rename or move (name or path) and moving the open file together
                       with its baseline (no GTK)
     textstats         status-bar numbers: byte and character counts, GTK line count, line-ending style,
-                      trailing-whitespace flag, cursor position, selection size, thousands-separator
-                      formatting (no GTK)
+                      trailing-whitespace and non-empty blank-line flags, cursor position,
+                      selection size, thousands-separator formatting (no GTK)
     fsutil            atomic replace, UTF-8 reads with NUL/size refusal, path helpers (no GTK)
     elapsed           text and refresh schedule of the status bar's last-edit field: elapsed time in a
                       single unit (no GTK)
@@ -227,7 +229,7 @@ touches the document itself.
 
   `Ln`, `Col` and `Pos` are 1-based: `Col` counts characters and `Pos` is the byte offset plus one. While a selection exists, `Sel: <bytes> bytes, <lines> lines` replaces the `Pos` field; `Ln` and `Col` still describe the cursor, `<bytes>` is the UTF-8 size of the selected text, and `<lines>` counts the lines the selection touches (a selection ending exactly at the start of a line does not count that line). A selection covering the whole text shows `Sel: All` instead of the byte and line counts. The line-ending field reads `Unix (LF)`, `Windows (CRLF)` or `Mixed`; a text with no line breaks reads `Unix (LF)`. Lone CR and U+2029 breaks count as mixed, matching the line model. The mode field reads `INS`, or `OVR` while overwrite mode is on (toggled by the `Insert` key), or `RO` when the document is read-only (opened read-only under the no-tab policy, or locked from the status bar). The numbers are computed in `core::textstats`.
 
-  The editor bar has a `●` immediately left of the line-ending field. It is green (`.trailing-clean`) with tooltip `No trailing whitespace` when clean, and yellow (`.trailing-dirty`) with tooltip `Find trailing whitespace` when any line ends in ASCII spaces or tabs. Only the yellow dot takes a pointer cursor and activates `win.find-next-trailing-whitespace`, which selects the next run, scrolls it onscreen, focuses the editor and wraps at the end; the action is enabled only while the dot is yellow and remains available for read-only documents. It does nothing in Diff Mode, and Diff Mode pane bars do not have the dot. The dot is updated from the `has_trailing_whitespace` field of the cached whole-text measurement by `window/status.rs`.
+  The editor bar has a `●` immediately left of the line-ending field. It is green (`.trailing-clean`) with tooltip `No trailing whitespace` when clean, yellow (`.trailing-dirty`) with tooltip `Find trailing whitespace` when any line ends in ASCII spaces or tabs, and red (`.trailing-blank`) with tooltip `Find non-empty blank line` when any line contains only ASCII spaces or tabs. Red takes precedence; because a non-empty blank line is also trailing whitespace, holding Alt while the dot is red displays the yellow state. Both yellow and red take a pointer cursor: yellow activates `win.find-next-trailing-whitespace` and red activates `win.find-next-non-empty-blank-line`. Each selects the next run (for red, the whole whitespace content of the line), scrolls it onscreen, focuses the editor and wraps at the end; both actions remain available for read-only documents and do nothing in Diff Mode. The colours are fixed CSS, not theme scheme styles. `window/status.rs` enables each action from `has_trailing_whitespace` and `has_non_empty_blank_line`, and tracks Alt_L/Alt_R with a window key controller that resets on deactivation. `status_bar.rs` stores the effective dot state and dispatches clicks; the dot is updated from the cached whole-text measurement. Diff Mode pane bars do not have the dot.
 
   **Last edit:** after the cursor field the editor bar shows the time since the most recent in-memory edit (any change to the buffer made by the user, including paste, Replace, EOL Conversion, indentation editing, Insert and undo), for example `31 seconds ago` or `5 minutes ago`, without a label prefix. The elapsed time shows a single unit, floored: seconds below a minute, minutes below an hour, hours beyond (`core::elapsed`). The field is hidden until the first edit and is cleared whenever a document is opened or reloaded, since loading is not an edit. Saving does not reset it. A one-shot timer keeps the text current and is rescheduled each time for the moment the text can next change (`core::elapsed::next_refresh_secs`): every second during the first minute, then at each minute boundary, then at each hour boundary. After the first minute, an idle window wakes up at most once a minute. A new edit restarts the timer, and clearing the edit cancels it. The timer holds the window weakly and does nothing once the window is freed. Diff Mode pane bars do not have this field; their headers show an absolute last-edit or last-save timestamp instead. The status bar's non-widget state (cached buffer measurement, idle-refresh flag, last-edit instant, wall-clock edit time and timer) lives in `StatusState` in `window/status.rs`.
   During the first second after an edit the field reads `just now`; at one second it becomes `1 second ago`. Refresh timing and the later minute/hour boundaries are unchanged.

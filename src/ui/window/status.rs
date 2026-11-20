@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::{Instant, SystemTime};
 
 use adw::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 
 use crate::core::elapsed;
 use crate::core::textstats::{self, TextStats};
@@ -131,6 +131,41 @@ impl StatusState {
 }
 
 impl AppWindow {
+    /// Track the Alt key so a red status dot can show the yellow trailing
+    /// state while it is held.
+    pub(super) fn connect_alt_indicator(this: &Rc<Self>) {
+        let keys = gtk::EventControllerKey::new();
+        keys.set_name(Some("notediff-alt-indicator"));
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(this);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if matches!(key, gdk::Key::Alt_L | gdk::Key::Alt_R)
+                && let Some(this) = weak.upgrade()
+            {
+                this.status.set_alt_held(true);
+            }
+            glib::Propagation::Proceed
+        });
+        let weak = Rc::downgrade(this);
+        keys.connect_key_released(move |_, key, _, _| {
+            if matches!(key, gdk::Key::Alt_L | gdk::Key::Alt_R)
+                && let Some(this) = weak.upgrade()
+            {
+                this.status.set_alt_held(false);
+            }
+        });
+        // A release can be delivered to another window after Alt+Tab.
+        let weak = Rc::downgrade(this);
+        this.window.connect_is_active_notify(move |window| {
+            if !window.is_active()
+                && let Some(this) = weak.upgrade()
+            {
+                this.status.set_alt_held(false);
+            }
+        });
+        this.window.add_controller(keys);
+    }
+
     /// Background windows have no periodic elapsed-time wakeups.
     pub(super) fn connect_status_activity(this: &Rc<Self>) {
         let weak = Rc::downgrade(this);
@@ -188,16 +223,23 @@ impl AppWindow {
         self.status.set_stats(&stats);
         self.status.set_cursor(&cursor, selection.as_ref());
         self.status.set_mode(self.edit_mode());
-        self.set_find_trailing_enabled(stats.has_trailing_whitespace);
+        self.set_find_action_enabled(
+            "find-next-trailing-whitespace",
+            stats.has_trailing_whitespace,
+        );
+        self.set_find_action_enabled(
+            "find-next-non-empty-blank-line",
+            stats.has_non_empty_blank_line,
+        );
         self.update_last_edit();
     }
 
-    /// The find action is available only while the status dot is yellow. It
-    /// stays enabled for read-only documents.
-    fn set_find_trailing_enabled(&self, enabled: bool) {
+    /// A find action is available while its condition exists in the document.
+    /// It stays enabled for read-only documents.
+    fn set_find_action_enabled(&self, name: &str, enabled: bool) {
         if let Some(action) = self
             .window
-            .lookup_action("find-next-trailing-whitespace")
+            .lookup_action(name)
             .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
         {
             action.set_enabled(enabled);

@@ -32,16 +32,18 @@ src/
                         link (move/copy) and baseline move
     undo.rs             bounded in-memory undo stack (100 entries or 64 MiB)
     textstats.rs        status-bar numbers: byte and character counts, line count,
-                        line-ending style, trailing-whitespace flag, cursor
-                        line/column/byte position, selection size, thousands separators
+                        line-ending style, trailing-whitespace and non-empty
+                        blank-line flags, cursor line/column/byte position,
+                        selection size, thousands separators
     elapsed.rs          last-edit status text and its refresh schedule
     tabs.rs             no-tab policy helpers: tab detection and conversion
     textlines.rs        GTK-compatible line breaks, splitting and byte offsets
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
     indent.rs           indentation editing: increase including empty lines,
                         strict decrease, double and halve
-    whitespace.rs       leading/trailing ASCII space/tab detection, the next
-                        wrapped trailing run, leading/trailing trim plans, and
+    whitespace.rs       leading/trailing ASCII space/tab detection, non-empty
+                        blank-line detection, the next wrapped trailing or
+                        blank-line run, leading/trailing trim plans, and
                         blank-line remove/strip plans
     inline.rs           byte-exact word, line-ending and fallback change units,
                         with the same diff deadline as `diff.rs`
@@ -82,8 +84,8 @@ src/
       flash.rs          FlashState: the header button's "No Changes" flash
       focus.rs          restore content focus after menus and dialogs close
       search.rs         search bar, Find, Replace and Go to Line
-      status.rs         StatusState (measured text, last edit, refresh timer)
-                        and the status bar refresh methods
+      status.rs         StatusState (measured text, last edit, refresh timer),
+                        status bar refresh methods and Alt dot tracking
       theme_keys.rs     hidden Alt+T / Alt+Shift+T theme cycling
       tests.rs          display-dependent GTK window smoke scenarios
     diff_page.rs        persistent full/inspection view pairs, tags, independent
@@ -130,7 +132,8 @@ cargo test
 One ignored UI smoke test runs the editing, file-action and Diff Mode
 scenarios on the same GTK thread with a temporary snapshot store. It covers
 tab handling, read-only mode, Find/Replace, EOL conversion, all four indentation
-operations, the trailing-whitespace dot, find, leading/trailing and blank-line
+operations, the trailing-whitespace and non-empty-blank-line dot states
+(including the Alt override and both finds), leading/trailing and blank-line
 trim, Word Wrap,
 the Insert Path submenu and Add Text from File insertion with selection,
 baseline moves, links and copies, and the Diff

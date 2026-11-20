@@ -26,6 +26,41 @@ pub fn has_trailing(text: &str) -> bool {
     false
 }
 
+/// True when any line's content is non-empty and contains only ASCII spaces
+/// and tabs. The synthetic empty line after a final break does not count.
+pub fn has_non_empty_blank_line(text: &str) -> bool {
+    let mut index = 0;
+    while index < text.len() {
+        let line_start = index;
+        let mut content_end = index;
+        while content_end < text.len() {
+            match text.as_bytes()[content_end] {
+                b' ' | b'\t' => content_end += 1,
+                _ => break,
+            }
+        }
+        if content_end > line_start
+            && (content_end == text.len() || textlines::break_len(text, content_end).is_some())
+        {
+            return true;
+        }
+        // Skip the rest of this line.
+        let mut scan = content_end;
+        loop {
+            if scan >= text.len() {
+                return false;
+            }
+            if let Some(len) = textlines::break_len(text, scan) {
+                scan += len;
+                break;
+            }
+            scan += text[scan..].chars().next().map_or(1, char::len_utf8);
+        }
+        index = scan;
+    }
+    false
+}
+
 /// True when any line in `lines` (0-based, inclusive) ends in ASCII spaces or
 /// tabs. `None` checks the whole text.
 pub fn has_trailing_in(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
@@ -204,6 +239,29 @@ pub fn next_trailing(text: &str, from_char: usize) -> Option<Range<usize>> {
     first
 }
 
+/// Character range of the next non-empty blank line's content at or after
+/// `from_char`, wrapping to the first one when there is none. `None` when no
+/// line contains only ASCII spaces and tabs.
+pub fn next_non_empty_blank(text: &str, from_char: usize) -> Option<Range<usize>> {
+    let mut first = None;
+    let mut line_start = 0usize;
+    for line in textlines::split_all(text) {
+        let content = textlines::content(line);
+        if !content.is_empty() && is_blank_line(content) {
+            let content_chars = content.chars().count();
+            let run = line_start..line_start + content_chars;
+            if first.is_none() {
+                first = Some(run.clone());
+            }
+            if run.end > from_char {
+                return Some(run);
+            }
+        }
+        line_start += line.chars().count();
+    }
+    first
+}
+
 /// Byte length of the run of ASCII spaces and tabs at the start of `content`.
 /// Spaces and tabs are one byte each, so this is also the length in characters.
 fn leading_len(content: &str) -> usize {
@@ -241,6 +299,25 @@ mod tests {
     fn ignores_clean_text_and_empty_lines() {
         for text in ["", "\n", "a\n", "a\nb\n", "a\u{a0}\n", "a\u{2003}\n"] {
             assert!(!has_trailing(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn detects_non_empty_blank_lines() {
+        for text in [
+            " \n",
+            "\t\n",
+            "   ",
+            "a\n \n",
+            "a\r\n\t\r\n",
+            "a\u{2029} \u{2029}",
+            " \n \n",
+            "a\n \t",
+        ] {
+            assert!(has_non_empty_blank_line(text), "{text:?}");
+        }
+        for text in ["", "\n", "a\n", "a\n\n", "a\u{a0}\n", "a\n  b\n"] {
+            assert!(!has_non_empty_blank_line(text), "{text:?}");
         }
     }
 
@@ -512,5 +589,28 @@ mod tests {
         assert_eq!(next_trailing("", 0), None);
         assert_eq!(next_trailing("a\nb\n", 0), None);
         assert_eq!(next_trailing("a\u{a0}\n", 0), None);
+    }
+
+    #[test]
+    fn next_non_empty_blank_skips_other_lines_and_wraps() {
+        let text = "one \n \ntwo\n\t\n";
+        assert_eq!(next_non_empty_blank(text, 0), Some(5..6));
+        assert_eq!(next_non_empty_blank(text, 6), Some(11..12));
+        assert_eq!(next_non_empty_blank(text, 12), Some(5..6));
+        assert_eq!(next_non_empty_blank(text, 99), Some(5..6));
+    }
+
+    #[test]
+    fn next_non_empty_blank_handles_breaks_unicode_and_the_final_line() {
+        let text = "a\n \r\nb\u{2029}\t\u{2029}";
+        assert_eq!(next_non_empty_blank(text, 0), Some(2..3));
+        assert_eq!(next_non_empty_blank(text, 3), Some(7..8));
+
+        // A whitespace-only final line without a terminator still counts.
+        assert_eq!(next_non_empty_blank("a\n \t", 0), Some(2..4));
+        // The synthetic empty line after a final break does not.
+        assert_eq!(next_non_empty_blank("a\n\n", 0), None);
+        assert_eq!(next_non_empty_blank("a\nb\n", 0), None);
+        assert_eq!(next_non_empty_blank("", 0), None);
     }
 }

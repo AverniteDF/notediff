@@ -41,6 +41,9 @@ pub struct TextStats {
     pub line_ending: LineEnding,
     /// True when any line ends in ASCII spaces or tabs.
     pub has_trailing_whitespace: bool,
+    /// True when any line's content is non-empty and contains only ASCII
+    /// spaces and tabs.
+    pub has_non_empty_blank_line: bool,
 }
 
 impl TextStats {
@@ -242,6 +245,7 @@ pub fn text_stats(text: &str) -> TextStats {
         lines: textlines::break_count(text) + 1,
         line_ending: detect_line_ending(text),
         has_trailing_whitespace: whitespace::has_trailing(text),
+        has_non_empty_blank_line: whitespace::has_non_empty_blank_line(text),
     }
 }
 
@@ -341,6 +345,17 @@ mod tests {
         assert!(text_stats("a\t\r\n").has_trailing_whitespace);
         assert!(text_stats("   \n").has_trailing_whitespace);
         assert!(!text_stats("a\u{a0}\n").has_trailing_whitespace);
+    }
+
+    #[test]
+    fn stats_include_non_empty_blank_line_state() {
+        assert!(!text_stats("").has_non_empty_blank_line);
+        assert!(!text_stats("a\nb\n").has_non_empty_blank_line);
+        assert!(!text_stats("a\n\n").has_non_empty_blank_line);
+        assert!(text_stats(" \n").has_non_empty_blank_line);
+        assert!(text_stats("a\n\t\n").has_non_empty_blank_line);
+        assert!(text_stats("a\n   ").has_non_empty_blank_line);
+        assert!(!text_stats("a\u{a0}\n").has_non_empty_blank_line);
     }
 
     #[test]

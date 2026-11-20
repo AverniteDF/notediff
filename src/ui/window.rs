@@ -295,7 +295,10 @@ impl AppWindow {
         let status = StatusBar::editor();
         status.set_ending_menu(&menus::build_eol_menu());
         status.set_mode_menu(&menus::build_mode_menu());
-        status.set_trailing_action("win.find-next-trailing-whitespace");
+        status.set_dot_actions(
+            "win.find-next-trailing-whitespace",
+            "win.find-next-non-empty-blank-line",
+        );
 
         let editor_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
         editor_page.append(&editor_scroller);
@@ -420,6 +423,7 @@ impl AppWindow {
         Self::connect_file_actions(this);
         Self::connect_diff_actions(this, diff_button);
         Self::connect_status_activity(this);
+        Self::connect_alt_indicator(this);
         Self::connect_theme_keys(this);
     }
 

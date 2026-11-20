@@ -181,12 +181,17 @@ notes for details and workarounds.
   start of a line does not count that line. When the whole document is
   selected, `Sel:` reads `All` instead of the counts.
   A green `●` left of the line-ending field means the document has no trailing
-  whitespace; it turns yellow when any line ends in spaces or tabs, with the
-  tooltip **Find trailing whitespace**. Clicking a yellow dot selects the next
-  trailing-whitespace run, scrolls it onscreen and wraps at the end of the
-  document; repeated clicks advance through the document. Clicking a green dot
-  does nothing. The find works in read-only documents and does nothing in Diff
-  Mode.
+  whitespace; it turns yellow when any line ends in spaces or tabs, and red when
+  any line contains only spaces or tabs (a non-empty blank line). Red takes
+  precedence, but a non-empty blank line is also trailing whitespace, so
+  holding Alt while the dot is red shows the yellow state. The yellow tooltip
+  is **Find trailing whitespace**; the red tooltip is **Find non-empty blank
+  line**. Clicking a yellow dot selects the next trailing-whitespace
+  run; clicking a red dot selects the whole content of the next non-empty blank
+  line. Both scroll the result onscreen, focus the editor and wrap at the end of
+  the document; repeated clicks advance through the document. Clicking a green
+  dot does nothing. Both finds work in read-only documents and do nothing in
+  Diff Mode.
   Clicking the line-ending field
   opens the Windows (CRLF) / Unix (LF) conversion choices, clicking the mode
   field (`INS`, `OVR` or `RO`) opens a checkable **Read Only** choice (unlocking a file that
