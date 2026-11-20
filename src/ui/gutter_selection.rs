@@ -47,10 +47,19 @@ pub(crate) fn install_line_selection(view: &View) {
     }
     {
         let state = state.clone();
-        click.connect_released(move |_, _, _, _| {
-            state.dragging.set(false);
-            state.anchor.set(None);
-        });
+        click.connect_released(move |_, _, _, _| clear_drag(&state));
+    }
+    // A cancelled sequence (a broken grab, a cancelled touch, or an explicit
+    // controller reset) never emits `released`. Motion would otherwise keep
+    // extending the selection with no button held.
+    {
+        let state = state.clone();
+        click.connect_cancel(move |_, _| clear_drag(&state));
+    }
+    // The release can also arrive unpaired after the implicit grab is lost.
+    {
+        let state = state.clone();
+        click.connect_unpaired_release(move |_, _, _, _, _| clear_drag(&state));
     }
     view.add_controller(click);
 
@@ -83,6 +92,12 @@ fn over_gutter(view: &View, x: f64) -> bool {
         let end = start + f64::from(bounds.width());
         x >= start && x < end
     })
+}
+
+/// End an in-progress gutter drag, leaving the current selection in place.
+fn clear_drag(state: &GutterSelection) {
+    state.dragging.set(false);
+    state.anchor.set(None);
 }
 
 fn line_at(view: &View, y: f64) -> i32 {

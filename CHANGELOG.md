@@ -43,6 +43,8 @@ versioning.
 - Unlocking a read-only document that contains tabs no longer adds an undo step
   that does nothing and no longer shows a misleading **Tabs were converted to
   spaces** toast on Ctrl+Z.
+- Moving the pointer no longer keeps changing the gutter selection after a drag
+  is cancelled by the system.
 
 ### Changed
 

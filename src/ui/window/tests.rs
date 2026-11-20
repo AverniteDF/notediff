@@ -294,6 +294,43 @@ fn gutter_selection_scenario(app: &adw::Application, store: SnapshotStore) {
         Some("line 101\nline 102\nline 103\n")
     );
     click.emit_by_name::<()>("released", &[&1i32, &x, &visible_y(target + 2)]);
+
+    // A cancelled sequence has no release; motion must stop changing the
+    // selection.
+    click.emit_by_name::<()>("pressed", &[&1i32, &x, &visible_y(target)]);
+    motion.emit_by_name::<()>("motion", &[&x, &visible_y(target + 2)]);
+    assert_eq!(
+        selected_text(&buffer).as_deref(),
+        Some("line 101\nline 102\nline 103\n")
+    );
+    click.emit_by_name::<()>("cancel", &[&None::<gtk::gdk::EventSequence>]);
+    motion.emit_by_name::<()>("motion", &[&x, &visible_y(target + 4)]);
+    assert_eq!(
+        selected_text(&buffer).as_deref(),
+        Some("line 101\nline 102\nline 103\n")
+    );
+
+    // An unpaired release also ends the drag.
+    click.emit_by_name::<()>("pressed", &[&1i32, &x, &visible_y(target)]);
+    motion.emit_by_name::<()>("motion", &[&x, &visible_y(target + 1)]);
+    assert_eq!(
+        selected_text(&buffer).as_deref(),
+        Some("line 101\nline 102\n")
+    );
+    click.emit_by_name::<()>(
+        "unpaired-release",
+        &[
+            &x,
+            &visible_y(target),
+            &1u32,
+            &None::<gtk::gdk::EventSequence>,
+        ],
+    );
+    motion.emit_by_name::<()>("motion", &[&x, &visible_y(target + 3)]);
+    assert_eq!(
+        selected_text(&buffer).as_deref(),
+        Some("line 101\nline 102\n")
+    );
     window.window.destroy();
 }
 
