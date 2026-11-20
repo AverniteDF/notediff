@@ -228,8 +228,8 @@ notes for details and workarounds.
   is showing. Right-clicking it offers **Copy file name** and
   **Copy full path**; untitled documents have no tooltip and both actions are
   disabled. Closing the menu with Esc, a click outside, or either copy action
-  returns focus to the editor. Copying shows **Copied file name** or
-  **Copied full path**.
+  returns focus to the editor. Both copy actions briefly flash the copy
+  button's checkmark and show no toast.
 - Closing a window with unsaved text prompts to save, discard or cancel. For an
   untitled document the prompt's save action reads **Save As** and opens the file
   chooser. A new

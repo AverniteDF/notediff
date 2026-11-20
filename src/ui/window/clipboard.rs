@@ -89,7 +89,6 @@ impl AppWindow {
             return;
         };
         self.window.clipboard().set_text(&name);
-        self.toast(ToastKind::Success, "Copied file name");
         self.flash_copy_button();
     }
 
@@ -103,7 +102,6 @@ impl AppWindow {
             return;
         };
         self.window.clipboard().set_text(&path);
-        self.toast(ToastKind::Success, "Copied full path");
         self.flash_copy_button();
     }
 

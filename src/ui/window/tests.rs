@@ -358,11 +358,12 @@ fn clipboard_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore)
     );
     assert!(!window.flags.dirty.get());
 
-    // Copying the title path uses the same checkmark feedback.
+    // Copying the title path uses the same checkmark feedback and no toast.
+    window.last_toast.take();
     window.copy_file_name();
     assert_eq!(copy.icon_name().as_deref(), Some("object-select-symbolic"));
     assert_eq!(clipboard_text(&window), "clipboard.txt");
-    assert_toast(&window, ToastKind::Success, "Copied file name");
+    assert!(window.last_toast.borrow().is_none());
     wait_for(|| copy.icon_name().as_deref() == Some("edit-copy-symbolic"));
 
     // Outside Diff Mode an empty editor selection selects and copies the whole
@@ -2075,6 +2076,7 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
     }
 
     window.editor_view.grab_focus();
+    window.last_toast.take();
     window.title_popover.popup();
     wait_for(|| window.title_popover.is_visible());
     window
@@ -2090,19 +2092,13 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
         .unwrap()
         .unwrap();
     assert_eq!(copied, "title-menu.md");
-    assert_eq!(
-        window
-            .last_toast
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .title()
-            .as_deref(),
-        Some(crate::ui::toast::title(ToastKind::Success, "Copied file name").as_str())
+    assert!(
+        window.last_toast.borrow().is_none(),
+        "copying the file name must not show a toast"
     );
-    window.last_toast.borrow_mut().take();
 
     window.editor_view.grab_focus();
+    window.last_toast.take();
     window.title_popover.popup();
     wait_for(|| window.title_popover.is_visible());
     window
@@ -2118,17 +2114,10 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
         .unwrap()
         .unwrap();
     assert_eq!(copied, canonical_text);
-    assert_eq!(
-        window
-            .last_toast
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .title()
-            .as_deref(),
-        Some(crate::ui::toast::title(ToastKind::Success, "Copied full path").as_str())
+    assert!(
+        window.last_toast.borrow().is_none(),
+        "copying the full path must not show a toast"
     );
-    window.last_toast.borrow_mut().take();
 
     // Untitled documents have no title tooltip or copy actions.
     window.window.lookup_action("new").unwrap().activate(None);

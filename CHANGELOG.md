@@ -38,6 +38,8 @@ versioning.
   two spaces.
 - The Appearance tab explanation is shorter, and the user-theme restart note
   uses the same subdued style as the other explanatory text.
+- Copying the file name or full path from the title menu no longer shows a
+  success toast; the copy button's checkmark is the confirmation.
 
 ## [1.1.0] - 2026-11-18
 
