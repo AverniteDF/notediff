@@ -2,6 +2,8 @@
 //!
 //! Presentation only: the numbers come from `core::textstats`.
 
+use std::cell::Cell;
+
 use gtk::prelude::*;
 use gtk::{gdk, gio};
 
@@ -31,6 +33,9 @@ impl EditMode {
 pub struct StatusBar {
     pub root: gtk::Box,
     stats: gtk::Label,
+    /// The last measurement applied to the widgets, so cursor and selection
+    /// moves that leave the text unchanged do not repeat label or dot updates.
+    last_stats: Cell<Option<TextStats>>,
     /// Editor bar only.
     cursor: Option<gtk::Label>,
     /// Editor bar only: hidden until the first edit.
@@ -112,6 +117,7 @@ impl StatusBar {
         Self {
             root,
             stats,
+            last_stats: Cell::new(None),
             cursor,
             last_edit_separator,
             last_edit,
@@ -122,7 +128,14 @@ impl StatusBar {
     }
 
     /// Update byte and character counts, line count and line-ending style.
+    /// A measurement identical to the one already displayed is ignored, so
+    /// cursor and selection refreshes do not re-format labels or restyle the
+    /// trailing-whitespace dot.
     pub fn set_stats(&self, stats: &TextStats) {
+        if self.last_stats.get() == Some(*stats) {
+            return;
+        }
+        self.last_stats.set(Some(*stats));
         self.stats.set_text(&stats.summary());
         self.ending.set_text(stats.line_ending.label());
         if let Some(dot) = &self.trailing {
