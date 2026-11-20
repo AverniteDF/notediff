@@ -216,6 +216,7 @@ fn gtk_window_smoke() {
     restore_appearance_scenario(&app, &store);
     external_change_in_diff_scenario(&app, &dir, &store);
     diff_actions_scenario(&app, &dir, &store);
+    diff_key_modifiers_scenario(&app, &dir, &store);
     review_exit_scenario(&app, &dir, &store);
     partial_confirm_scenario(&app, &dir, &store);
     inspection_scenario(&app, &dir, &store);
@@ -4802,6 +4803,120 @@ fn diff_actions_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSto
         "closing must release the AppWindow"
     );
     untitled.window.destroy();
+}
+
+fn diff_key_modifiers_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    use gtk::gdk::{Key, ModifierType};
+
+    let path = dir.join("diff-key-modifiers.txt");
+    std::fs::write(&path, "one\ntwo\nthree\nfour\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text("one\nTWO\nthree\nFOUR\n");
+    window.persist(None).unwrap();
+    window.window.present();
+    window.enter_diff();
+    assert!(window.diff_active());
+
+    let controllers = window.window.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .filter_map(|index| controllers.item(index))
+        .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .find(|controller| controller.name().as_deref() == Some("notediff-diff-keys"))
+        .unwrap();
+    let press = |key: Key, modifiers: ModifierType| {
+        keys.emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers])
+    };
+    let state = |window: &AppWindow| {
+        let state = window.diff_state.borrow();
+        let session = state.as_ref().unwrap();
+        (
+            session.accepted_hunks(),
+            session.focus(),
+            session.is_inspecting(),
+            session.diff().hunks.len(),
+            session.baseline().to_owned(),
+        )
+    };
+    let mut shortcuts = vec![
+        ModifierType::SHIFT_MASK,
+        ModifierType::CONTROL_MASK,
+        ModifierType::ALT_MASK,
+        ModifierType::SUPER_MASK,
+        ModifierType::META_MASK,
+    ];
+    if gtk::accelerator_get_default_mod_mask().contains(ModifierType::HYPER_MASK) {
+        shortcuts.push(ModifierType::HYPER_MASK);
+    }
+    for &modifier in &shortcuts {
+        assert!(
+            gtk::accelerator_get_default_mod_mask().contains(modifier),
+            "{modifier:?} must be a default shortcut modifier"
+        );
+    }
+
+    window.focus_relative(1);
+    assert_eq!(state(&window).1, Some(0));
+
+    // Modified navigation and accept keys are left alone.
+    for &modifier in &shortcuts {
+        let before = state(&window);
+        assert!(!press(Key::Right, modifier));
+        assert!(!press(Key::Down, modifier));
+        assert_eq!(state(&window), before, "{modifier:?}");
+    }
+
+    // Caps Lock does not disable review keys.
+    let locks = ModifierType::LOCK_MASK;
+    assert!(press(Key::Right, locks));
+    assert_eq!(state(&window).0, 1);
+    assert!(press(Key::Left, locks));
+    assert_eq!(state(&window).0, 0);
+
+    // Modified Undo must not reverse a real accept.
+    assert!(press(Key::Right, ModifierType::empty()));
+    assert_eq!(state(&window).0, 1);
+    for &modifier in &shortcuts {
+        let before = state(&window);
+        assert!(!press(Key::Left, modifier));
+        assert!(!press(Key::Right, modifier));
+        assert_eq!(state(&window), before, "{modifier:?}");
+    }
+    assert!(press(Key::Left, ModifierType::empty()));
+    assert_eq!(state(&window).0, 0);
+
+    // Modified Enter and Escape do not change the inspection level.
+    if state(&window).1.is_none() {
+        window.focus_relative(1);
+    }
+    for &modifier in &shortcuts {
+        let before = state(&window);
+        assert!(!press(Key::Return, modifier));
+        assert!(!press(Key::KP_Enter, modifier));
+        assert_eq!(state(&window), before, "{modifier:?}");
+    }
+    assert!(press(Key::Return, ModifierType::empty()));
+    assert!(state(&window).2);
+    for &modifier in &shortcuts {
+        let before = state(&window);
+        assert!(!press(Key::Escape, modifier));
+        assert_eq!(state(&window), before, "{modifier:?}");
+        assert!(window.diff_active());
+    }
+    assert!(press(Key::Escape, ModifierType::empty()));
+    assert!(!state(&window).2);
+
+    // In the full diff, modified Escape also leaves the review alone.
+    for &modifier in &shortcuts {
+        let before = state(&window);
+        assert!(!press(Key::Escape, modifier));
+        assert_eq!(state(&window), before, "{modifier:?}");
+        assert!(window.diff_active());
+    }
+    assert!(press(Key::Escape, ModifierType::empty()));
+    assert!(!window.diff_active());
+    window.window.destroy();
 }
 
 fn review_exit_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {

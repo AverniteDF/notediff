@@ -310,6 +310,9 @@ file chooser, while `F5` does nothing until the document has been saved once.
 | `Enter` | Inspect the focused hunk or return to the full diff |
 | `Esc` | Return to the full diff from inspection. In the full diff, leave Diff Mode, confirming first when changes have been accepted |
 
+These are unmodified shortcuts. With Shift, Ctrl, Alt, Super or Meta held, they
+do not navigate, accept, undo or change inspection.
+
 Accept All is available from the full Diff Mode toolbar. Accepting and undoing only
 change the in-memory baseline; nothing is written to disk until **Confirm**.
 When **Esc** would discard accepted changes, the prompt is **Discard accepted

@@ -45,6 +45,9 @@ versioning.
   spaces** toast on Ctrl+Z.
 - Moving the pointer no longer keeps changing the gutter selection after a drag
   is cancelled by the system.
+- Diff Mode now ignores its review keys when Shift, Ctrl, Alt, Super or Meta is
+  held, so Shift+Right and Ctrl+Up no longer accept a hunk or move the
+  selection.
 
 ### Changed
 

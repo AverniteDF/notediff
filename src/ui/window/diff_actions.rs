@@ -83,18 +83,20 @@ impl AppWindow {
                     return glib::Propagation::Proceed;
                 }
 
+                // Review keys are plain shortcuts. Leave modified combinations
+                // to the focused pane and the application accelerators. Caps
+                // Lock and Num Lock are not significant modifiers.
+                if modifiers.intersects(gtk::accelerator_get_default_mod_mask()) {
+                    return glib::Propagation::Proceed;
+                }
+
                 match keyval {
                     gdk::Key::Up => this.focus_relative(-1),
                     gdk::Key::Down => this.focus_relative(1),
                     gdk::Key::Right => this.accept_focused(),
                     gdk::Key::Left => this.undo_accept(),
                     gdk::Key::Return | gdk::Key::KP_Enter => {
-                        let shortcut_modifiers = gdk::ModifierType::CONTROL_MASK
-                            | gdk::ModifierType::ALT_MASK
-                            | gdk::ModifierType::SUPER_MASK
-                            | gdk::ModifierType::META_MASK
-                            | gdk::ModifierType::SHIFT_MASK;
-                        if modifiers.intersects(shortcut_modifiers) || !this.toggle_inspection() {
+                        if !this.toggle_inspection() {
                             return glib::Propagation::Proceed;
                         }
                     }

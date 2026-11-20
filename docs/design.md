@@ -307,7 +307,7 @@ Neither pane is editable in Diff Mode, so arrow keys are free to drive hunk acti
 
 Accept All is available from the full diff toolbar. Space activates focused toolbar buttons.
 
-Implementation note: read-only `GtkTextView` widgets would normally consume the arrow keys to move the text cursor. The window therefore installs a key controller in the capture phase that handles these keys itself while Diff Mode is shown, and the diff panes hide their cursors.
+Implementation note: read-only `GtkTextView` widgets would normally consume the arrow keys to move the text cursor. The window therefore installs a key controller in the capture phase that handles these keys itself while Diff Mode is shown, and the diff panes hide their cursors. These are unmodified shortcuts: combinations carrying Shift, Ctrl, Alt, Super, Hyper or Meta are left to the focused pane and the application accelerators, and Caps Lock or Num Lock do not disable the review keys. `Shift+Right` therefore does not accept a hunk and `Ctrl+Up` does not navigate.
 
 Diff Mode is entered with `F5` or the **Review Changes (F5)** header button. The Diff Mode keys are handled in one `match` in `window/diff_actions.rs`, and the menu accelerators are listed together in `install_accels` in `window/menus.rs`. The right-aligned toolbar button is labelled **Close**, **Back** or **Confirm** depending on the view and uncommitted progress (section 5.2).
 
