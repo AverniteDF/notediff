@@ -35,6 +35,9 @@ versioning.
 
 - **Ctrl+Shift+]** and **Ctrl+Shift+[** now trigger **Double** and **Halve** on
   platforms that report the shifted brace key values.
+- Clicking or dragging the line-number gutter on a scrolled document now
+  selects the lines under the pointer instead of lines from the top of the
+  file.
 
 ### Changed
 

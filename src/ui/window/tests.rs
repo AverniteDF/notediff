@@ -263,6 +263,36 @@ fn gutter_selection_scenario(app: &adw::Application, store: SnapshotStore) {
     motion.emit_by_name::<()>("motion", &[&x, &line_y(2)]);
     assert_eq!(selected_text(&buffer).as_deref(), Some("two\nthree\n"));
     click.emit_by_name::<()>("released", &[&1i32, &x, &line_y(2)]);
+
+    // Gesture events use widget coordinates, so a scrolled document must
+    // resolve the line under the pointer, not the same y from the buffer top.
+    let text: String = (1..=200).map(|n| format!("line {n}\n")).collect();
+    window.set_editor_text(&text);
+    gtk::test_widget_wait_for_draw(&window.window);
+
+    let adjustment = view.vadjustment().expect("vertical adjustment");
+    // The text view refreshes its scroll range on idle after a text change.
+    wait_for(|| adjustment.upper() > adjustment.page_size() + 100.0);
+    let target = 100;
+    let desired = line_y(target) - 20.0;
+    adjustment.set_value(desired);
+    wait_for(|| (adjustment.value() - desired).abs() < 0.5);
+    assert!(adjustment.value() > 0.0);
+    let visible_y = |line: i32| line_y(line) - adjustment.value();
+    let pointer_y = visible_y(target);
+    assert!(
+        pointer_y >= 0.0 && pointer_y < adjustment.page_size(),
+        "target line should be inside the viewport"
+    );
+
+    click.emit_by_name::<()>("pressed", &[&1i32, &x, &pointer_y]);
+    assert_eq!(selected_text(&buffer).as_deref(), Some("line 101\n"));
+    motion.emit_by_name::<()>("motion", &[&x, &visible_y(target + 2)]);
+    assert_eq!(
+        selected_text(&buffer).as_deref(),
+        Some("line 101\nline 102\nline 103\n")
+    );
+    click.emit_by_name::<()>("released", &[&1i32, &x, &visible_y(target + 2)]);
     window.window.destroy();
 }
 

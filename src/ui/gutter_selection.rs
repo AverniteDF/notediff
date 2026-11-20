@@ -86,7 +86,12 @@ fn over_gutter(view: &View, x: f64) -> bool {
 }
 
 fn line_at(view: &View, y: f64) -> i32 {
-    view.line_at_y(y.max(0.0) as i32).0.line()
+    // Gesture and motion events report widget coordinates, while `line_at_y`
+    // expects buffer coordinates. Without this conversion a scrolled document
+    // resolves every click to a line measured from the top of the file.
+    let (_, buffer_y) =
+        view.window_to_buffer_coords(gtk::TextWindowType::Widget, 0, y.round() as i32);
+    view.line_at_y(buffer_y.max(0)).0.line()
 }
 
 /// Select every line between `anchor` and `current`, inclusive, using
