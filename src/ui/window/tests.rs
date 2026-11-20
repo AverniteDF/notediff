@@ -224,6 +224,7 @@ fn gtk_window_smoke() {
     whitespace_highlight_scenario(&app, &dir, &store);
     caret_navigation_scenario(&app, &dir, &store);
     blank_marker_scenario(&app, &dir, &store);
+    inspection_blank_marker_layer_scenario(&app, &dir, &store);
     full_boundary_marker_scenario(&app, &dir, &store);
     full_boundary_marker_after_accept_scenario(&app, &dir, &store);
     full_boundary_marker_scroll_scenario(&app, &dir, &store);
@@ -5229,6 +5230,46 @@ fn blank_marker_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSto
     window.window.destroy();
 }
 
+fn inspection_blank_marker_layer_scenario(
+    app: &adw::Application,
+    dir: &Path,
+    store: &SnapshotStore,
+) {
+    let has = |tags: &[String], name: &str| tags.iter().any(|tag| tag == name);
+
+    let path = dir.join("inspection-blank-layer.txt");
+    std::fs::write(&path, "\nb\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text("x\nb\n");
+    window.persist(None).unwrap();
+    window.window.present();
+    window.enter_diff();
+    window.focus_relative(1);
+    window.diff.inspect_button.emit_clicked();
+    assert!(window.diff_state.borrow().as_ref().unwrap().is_inspecting());
+
+    // The inserted x is the selected change; the baseline blank line is not.
+    let markers = window.diff.inspection_marker_tags(true);
+    assert_eq!(
+        markers.len(),
+        1,
+        "the baseline blank line needs a marker: {markers:?}"
+    );
+    let (_, tags) = &markers[0];
+    assert!(
+        has(tags, "notediff-inline-normal"),
+        "an unselected blank-line marker must use the focused-hunk layer: {tags:?}"
+    );
+    assert!(
+        !has(tags, "notediff-inline-selected"),
+        "the marker is not part of the selected change: {tags:?}"
+    );
+    assert!(window.diff.inspection_marker_tags(false).is_empty());
+    window.window.destroy();
+}
+
 fn full_boundary_marker_after_accept_scenario(
     app: &adw::Application,
     dir: &Path,
@@ -5508,6 +5549,42 @@ fn trailing_blank_marker_scenario(app: &adw::Application, dir: &Path, store: &Sn
             .all(|(_, tags)| has(tags, "notediff-inline-selected")),
         "the selected atomic change must include the trailing marker: {markers:?}"
     );
+    window.window.destroy();
+
+    // A pure deletion at EOF leaves the live side's final newline unchanged,
+    // so neither side gets a display-only marker.
+    let path = dir.join("trailing-blank-pure-delete.txt");
+    std::fs::write(&path, "a\nb").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text("a\n");
+    window.persist(None).unwrap();
+    window.enter_diff();
+    window.focus_relative(1);
+    assert!(window.diff.full_marker_tags(false).is_empty());
+    assert!(window.diff.full_marker_tags(true).is_empty());
+    window.diff.inspect_button.emit_clicked();
+    assert!(window.diff.inspection_marker_tags(false).is_empty());
+    assert!(window.diff.inspection_marker_tags(true).is_empty());
+    window.window.destroy();
+
+    // The mirror insertion at EOF leaves the baseline side's final newline
+    // unchanged too.
+    let path = dir.join("trailing-blank-pure-insert.txt");
+    std::fs::write(&path, "a\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text("a\nb");
+    window.persist(None).unwrap();
+    window.enter_diff();
+    window.focus_relative(1);
+    assert!(window.diff.full_marker_tags(false).is_empty());
+    assert!(window.diff.full_marker_tags(true).is_empty());
+    window.diff.inspect_button.emit_clicked();
+    assert!(window.diff.inspection_marker_tags(false).is_empty());
+    assert!(window.diff.inspection_marker_tags(true).is_empty());
     window.window.destroy();
 }
 

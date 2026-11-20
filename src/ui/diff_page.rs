@@ -617,12 +617,19 @@ impl DiffPage {
             } else {
                 text_stats(session.live())
             };
-            let live_trailing = trailing_blank_change(session.live(), session.baseline());
-            let baseline_trailing = trailing_blank_change(session.baseline(), session.live());
-            self.left_trailing_blank.set(live_trailing);
-            self.right_trailing_blank.set(baseline_trailing);
             let live_line_count = crate::core::diff::split_lines(session.live()).len();
             let baseline_line_count = crate::core::diff::split_lines(session.baseline()).len();
+            // The display-only line after a final newline belongs to the last
+            // hunk only when that side changed content there. A pure insertion
+            // or deletion leaves the other side's final newline unchanged.
+            let last_hunk = diff.hunks.last();
+            let live_trailing = trailing_blank_change(session.live(), session.baseline())
+                && last_hunk.is_some_and(|hunk| hunk_changes_live_eof(hunk, live_line_count));
+            let baseline_trailing = trailing_blank_change(session.baseline(), session.live())
+                && last_hunk
+                    .is_some_and(|hunk| hunk_changes_baseline_eof(hunk, baseline_line_count));
+            self.left_trailing_blank.set(live_trailing);
+            self.right_trailing_blank.set(baseline_trailing);
             let new_ranges: Vec<Range<usize>> = diff
                 .hunks
                 .iter()
@@ -717,9 +724,9 @@ impl DiffPage {
                 && has_trailing_display_line(baseline);
             let whole = 0..usize::MAX;
             let whole = std::slice::from_ref(&whole);
-            let (live_display, _) =
+            let (live_display, live_markers) =
                 set_marked_text(&self.inspection_left_buffer, live, whole, live_trailing);
-            let (baseline_display, _) = set_marked_text(
+            let (baseline_display, baseline_markers) = set_marked_text(
                 &self.inspection_right_buffer,
                 baseline,
                 whole,
@@ -727,6 +734,21 @@ impl DiffPage {
             );
             clear_tags(&self.inspection_left_buffer);
             clear_tags(&self.inspection_right_buffer);
+            // The inspected hunk is focused, so its unselected blank-line
+            // markers use the focused-hunk layer; a selected change overlays
+            // the focused-word layer later.
+            tag_markers(
+                &self.inspection_left_buffer,
+                &live_markers,
+                0..usize::MAX,
+                TAG_INLINE_NORMAL,
+            );
+            tag_markers(
+                &self.inspection_right_buffer,
+                &baseline_markers,
+                0..usize::MAX,
+                TAG_INLINE_NORMAL,
+            );
             let live_word_ranges = tag_excerpt(
                 &self.inspection_left_buffer,
                 &live_display,
@@ -1294,10 +1316,23 @@ fn marked_text(text: &str, ranges: &[Range<usize>], trailing: bool) -> (String, 
     (out, markers)
 }
 
-/// True when the display-only line after a final newline belongs to a hunk
-/// because this side gained a final newline that the other side lacks.
+/// Text-level part of the trailing display-line rule: this side ends with a
+/// line break and the other side does not. The caller also requires the last
+/// hunk to change content on this side.
 fn trailing_blank_change(text: &str, other: &str) -> bool {
     has_trailing_display_line(text) && !crate::core::textlines::ends_with_break(other)
+}
+
+/// True when the last hunk changes content on the live side at the end of the
+/// text, so the display-only line after a final newline belongs to it.
+fn hunk_changes_live_eof(hunk: &Hunk, line_count: usize) -> bool {
+    hunk.new_len > 0 && hunk.new_end() == line_count
+}
+
+/// True when the last hunk changes content on the baseline side at the end of
+/// the text, so the display-only line after a final newline belongs to it.
+fn hunk_changes_baseline_eof(hunk: &Hunk, line_count: usize) -> bool {
+    hunk.old_len > 0 && hunk.old_end() == line_count
 }
 
 /// True when `text` ends with a line break and therefore has one extra
@@ -1918,8 +1953,9 @@ fn place_scroll(
 #[cfg(test)]
 mod tests {
     use super::{
-        LineNumberStyle, display_offset, display_selection, hunk_text, line_number_markup,
-        line_starts, marked_text, replacement_span, selected_word_ranges, trailing_blank_change,
+        LineNumberStyle, display_offset, display_selection, hunk_changes_baseline_eof,
+        hunk_changes_live_eof, hunk_text, line_number_markup, line_starts, marked_text,
+        replacement_span, selected_word_ranges, trailing_blank_change,
     };
 
     #[test]
@@ -1997,6 +2033,38 @@ mod tests {
         let (text, markers) = marked_text("\nsentence\n", ranges, false);
         assert_eq!(text, "\u{b6}\nsentence\n");
         assert_eq!(markers, vec![0]);
+    }
+
+    #[test]
+    fn only_the_side_that_changes_eof_claims_the_trailing_line() {
+        use crate::core::diff::Hunk;
+
+        let deletion = Hunk {
+            old_start: 1,
+            old_len: 1,
+            new_start: 1,
+            new_len: 0,
+        };
+        assert!(!hunk_changes_live_eof(&deletion, 1));
+        assert!(hunk_changes_baseline_eof(&deletion, 2));
+
+        let insertion = Hunk {
+            old_start: 1,
+            old_len: 0,
+            new_start: 1,
+            new_len: 1,
+        };
+        assert!(hunk_changes_live_eof(&insertion, 2));
+        assert!(!hunk_changes_baseline_eof(&insertion, 1));
+
+        let final_newline = Hunk {
+            old_start: 1,
+            old_len: 1,
+            new_start: 1,
+            new_len: 1,
+        };
+        assert!(hunk_changes_live_eof(&final_newline, 2));
+        assert!(hunk_changes_baseline_eof(&final_newline, 2));
     }
 
     #[test]

@@ -48,6 +48,10 @@ versioning.
 - Diff Mode now ignores its review keys when Shift, Ctrl, Alt, Super or Meta is
   held, so Shift+Right and Ctrl+Up no longer accept a hunk or move the
   selection.
+- A pure insertion or deletion at the end of a file no longer shows a spurious
+  blank-line pilcrow on the side whose final newline did not change.
+- Blank-line pilcrows in inspection now use the focused-hunk background instead
+  of the editor background.
 
 ### Changed
 

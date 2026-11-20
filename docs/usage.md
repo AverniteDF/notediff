@@ -351,7 +351,10 @@ use black text on lighter amber/red backgrounds. Highlights are opaque, without
 blending against the editor background. Blank lines inside a hunk show a faded,
 display-only pilcrow (`¶`) on the word-level background, so an empty change stays
 visible; the marker is never copied or accepted. A change in the final newline
-also marks the display-only line after it.
+also marks the display-only line after it on the side that changed; a pure
+insertion or deletion at the end of the file does not mark the unchanged side.
+In inspection, blank-line pilcrows use the focused-hunk background unless the
+selected change covers them.
 When the focused hunk is a pure
 insertion or deletion, the empty pane marks the exact boundary with the same
 3px strong-red bar used by inspection, so that pane still shows where the
