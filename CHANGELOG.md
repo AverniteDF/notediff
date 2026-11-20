@@ -18,11 +18,11 @@ versioning.
 - The editor context menu now has an **Insert Path** submenu with **File…** and
   **Directory…**, plus a top-level **Add Text from File…** item, which insert a
   path or a file's text like a paste without reading path targets.
-- The editor context menu now has a **Trim Whitespace** submenu with **Leading**
-  and **Trailing** for the selected lines or the whole document. Each item is
-  greyed out when its side has nothing to trim, reports the number of removed
-  characters, and is one undo step. The submenu heading is greyed out when both
-  are unavailable.
+- The editor context menu now has a **Trim Whitespace** submenu with **Leading**,
+  **Trailing**, **Blank Lines (remove)** and **Blank Lines (strip)** for the
+  selected lines or the whole document. Each item is greyed out when it would do
+  nothing, reports the affected count, and is one undo step. The submenu heading
+  is greyed out when all four are unavailable.
 - Diff Mode pane headers show the live document's full canonical path and
   right-aligned local timestamps for the last document edit (or save) and the
   saved baseline.

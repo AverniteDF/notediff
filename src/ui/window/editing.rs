@@ -174,6 +174,12 @@ impl AppWindow {
         add_action(window, this, "trim-trailing-whitespace", |this| {
             this.trim_trailing_whitespace()
         });
+        add_action(window, this, "trim-blank-lines-remove", |this| {
+            this.trim_blank_lines_remove()
+        });
+        add_action(window, this, "trim-blank-lines-strip", |this| {
+            this.trim_blank_lines_strip()
+        });
         // Sensitivity-only action for the Trim Whitespace submenu heading.
         add_action(window, this, "trim-whitespace-menu", |_| {});
 
@@ -215,6 +221,8 @@ impl AppWindow {
             "indent-halve",
             "trim-leading-whitespace",
             "trim-trailing-whitespace",
+            "trim-blank-lines-remove",
+            "trim-blank-lines-strip",
             "trim-whitespace-menu",
             "insert-path",
             "insert-folder-path",
@@ -451,20 +459,7 @@ impl AppWindow {
             return;
         }
         let removed: usize = changes.iter().map(|change| change.len).sum();
-
-        let buffer = &self.editor_buffer;
-        buffer.begin_user_action();
-        for change in changes.iter().rev() {
-            let Some(mut start) =
-                buffer.iter_at_line_offset(change.line as i32, change.start as i32)
-            else {
-                continue;
-            };
-            let mut end = start;
-            end.forward_chars(change.len as i32);
-            buffer.delete(&mut start, &mut end);
-        }
-        buffer.end_user_action();
+        self.apply_trim_changes(&changes);
 
         let side_name = match side {
             TrimSide::Leading => "leading",
@@ -481,36 +476,141 @@ impl AppWindow {
         self.toast(ToastKind::Success, &message);
     }
 
+    /// Remove every blank target line. The edit is one undo step and does
+    /// nothing in Diff Mode or for read-only documents.
+    pub(super) fn trim_blank_lines_remove(&self) {
+        if self.diff_active() || self.flags.read_only.get() {
+            return;
+        }
+
+        let text = self.current_text();
+        let lines = whitespace::blank_line_remove_plan(&text, self.target_lines(&text));
+        if lines.is_empty() {
+            self.toast(ToastKind::Info, "No blank lines to remove");
+            return;
+        }
+        let count = lines.len();
+
+        let buffer = &self.editor_buffer;
+        buffer.begin_user_action();
+        for line in lines.iter().rev() {
+            let Some(mut start) = buffer.iter_at_line(*line as i32) else {
+                continue;
+            };
+            let mut end = buffer
+                .iter_at_line(*line as i32 + 1)
+                .unwrap_or_else(|| buffer.end_iter());
+            buffer.delete(&mut start, &mut end);
+        }
+        buffer.end_user_action();
+
+        let message = if count == 1 {
+            "1 blank line was removed".to_string()
+        } else {
+            format!(
+                "{} blank lines were removed",
+                textstats::format_thousands(count)
+            )
+        };
+        self.toast(ToastKind::Success, &message);
+    }
+
+    /// Remove all spaces and tabs from blank target lines while keeping the
+    /// lines. The edit is one undo step and does nothing in Diff Mode or for
+    /// read-only documents.
+    pub(super) fn trim_blank_lines_strip(&self) {
+        if self.diff_active() || self.flags.read_only.get() {
+            return;
+        }
+
+        let text = self.current_text();
+        let changes = whitespace::blank_line_strip_plan(&text, self.target_lines(&text));
+        if changes.is_empty() {
+            self.toast(ToastKind::Info, "No blank lines to strip");
+            return;
+        }
+        let lines = changes.len();
+        let characters: usize = changes.iter().map(|change| change.len).sum();
+        self.apply_trim_changes(&changes);
+
+        let character_text = if characters == 1 {
+            "whitespace character"
+        } else {
+            "whitespace characters"
+        };
+        let message = if lines == 1 {
+            format!(
+                "1 blank line was stripped of {} {character_text}",
+                textstats::format_thousands(characters)
+            )
+        } else {
+            format!(
+                "{} blank lines were stripped of {} {character_text}",
+                textstats::format_thousands(lines),
+                textstats::format_thousands(characters)
+            )
+        };
+        self.toast(ToastKind::Success, &message);
+    }
+
+    fn apply_trim_changes(&self, changes: &[whitespace::TrimChange]) {
+        let buffer = &self.editor_buffer;
+        buffer.begin_user_action();
+        for change in changes.iter().rev() {
+            let Some(mut start) =
+                buffer.iter_at_line_offset(change.line as i32, change.start as i32)
+            else {
+                continue;
+            };
+            let mut end = start;
+            end.forward_chars(change.len as i32);
+            buffer.delete(&mut start, &mut end);
+        }
+        buffer.end_user_action();
+    }
+
     /// Refresh context-menu actions whose availability depends on the current
     /// selection. Called when the editor context menu is about to open.
     pub(super) fn update_context_menu_actions(&self) {
         let selected = self.selection_offsets();
-        let (has_leading, has_trailing) = self.status_state.measure(
-            || self.buffer_text(),
-            |text, stats| match selected {
-                Some((start, end)) => textstats::selection_stats(text, start, end).map_or(
-                    (false, false),
-                    |selection| {
-                        let lines = selection.line_range();
-                        (
-                            whitespace::has_leading_in(text, Some(lines.clone())),
-                            whitespace::has_trailing_in(text, Some(lines)),
-                        )
-                    },
-                ),
-                None => (
-                    whitespace::has_leading_in(text, None),
-                    stats.has_trailing_whitespace,
-                ),
-            },
-        );
+        let (has_leading, has_trailing, has_blank_remove, has_blank_strip) =
+            self.status_state.measure(
+                || self.buffer_text(),
+                |text, stats| match selected {
+                    Some((start, end)) => textstats::selection_stats(text, start, end).map_or(
+                        (false, false, false, false),
+                        |selection| {
+                            let lines = selection.line_range();
+                            (
+                                whitespace::has_leading_in(text, Some(lines.clone())),
+                                whitespace::has_trailing_in(text, Some(lines.clone())),
+                                whitespace::has_blank_line_remove(text, Some(lines.clone())),
+                                whitespace::has_blank_line_strip(text, Some(lines)),
+                            )
+                        },
+                    ),
+                    None => (
+                        whitespace::has_leading_in(text, None),
+                        stats.has_trailing_whitespace,
+                        whitespace::has_blank_line_remove(text, None),
+                        whitespace::has_blank_line_strip(text, None),
+                    ),
+                },
+            );
         let editable = !self.diff_active() && !self.flags.read_only.get();
         let leading = has_leading && editable;
         let trailing = has_trailing && editable;
+        let blank_remove = has_blank_remove && editable;
+        let blank_strip = has_blank_strip && editable;
         for (name, enabled) in [
             ("trim-leading-whitespace", leading),
             ("trim-trailing-whitespace", trailing),
-            ("trim-whitespace-menu", leading || trailing),
+            ("trim-blank-lines-remove", blank_remove),
+            ("trim-blank-lines-strip", blank_strip),
+            (
+                "trim-whitespace-menu",
+                leading || trailing || blank_remove || blank_strip,
+            ),
         ] {
             if let Some(action) = self
                 .window

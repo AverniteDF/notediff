@@ -55,6 +55,82 @@ pub struct TrimChange {
     pub len: usize,
 }
 
+/// True when any target line is blank: its content is empty or contains only
+/// ASCII spaces and tabs. The synthetic empty line after a final break does
+/// not count.
+pub fn has_blank_line_remove(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
+    let text_lines = textlines::split_all(text);
+    let last_line = text_lines.len().saturating_sub(1);
+    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
+    text_lines.into_iter().enumerate().any(|(index, line)| {
+        !(ignore_terminating_line && index == last_line)
+            && lines.as_ref().is_none_or(|range| range.contains(&index))
+            && is_blank_line(textlines::content(line))
+    })
+}
+
+/// True when any target blank line contains at least one ASCII space or tab.
+/// The synthetic empty line after a final break does not count.
+pub fn has_blank_line_strip(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
+    let text_lines = textlines::split_all(text);
+    let last_line = text_lines.len().saturating_sub(1);
+    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
+    text_lines.into_iter().enumerate().any(|(index, line)| {
+        let content = textlines::content(line);
+        !(ignore_terminating_line && index == last_line)
+            && lines.as_ref().is_none_or(|range| range.contains(&index))
+            && !content.is_empty()
+            && is_blank_line(content)
+    })
+}
+
+/// Blank-line removals for `lines` (0-based, inclusive), or for the whole text
+/// when `None`. Returns the 0-based line indices to delete, in ascending order.
+pub fn blank_line_remove_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<usize> {
+    let text_lines = textlines::split_all(text);
+    let last_line = text_lines.len().saturating_sub(1);
+    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
+    text_lines
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !(ignore_terminating_line && *index == last_line))
+        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .filter(|(_, line)| is_blank_line(textlines::content(line)))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Whitespace removals for blank lines in `lines` (0-based, inclusive), or for
+/// the whole text when `None`. Only blank lines with at least one space or tab
+/// are returned.
+pub fn blank_line_strip_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<TrimChange> {
+    let text_lines = textlines::split_all(text);
+    let last_line = text_lines.len().saturating_sub(1);
+    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
+    text_lines
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !(ignore_terminating_line && *index == last_line))
+        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .filter_map(|(line, text)| {
+            let content = textlines::content(text);
+            if content.is_empty() || !is_blank_line(content) {
+                return None;
+            }
+            Some(TrimChange {
+                line,
+                start: 0,
+                len: content.chars().count(),
+            })
+        })
+        .collect()
+}
+
+/// True when `content` is empty or contains only ASCII spaces and tabs.
+fn is_blank_line(content: &str) -> bool {
+    content.bytes().all(|byte| byte == b' ' || byte == b'\t')
+}
+
 /// Leading-whitespace removals for `lines` (0-based, inclusive), or for the
 /// whole text when `None`. Only lines that change are returned.
 pub fn trim_leading_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<TrimChange> {
@@ -256,6 +332,76 @@ mod tests {
                     len: 1
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn blank_line_plans_handle_remove_and_strip() {
+        let text = "a\n\n \n b\n\nc\n";
+        assert!(has_blank_line_remove(text, None));
+        assert!(has_blank_line_strip(text, None));
+        assert_eq!(blank_line_remove_plan(text, None), vec![1, 2, 4]);
+        assert_eq!(
+            blank_line_strip_plan(text, None),
+            vec![TrimChange {
+                line: 2,
+                start: 0,
+                len: 1
+            }]
+        );
+
+        // The synthetic empty line after a final break is ignored.
+        assert!(blank_line_remove_plan("a\n", None).is_empty());
+        assert_eq!(blank_line_remove_plan("\n", None), vec![0]);
+
+        // An empty document has no removable blank lines either.
+        assert!(!has_blank_line_remove("", None));
+        assert!(!has_blank_line_strip("", None));
+        assert!(blank_line_remove_plan("", None).is_empty());
+        assert!(blank_line_strip_plan("", None).is_empty());
+
+        // A single space is a real blank line and is removable.
+        assert!(has_blank_line_remove(" ", None));
+        assert!(has_blank_line_strip(" ", None));
+        assert_eq!(blank_line_remove_plan(" ", None), vec![0]);
+        assert_eq!(
+            blank_line_strip_plan(" ", None),
+            vec![TrimChange {
+                line: 0,
+                start: 0,
+                len: 1
+            }]
+        );
+
+        // Selection limits both plans.
+        assert_eq!(blank_line_remove_plan(text, Some(2..=2)), vec![2]);
+        assert!(has_blank_line_strip(text, Some(2..=2)));
+        assert!(!has_blank_line_strip(text, Some(1..=1)));
+        assert!(has_blank_line_remove(text, Some(1..=1)));
+
+        // Truly empty and whitespace-only lines count as blank for remove.
+        assert_eq!(blank_line_remove_plan(" \n\t\n", None), vec![0, 1]);
+        assert_eq!(
+            blank_line_strip_plan(" \n\t\n", None),
+            vec![
+                TrimChange {
+                    line: 0,
+                    start: 0,
+                    len: 1
+                },
+                TrimChange {
+                    line: 1,
+                    start: 0,
+                    len: 1
+                },
+            ]
+        );
+
+        // Every GTK line terminator is a line boundary.
+        assert_eq!(blank_line_remove_plan("a\r\n \r\nb\n", None), vec![1]);
+        assert_eq!(
+            blank_line_remove_plan("a\u{2029}\t\u{2029}b", None),
+            vec![1]
         );
     }
 

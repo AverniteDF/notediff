@@ -1042,13 +1042,23 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
         .window
         .lookup_action("trim-trailing-whitespace")
         .unwrap();
+    let blank_remove = window
+        .window
+        .lookup_action("trim-blank-lines-remove")
+        .unwrap();
+    let blank_strip = window
+        .window
+        .lookup_action("trim-blank-lines-strip")
+        .unwrap();
     let submenu = window.window.lookup_action("trim-whitespace-menu").unwrap();
 
-    // A clean document disables both items and the submenu heading.
+    // A clean document disables all four items and the submenu heading.
     window.set_editor_text("a\nb\n");
     open_editor_context_menu(&window);
     assert!(!leading.is_enabled());
     assert!(!trailing.is_enabled());
+    assert!(!blank_remove.is_enabled());
+    assert!(!blank_strip.is_enabled());
     assert!(!submenu.is_enabled());
     let context = editor_context_menu(&window.editor_view).unwrap();
     assert!(
@@ -1057,6 +1067,47 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
             .is_sensitive()
     );
     close_editor_context_menu(&window);
+
+    // A 0-byte document disables every trim item and the heading.
+    window.set_editor_text("");
+    open_editor_context_menu(&window);
+    assert!(!leading.is_enabled());
+    assert!(!trailing.is_enabled());
+    assert!(!blank_remove.is_enabled());
+    assert!(!blank_strip.is_enabled());
+    assert!(!submenu.is_enabled());
+    let context = editor_context_menu(&window.editor_view).unwrap();
+    assert!(
+        !context_menu_model_button(context.upcast_ref(), "Trim Whitespace")
+            .unwrap()
+            .is_sensitive()
+    );
+    close_editor_context_menu(&window);
+    window.trim_blank_lines_remove();
+    assert_eq!(window.current_text(), "");
+    assert_toast(&window, ToastKind::Info, "No blank lines to remove");
+    window.trim_blank_lines_strip();
+    assert_toast(&window, ToastKind::Info, "No blank lines to strip");
+
+    // A single-space document is one real blank line.
+    window.set_editor_text(" ");
+    open_editor_context_menu(&window);
+    assert!(blank_remove.is_enabled());
+    assert!(blank_strip.is_enabled());
+    assert!(submenu.is_enabled());
+    close_editor_context_menu(&window);
+    blank_remove.activate(None);
+    assert_eq!(window.current_text(), "");
+    assert_toast(&window, ToastKind::Success, "1 blank line was removed");
+
+    window.set_editor_text(" ");
+    blank_strip.activate(None);
+    assert_eq!(window.current_text(), "");
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "1 blank line was stripped of 1 whitespace character",
+    );
 
     // Whole-document leading trim, success toast and one undo step.
     window.set_editor_text(" a\n  b\n");
@@ -1121,6 +1172,43 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     buffer.undo();
     assert_eq!(window.current_text(), "a \n");
 
+    // Blank lines can be removed entirely.
+    window.set_editor_text("a\n\n \n b\n\nc\n");
+    open_editor_context_menu(&window);
+    assert!(blank_remove.is_enabled());
+    assert!(blank_strip.is_enabled());
+    assert!(submenu.is_enabled());
+    close_editor_context_menu(&window);
+    blank_remove.activate(None);
+    assert_eq!(window.current_text(), "a\n b\nc\n");
+    assert_toast(&window, ToastKind::Success, "3 blank lines were removed");
+    buffer.undo();
+    assert_eq!(window.current_text(), "a\n\n \n b\n\nc\n");
+
+    // Blank lines can be stripped instead.
+    window.set_editor_text("a\n   \n \nb\n");
+    open_editor_context_menu(&window);
+    assert!(blank_remove.is_enabled());
+    assert!(blank_strip.is_enabled());
+    close_editor_context_menu(&window);
+    blank_strip.activate(None);
+    assert_eq!(window.current_text(), "a\n\n\nb\n");
+    assert_toast(
+        &window,
+        ToastKind::Success,
+        "2 blank lines were stripped of 4 whitespace characters",
+    );
+    buffer.undo();
+    assert_eq!(window.current_text(), "a\n   \n \nb\n");
+
+    // Empty blank lines enable removal but not stripping.
+    window.set_editor_text("a\n\nb\n");
+    open_editor_context_menu(&window);
+    assert!(blank_remove.is_enabled());
+    assert!(!blank_strip.is_enabled());
+    assert!(submenu.is_enabled());
+    close_editor_context_menu(&window);
+
     // A selection limits the target lines for both sides.
     window.set_editor_text(" a \n b \n c \n");
     buffer.select_range(
@@ -1146,6 +1234,43 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     trailing.activate(None);
     assert_eq!(window.current_text(), " a\n b \n c \n");
 
+    // A selection also limits blank-line removal.
+    window.set_editor_text("a\n\nb\n\nc\n");
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    open_editor_context_menu(&window);
+    assert!(blank_remove.is_enabled());
+    assert!(!blank_strip.is_enabled());
+    assert!(submenu.is_enabled());
+    close_editor_context_menu(&window);
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    blank_remove.activate(None);
+    assert_eq!(window.current_text(), "a\nb\n\nc\n");
+    buffer.undo();
+    assert_eq!(window.current_text(), "a\n\nb\n\nc\n");
+
+    // …and blank-line stripping.
+    window.set_editor_text("a\n  \nb\n \nc\n");
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    open_editor_context_menu(&window);
+    assert!(blank_remove.is_enabled());
+    assert!(blank_strip.is_enabled());
+    close_editor_context_menu(&window);
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    blank_strip.activate(None);
+    assert_eq!(window.current_text(), "a\n\nb\n \nc\n");
+
     // Trailing-only selection keeps the submenu enabled.
     window.set_editor_text("a \nb\nc \n");
     buffer.select_range(
@@ -1158,7 +1283,8 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     assert!(submenu.is_enabled());
     close_editor_context_menu(&window);
 
-    // A selection with neither side disables both items and the heading.
+    // A selection with no leading, trailing or blank-line whitespace disables
+    // every item and the heading.
     window.set_editor_text("a \nb\nc \n");
     buffer.select_range(
         &buffer.iter_at_line(1).unwrap(),
@@ -1167,6 +1293,8 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     open_editor_context_menu(&window);
     assert!(!leading.is_enabled());
     assert!(!trailing.is_enabled());
+    assert!(!blank_remove.is_enabled());
+    assert!(!blank_strip.is_enabled());
     assert!(!submenu.is_enabled());
     close_editor_context_menu(&window);
 
@@ -1185,6 +1313,18 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     window.trim_trailing_whitespace();
     assert_eq!(window.current_text(), "a \nb\nc \n");
     assert_toast(&window, ToastKind::Info, "No trailing whitespace to remove");
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    window.trim_blank_lines_remove();
+    assert_toast(&window, ToastKind::Info, "No blank lines to remove");
+    buffer.select_range(
+        &buffer.iter_at_line(1).unwrap(),
+        &buffer.iter_at_line(2).unwrap(),
+    );
+    window.trim_blank_lines_strip();
+    assert_toast(&window, ToastKind::Info, "No blank lines to strip");
 
     // Read-only disables both actions and the heading, and does nothing.
     window.set_editor_text(" a \n");
@@ -1192,10 +1332,14 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     open_editor_context_menu(&window);
     assert!(!leading.is_enabled());
     assert!(!trailing.is_enabled());
+    assert!(!blank_remove.is_enabled());
+    assert!(!blank_strip.is_enabled());
     assert!(!submenu.is_enabled());
     close_editor_context_menu(&window);
     window.trim_leading_whitespace();
     window.trim_trailing_whitespace();
+    window.trim_blank_lines_remove();
+    window.trim_blank_lines_strip();
     assert_eq!(window.current_text(), " a \n");
     window.set_read_only(false);
 
@@ -1203,6 +1347,8 @@ fn trim_whitespace_scenario(app: &adw::Application, store: &SnapshotStore) {
     window.stack.set_visible_child_name("diff");
     window.trim_leading_whitespace();
     window.trim_trailing_whitespace();
+    window.trim_blank_lines_remove();
+    window.trim_blank_lines_strip();
     assert_eq!(window.current_text(), " a \n");
     window.stack.set_visible_child_name("editor");
 

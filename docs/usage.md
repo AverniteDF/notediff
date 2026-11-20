@@ -141,17 +141,21 @@ notes for details and workarounds.
     (**Ctrl+Shift+[**) halves them. Double does nothing (with a toast) if every
     target line has no indentation; Halve does the same, and also refuses if any
     target line has an odd number of leading spaces, naming the first such line.
-- **Trim Whitespace** (right-click menu) has **Leading** and **Trailing**.
-  Each removes ASCII spaces and tabs from the start or end of the lines the
-  selection touches, or of the whole document when nothing is selected.
-  Whitespace-only lines become empty lines. Each item is greyed out when the
-  effective target has no whitespace on that side; the submenu heading is
-  greyed out when both are unavailable. A success toast reports the number of
-  characters removed, for example
-  `5 leading whitespace characters were removed`; invoking one directly when
-  nothing can be removed shows `No leading whitespace to remove` or
-  `No trailing whitespace to remove` instead. Each operation is one undo step
-  and is unavailable for read-only documents and in Diff Mode.
+- **Trim Whitespace** (right-click menu) has four operations on the lines the
+  selection touches, or on the whole document when nothing is selected. A blank
+  line is empty or contains only spaces and tabs. Each item is greyed out when
+  it would do nothing; the submenu heading is greyed out when all four are
+  unavailable. Each operation is one undo step, reports the affected count in a
+  success toast, and is unavailable for read-only documents and in Diff Mode.
+  - **Leading** removes the leading ASCII spaces and tabs from each target line.
+  - **Trailing** removes the trailing ASCII spaces and tabs from each target
+    line.
+  - **Blank Lines (remove)** deletes every blank target line.
+  - **Blank Lines (strip)** keeps each blank target line but removes all ASCII
+    spaces and tabs from it, leaving the line break.
+  Example toasts include `5 leading whitespace characters were removed`,
+  `3 blank lines were removed`, and
+  `3 blank lines were stripped of 5 whitespace characters`.
 - **EOL Conversion** (click the status-bar line-ending field) converts every line ending in the document to
   Windows (CRLF) or Unix (LF), including mixed endings. It is one undo step and
   leaves the document with unsaved changes. It is unavailable in Diff Mode and

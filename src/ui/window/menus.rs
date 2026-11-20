@@ -289,6 +289,14 @@ pub(super) fn build_context_menu() -> gio::Menu {
     let trim = gio::Menu::new();
     trim.append(Some("Leading"), Some("win.trim-leading-whitespace"));
     trim.append(Some("Trailing"), Some("win.trim-trailing-whitespace"));
+    trim.append(
+        Some("Blank Lines (remove)"),
+        Some("win.trim-blank-lines-remove"),
+    );
+    trim.append(
+        Some("Blank Lines (strip)"),
+        Some("win.trim-blank-lines-strip"),
+    );
 
     let edit_section = gio::Menu::new();
     edit_section.append_submenu(Some("Edit Indentation"), &indentation);
@@ -447,10 +455,12 @@ mod tests {
             Some("win.trim-whitespace-menu")
         );
         let trim = edit_section.item_link(1, gio::MENU_LINK_SUBMENU).unwrap();
-        assert_eq!(trim.n_items(), 2);
+        assert_eq!(trim.n_items(), 4);
         for (index, (label, action)) in [
             ("Leading", "win.trim-leading-whitespace"),
             ("Trailing", "win.trim-trailing-whitespace"),
+            ("Blank Lines (remove)", "win.trim-blank-lines-remove"),
+            ("Blank Lines (strip)", "win.trim-blank-lines-strip"),
         ]
         .iter()
         .enumerate()
