@@ -26,7 +26,8 @@ versioning.
   selected lines or the whole document. Each item is greyed out when it would do
   nothing, reports the affected count, and is one undo step. The submenu heading
   is greyed out when all four are unavailable.
-- Diff Mode pane headers show the live document's full canonical path and
+- Diff Mode pane headers show the live document's canonical path, shortened to
+  `~/...` under the home directory with the full path in a tooltip, and
   right-aligned local timestamps for the last document edit (or save) and the
   saved baseline.
 

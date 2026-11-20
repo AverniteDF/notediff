@@ -1056,6 +1056,11 @@ impl DiffPage {
         )
     }
 
+    #[cfg(test)]
+    pub fn document_path_tooltip(&self) -> Option<String> {
+        self.left_title.tooltip_text().map(|text| text.to_string())
+    }
+
     /// The live document path is shown in the left header for this review.
     pub(super) fn set_document_path(&self, path: Option<&Path>) {
         self.document_path.replace(path.map(Path::to_path_buf));
@@ -1073,13 +1078,16 @@ impl DiffPage {
     }
 
     /// Pane headers stay the same in full diff and inspection, even on empty
-    /// sides. The left title is the document's canonical path, with the full
-    /// path as its tooltip, or "Document" if no path was supplied.
+    /// sides. The left title shortens the home directory, with the full
+    /// canonical path as its tooltip, or "Document" if no path was supplied.
     fn set_headers(&self) {
         let path = self.document_path.borrow();
         let text = path.as_deref().map(|path| path.display().to_string());
+        let display = path
+            .as_deref()
+            .map(|path| super::display_path(path, &glib::home_dir()));
         self.left_title
-            .set_text(text.as_deref().unwrap_or("Document"));
+            .set_text(display.as_deref().unwrap_or("Document"));
         self.left_title.set_tooltip_text(text.as_deref());
         self.right_title.set_text("Baseline");
     }

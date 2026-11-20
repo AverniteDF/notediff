@@ -8,7 +8,7 @@ use gtk::glib::variant::ToVariant;
 use gtk::{gio, glib};
 
 use crate::core::pending::PendingAction;
-use crate::ui::{about_dialog, app_dialog};
+use crate::ui::{about_dialog, app_dialog, display_path};
 
 use super::diff_actions::AfterDiscardReview;
 use super::{AppWindow, add_action};
@@ -238,16 +238,6 @@ pub(super) fn build_recent_row(path: &Path) -> RecentRow {
     root.append(&open);
     root.append(&trash);
     RecentRow { root, open, trash }
-}
-
-/// Shorten a path below the user's home directory for display. The stored path
-/// and the action target remain absolute; only the menu label uses `~`.
-fn display_path(path: &Path, home: &Path) -> String {
-    match path.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-        Ok(rest) => format!("~/{}", rest.to_string_lossy()),
-        Err(_) => path.to_string_lossy().into_owned(),
-    }
 }
 
 /// A directory label always ends with `/`, without doubling the root separator.

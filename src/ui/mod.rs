@@ -11,6 +11,15 @@ mod theme_palette;
 pub mod toast;
 pub mod window;
 
+/// Shorten paths under home for display without changing their identity.
+fn display_path(path: &std::path::Path, home: &std::path::Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.to_string_lossy()),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
 pub fn initialize(app: &adw::Application) {
     theme::install();
     window::initialize(app);

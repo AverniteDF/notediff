@@ -277,7 +277,8 @@ document's dominant ending so a CRLF file stays CRLF.
 Press **F5** or click **Review Changes (F5)** in the header bar.
 Diff Mode compares the baseline with the current editor text, so unsaved edits
 can be reviewed without writing them first. The left pane is the live document
-(read-only) and its header shows the document's full path; the right pane is
+(read-only) and its header shows the document's path, shortened to `~/...` when
+it is under your home folder; hover for the full path. The right pane is
 the baseline and its header reads `Baseline`. Each header has a right-aligned
 local timestamp in `YYYY-MM-DD HH:MM` form. The live side shows the last
 in-memory edit, or the file's last-save time before any edit; its tooltip says

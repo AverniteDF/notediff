@@ -3972,7 +3972,11 @@ fn inspection_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
     window.enter_diff();
     assert_eq!(
         window.diff.header_texts().0,
-        canonical.display().to_string()
+        crate::ui::display_path(&canonical, &gtk::glib::home_dir())
+    );
+    assert_eq!(
+        window.diff.document_path_tooltip().as_deref(),
+        Some(canonical.to_string_lossy().as_ref())
     );
     let (left_time, right_time) = window.diff.header_times();
     assert_timestamp(&left_time);
@@ -4118,7 +4122,11 @@ fn inspection_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
     );
     assert_eq!(
         window.diff.header_texts().0,
-        canonical.display().to_string()
+        crate::ui::display_path(&canonical, &gtk::glib::home_dir())
+    );
+    assert_eq!(
+        window.diff.document_path_tooltip().as_deref(),
+        Some(canonical.to_string_lossy().as_ref())
     );
     assert!(press(Key::Up));
     assert_panes(added, "", wrapped);
