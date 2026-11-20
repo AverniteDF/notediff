@@ -43,6 +43,9 @@ versioning.
   uses the same subdued style as the other explanatory text.
 - Copying the file name or full path from the title menu no longer shows a
   success toast; the copy button's checkmark is the confirmation.
+- The discard-accepted-changes dialog now uses one count-free message for every
+  number of accepted changes, and its exit button reads **Discard and End
+  Review**.
 
 ## [1.1.0] - 2026-11-18
 

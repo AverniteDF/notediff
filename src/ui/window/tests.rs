@@ -4658,9 +4658,12 @@ fn review_exit_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         dialog.heading().as_deref(),
         Some("Discard accepted changes?")
     );
-    assert!(dialog.body().contains("1 change has been accepted"));
-    assert!(dialog.body().contains("return to editor?"));
-    assert!(find_response_button(dialog.upcast_ref(), "Discard and Exit Review").is_some());
+    assert!(
+        dialog.body().contains(
+            "Accepted changes aren't confirmed yet. Discard them and return to editor?"
+        )
+    );
+    assert!(find_response_button(dialog.upcast_ref(), "Discard and End Review").is_some());
     find_response_button(dialog.upcast_ref(), "Cancel")
         .unwrap()
         .emit_clicked();
@@ -4681,7 +4684,7 @@ fn review_exit_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         .unwrap()
         .downcast::<adw::AlertDialog>()
         .unwrap();
-    find_response_button(dialog.upcast_ref(), "Discard and Exit Review")
+    find_response_button(dialog.upcast_ref(), "Discard and End Review")
         .unwrap()
         .emit_clicked();
     wait_for(|| window.window.visible_dialog().is_none());

@@ -26,24 +26,18 @@ pub(super) enum AfterDiscardReview {
     Quit,
 }
 
-fn discard_review_body(accepted: usize, target: AfterDiscardReview) -> String {
+fn discard_review_body(target: AfterDiscardReview) -> String {
     let action = match target {
         AfterDiscardReview::ReturnToEditor => "return to editor",
         AfterDiscardReview::CloseWindow => "close this window",
         AfterDiscardReview::Quit => "continue quitting",
     };
-    if accepted == 0 {
-        return format!("Accepted changes have not been confirmed. Discard them and {action}?");
-    }
-    if accepted == 1 {
-        return format!("1 change has been accepted but not confirmed. Discard it and {action}?");
-    }
-    format!("{accepted} changes have been accepted but not confirmed. Discard them and {action}?")
+    format!("Accepted changes aren't confirmed yet. Discard them and {action}?")
 }
 
 fn discard_review_button(target: AfterDiscardReview) -> &'static str {
     match target {
-        AfterDiscardReview::ReturnToEditor => "Discard and Exit Review",
+        AfterDiscardReview::ReturnToEditor => "Discard and End Review",
         AfterDiscardReview::CloseWindow => "Discard and Close",
         AfterDiscardReview::Quit => "Discard and Quit",
     }
@@ -259,20 +253,19 @@ impl AppWindow {
     }
 
     /// Confirm discarding accepted changes before leaving, closing or quitting.
-    /// A session with nothing accepted runs the target immediately.
+    /// A session with no accepted baseline change runs the target immediately.
     pub(super) fn confirm_discard_review(self: &Rc<Self>, target: AfterDiscardReview) {
-        let (changed, accepted) = {
-            let state = self.diff_state.borrow();
-            state.as_ref().map_or((false, 0), |session| {
-                (session.baseline_changed(), session.accepted_hunks())
-            })
-        };
+        let changed = self
+            .diff_state
+            .borrow()
+            .as_ref()
+            .is_some_and(DiffSession::baseline_changed);
         if !changed {
             self.after_discard_review(target);
             return;
         }
 
-        let body = discard_review_body(accepted, target);
+        let body = discard_review_body(target);
         let this = self.clone();
         dialogs::ask(
             &self.window,
@@ -458,5 +451,40 @@ impl AppWindow {
         self.stack.set_visible_child_name("editor");
         self.update_diff_button();
         self.editor_view.grab_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discard_review_bodies_name_the_target_action() {
+        for (target, action) in [
+            (AfterDiscardReview::ReturnToEditor, "return to editor"),
+            (AfterDiscardReview::CloseWindow, "close this window"),
+            (AfterDiscardReview::Quit, "continue quitting"),
+        ] {
+            assert_eq!(
+                discard_review_body(target),
+                format!("Accepted changes aren't confirmed yet. Discard them and {action}?")
+            );
+        }
+    }
+
+    #[test]
+    fn discard_review_buttons_are_specific() {
+        assert_eq!(
+            discard_review_button(AfterDiscardReview::ReturnToEditor),
+            "Discard and End Review"
+        );
+        assert_eq!(
+            discard_review_button(AfterDiscardReview::CloseWindow),
+            "Discard and Close"
+        );
+        assert_eq!(
+            discard_review_button(AfterDiscardReview::Quit),
+            "Discard and Quit"
+        );
     }
 }

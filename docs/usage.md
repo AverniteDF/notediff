@@ -306,7 +306,7 @@ file chooser, while `F5` does nothing until the document has been saved once.
 Accept All is available from the full Diff Mode toolbar. Accepting and undoing only
 change the in-memory baseline; nothing is written to disk until **Confirm**.
 When **Esc** would discard accepted changes, the prompt is **Discard accepted
-changes?** with **Cancel** and **Discard and Exit Review**. It does not change
+changes?** with **Cancel** and **Discard and End Review**. It does not change
 the live document or the saved baseline.
 **Confirm** saves the live document first if it has unsaved edits, then writes
 the accepted baseline in one go. Cancelling that save prompt keeps Diff Mode
