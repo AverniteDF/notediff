@@ -97,6 +97,19 @@ fn title_text(name: &str, dirty: bool, read_only: bool) -> String {
     format!("{dot}{name}{read_only}")
 }
 
+/// Markup for the header title. The dirty dot is scaled down, and the file name
+/// is escaped because the label is populated with markup.
+fn title_markup(name: &str, dirty: bool, read_only: bool) -> String {
+    let dot = if dirty {
+        "<span size=\"80%\" rise=\"1.5pt\">●</span>  "
+    } else {
+        ""
+    };
+    let read_only = if read_only { " (Read-Only)" } else { "" };
+    let escaped = glib::markup_escape_text(name);
+    format!("{dot}{}{read_only}", escaped.as_str())
+}
+
 /// The header button is suggested (blue) only for Save As on an untitled
 /// document.
 fn save_as_suggested(has_path: bool) -> bool {
@@ -685,10 +698,14 @@ impl AppWindow {
         } else {
             self.window.remove_css_class(theme::DIRTY_CLASS);
         }
-        let title = title_text(&name, is_dirty, self.flags.read_only.get());
-        self.title_label.set_label(&title);
+        self.title_label
+            .set_markup(&title_markup(&name, is_dirty, self.flags.read_only.get()));
         self.update_title_tooltip();
-        self.window.set_title(Some(&title));
+        self.window.set_title(Some(&title_text(
+            &name,
+            is_dirty,
+            self.flags.read_only.get(),
+        )));
 
         let has_path = path.is_some();
         for name in ["copy-file-name", "copy-full-path"] {

@@ -21,7 +21,7 @@ use crate::ui::toast::ToastKind;
 use super::file_actions::save_action_label;
 use super::{
     AppWindow, CREATE_LABEL, REVIEW_LABEL, SAVE_AS_LABEL, initialize, review_enabled,
-    save_as_suggested, title_text,
+    save_as_suggested, title_markup, title_text,
 };
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -55,6 +55,19 @@ fn window_title_puts_the_dirty_marker_first() {
     assert_eq!(
         title_text("notes.txt", true, true),
         "●  notes.txt (Read-Only)"
+    );
+}
+
+#[test]
+fn header_title_scales_the_dirty_marker_and_escapes_the_name() {
+    assert_eq!(title_markup("notes.md", false, false), "notes.md");
+    assert_eq!(
+        title_markup("notes.md", true, false),
+        "<span size=\"80%\" rise=\"1.5pt\">●</span>  notes.md"
+    );
+    assert_eq!(
+        title_markup("a&b.md", true, true),
+        "<span size=\"80%\" rise=\"1.5pt\">●</span>  a&amp;b.md (Read-Only)"
     );
 }
 
@@ -4659,9 +4672,9 @@ fn review_exit_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         Some("Discard accepted changes?")
     );
     assert!(
-        dialog.body().contains(
-            "Accepted changes aren't confirmed yet. Discard them and return to editor?"
-        )
+        dialog
+            .body()
+            .contains("Accepted changes aren't confirmed yet. Discard them and return to editor?")
     );
     assert!(find_response_button(dialog.upcast_ref(), "Discard and End Review").is_some());
     find_response_button(dialog.upcast_ref(), "Cancel")

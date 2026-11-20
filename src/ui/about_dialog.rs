@@ -31,10 +31,9 @@ pub fn present(parent: &adw::ApplicationWindow) {
         let toast_overlay = toast_overlay.clone();
         version.connect_clicked(move |button| {
             button.clipboard().set_text(APP_VERSION);
-            toast_overlay.add_toast(toast::new(
-                ToastKind::Success,
-                "Version copied to clipboard",
-            ));
+            let toast = toast::new(ToastKind::Success, "Version copied to clipboard");
+            toast.set_timeout(2);
+            toast_overlay.add_toast(toast);
         });
     }
 

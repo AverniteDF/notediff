@@ -37,10 +37,11 @@ versioning.
 
 ### Changed
 
-- The dirty-document marker before the title is now a larger `●` followed by
-  two spaces.
+- The dirty-document marker before the title is a `●` at 80% size, raised
+  slightly, followed by two spaces.
 - The Appearance tab explanation is shorter, and the user-theme restart note
   uses the same subdued style as the other explanatory text.
+- The About dialog's version-copy toast now disappears after two seconds.
 - Copying the file name or full path from the title menu no longer shows a
   success toast; the copy button's checkmark is the confirmation.
 - The discard-accepted-changes dialog now uses one count-free message for every
