@@ -200,6 +200,7 @@ fn gtk_window_smoke() {
     search_replace_scenario(&app, &dir, &store);
     file_actions_scenario(&app, &dir, &store);
     duplicate_open_scenario(&app, &dir, &store);
+    save_as_duplicate_scenario(&app, &dir, &store);
     plain_text_scenario(&app, &dir, &store);
     document_state_scenario(&app, &dir, &store);
     save_external_scenario(&app, &dir, &store);
@@ -3614,6 +3615,82 @@ fn duplicate_open_scenario(app: &adw::Application, dir: &Path, store: &SnapshotS
     );
 
     requester.window.destroy();
+    owner.window.destroy();
+}
+
+fn save_as_duplicate_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let owned = dir.join("save-as-owned.txt");
+    std::fs::write(&owned, "owner\n").unwrap();
+    let owner = AppWindow::with_store(app, store.clone());
+    owner.window.present();
+    AppWindow::open_path(&owner, &owned);
+    let owner_path = owner.doc.borrow().path().map(Path::to_path_buf);
+    assert!(owner_path.is_some());
+
+    let draft = AppWindow::with_store(app, store.clone());
+    draft.window.present();
+    draft.set_editor_text("draft\n");
+
+    let expect_refused = |window: &Rc<AppWindow>| {
+        wait_for(|| {
+            window
+                .window
+                .visible_dialog()
+                .is_some_and(|dialog| dialog.is_mapped())
+        });
+        let dialog = window
+            .window
+            .visible_dialog()
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        assert_eq!(dialog.heading().as_deref(), Some("Could not save"));
+        assert_eq!(
+            dialog.body().as_str(),
+            "That file is already open in another window."
+        );
+        dialog.close();
+        wait_for(|| window.window.visible_dialog().is_none());
+    };
+
+    // Save As must not write over a file owned by another window.
+    draft.save_as_path(&owned, None);
+    expect_refused(&draft);
+    assert!(draft.doc.borrow().path().is_none());
+    assert_eq!(draft.current_text(), "draft\n");
+    assert_eq!(std::fs::read_to_string(&owned).unwrap(), "owner\n");
+    assert_eq!(owner.doc.borrow().path(), owner_path.as_deref());
+    assert_eq!(owner.current_text(), "owner\n");
+
+    // A symlink resolves to the same canonical target.
+    let link = dir.join("save-as-owned-link.txt");
+    std::os::unix::fs::symlink(&owned, &link).unwrap();
+    draft.save_as_path(&link, None);
+    expect_refused(&draft);
+    assert!(draft.doc.borrow().path().is_none());
+
+    // A file deleted from disk is still owned by the window that has it open.
+    let removed = dir.join("save-as-removed.txt");
+    std::fs::write(&removed, "removed\n").unwrap();
+    let removed_window = AppWindow::with_store(app, store.clone());
+    removed_window.window.present();
+    AppWindow::open_path(&removed_window, &removed);
+    std::fs::remove_file(&removed).unwrap();
+    draft.save_as_path(&removed, None);
+    expect_refused(&draft);
+    assert!(draft.doc.borrow().path().is_none());
+    assert!(!removed.exists());
+
+    // A path with no other owner still saves normally.
+    let fresh = dir.join("save-as-fresh.txt");
+    draft.save_as_path(&fresh, None);
+    let canonical = fresh.canonicalize().unwrap();
+    assert_eq!(draft.doc.borrow().path(), Some(canonical.as_path()));
+    assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "draft\n");
+    assert_toast(&draft, ToastKind::Success, "Saved");
+
+    removed_window.window.destroy();
+    draft.window.destroy();
     owner.window.destroy();
 }
 

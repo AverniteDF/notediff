@@ -944,10 +944,17 @@ pub fn open_window_for_path(app: &adw::Application, path: &Path) {
 /// failure means the normal open can report the error instead.
 fn window_for_open_path(path: &Path) -> Option<Rc<AppWindow>> {
     let canonical = path.canonicalize().ok()?;
+    window_for_canonical_path(&canonical)
+}
+
+/// Return the window that owns an already-canonical path. Save As uses this
+/// so a path that does not exist yet can be compared without requiring it to
+/// exist first.
+fn window_for_canonical_path(canonical: &Path) -> Option<Rc<AppWindow>> {
     WINDOWS.with_borrow(|windows| {
         windows
             .iter()
-            .find(|window| window.owns_open_path(&canonical))
+            .find(|window| window.owns_open_path(canonical))
             .cloned()
     })
 }

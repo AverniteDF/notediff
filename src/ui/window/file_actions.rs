@@ -12,6 +12,7 @@ use gtk::{gio, glib};
 
 use crate::core::LARGE_FILE_WARNING_BYTES;
 use crate::core::document::Document;
+use crate::core::fsutil;
 use crate::core::pending::{AfterOpen, ExternalCheck, PendingAction};
 use crate::core::rename::{self, BaselineMove, RenameError};
 use crate::core::snapshot_store::LinkMode;
@@ -576,16 +577,47 @@ impl AppWindow {
                 let Some(path) = file.path() else {
                     return;
                 };
-                let previous = this.path_for_snapshot();
-                match this.persist(Some(&path)) {
-                    Ok(_) => {
-                        this.toast(ToastKind::Success, "Saved");
-                        this.finish_save_as(previous, then);
-                    }
-                    Err(err) => this.show_error("Could not save", &err),
-                }
+                this.save_as_path(&path, then);
             },
         );
+    }
+
+    /// Write the draft to `path` after checking that no other window owns the
+    /// canonical target. The chooser callback and the smoke test both use this
+    /// entry point.
+    pub(super) fn save_as_path(self: &Rc<Self>, path: &Path, then: Option<PendingAction>) {
+        if self.diff_active() {
+            return;
+        }
+
+        // Compare the path `Document::save_as` will record. `canonical_target`
+        // also resolves a path that is missing on disk, so a file deleted but
+        // still open in another window cannot become a second owner.
+        let canonical = match fsutil::canonical_target(path) {
+            Ok(canonical) => canonical,
+            Err(err) => {
+                self.show_error("Could not save", &err.to_string());
+                return;
+            }
+        };
+        if let Some(owner) = super::window_for_canonical_path(&canonical)
+            && !Rc::ptr_eq(&owner, self)
+        {
+            self.show_error(
+                "Could not save",
+                "That file is already open in another window.",
+            );
+            return;
+        }
+
+        let previous = self.path_for_snapshot();
+        match self.persist(Some(path)) {
+            Ok(()) => {
+                self.toast(ToastKind::Success, "Saved");
+                self.finish_save_as(previous, then);
+            }
+            Err(err) => self.show_error("Could not save", &err),
+        }
     }
 
     /// After a successful Save As: when the document moved to a new path whose

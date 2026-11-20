@@ -38,6 +38,8 @@ versioning.
 - Clicking or dragging the line-number gutter on a scrolled document now
   selects the lines under the pointer instead of lines from the top of the
   file.
+- Save As now refuses a path that is already open in another window instead of
+  letting both windows own the same file.
 
 ### Changed
 

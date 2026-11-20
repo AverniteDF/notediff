@@ -86,7 +86,10 @@ notes for details and workarounds.
   while Diff Mode is showing, as are New File, Open File and Rename or Move;
   finish or close the review first. When a file that has a baseline is saved
   under a new path, notediff offers to copy the baseline to the new file
-  (**Copy Baseline**); the original keeps its own.
+  (**Copy Baseline**); the original keeps its own. If the chosen path is
+  already open in another window, Save As is refused with **Could not save**
+  and `That file is already open in another window.` and neither document
+  changes; saving onto the current window's own path remains allowed.
 - Rename or move the open file with **F2** or **Rename or Move…** in the File
   menu. Enter a new name to rename in place, or a path to move it (absolute,
   relative to the file's folder, or starting with `~/`; a folder keeps the file
