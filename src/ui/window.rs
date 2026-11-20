@@ -409,10 +409,7 @@ impl AppWindow {
             if this.flags.is_loading() {
                 return;
             }
-            this.note_edit();
-            this.flags.dirty.set(this.dirty_after_edit());
-            this.update_title();
-            this.enable_review_on_edit();
+            this.record_user_edit();
         }));
 
         // Cursor movement, selection changes and overwrite toggles can fire
@@ -616,6 +613,16 @@ impl AppWindow {
         }
 
         self.update_file_actions();
+    }
+
+    /// Bookkeeping for a user-caused text change after the buffer has already
+    /// been updated. Programmatic loads skip it; the unlock tab conversion
+    /// calls it explicitly because that replacement is still a user request.
+    fn record_user_edit(self: &Rc<Self>) {
+        self.note_edit();
+        self.flags.dirty.set(self.dirty_after_edit());
+        self.update_title();
+        self.enable_review_on_edit();
     }
 
     /// Any user edit makes the live text differ from an existing baseline, so

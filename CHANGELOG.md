@@ -40,6 +40,9 @@ versioning.
   file.
 - Save As now refuses a path that is already open in another window instead of
   letting both windows own the same file.
+- Unlocking a read-only document that contains tabs no longer adds an undo step
+  that does nothing and no longer shows a misleading **Tabs were converted to
+  spaces** toast on Ctrl+Z.
 
 ### Changed
 

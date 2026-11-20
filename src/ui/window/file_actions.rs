@@ -312,16 +312,18 @@ impl AppWindow {
         });
     }
 
-    /// Convert tabs as one undo step, preserving character offsets.
-    fn convert_buffer_tabs(&self) {
+    /// Convert tabs without an undo step or the paste filters, preserving the
+    /// cursor. This matches opening a tabbed file with **Yes**: the editable
+    /// document starts with spaces and Ctrl+Z cannot bring the tabs back.
+    fn convert_buffer_tabs(self: &Rc<Self>) {
         let buffer = &self.editor_buffer;
         let offset = buffer.cursor_position();
         let converted = tabs::convert_tabs(&self.current_text());
-        buffer.begin_user_action();
-        buffer.delete(&mut buffer.start_iter(), &mut buffer.end_iter());
-        buffer.insert(&mut buffer.start_iter(), &converted);
-        buffer.end_user_action();
+        self.set_editor_text(&converted);
         buffer.place_cursor(&buffer.iter_at_offset(offset));
+        // `set_editor_text` treats the replacement as a load and suppresses
+        // the normal edit bookkeeping; the unlock was requested by the user.
+        self.record_user_edit();
     }
 
     fn finish_open(&self, document: Document, mode: OpenMode, large: bool) {

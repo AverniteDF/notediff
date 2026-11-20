@@ -2937,9 +2937,46 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
         if unlocked {
             assert_eq!(buffer.cursor_position(), 2);
             assert!(editor.flags.dirty.get());
-            assert!(buffer.can_undo());
         }
     }
+
+    // The unlock conversion is programmatic, like opening with Yes: it adds
+    // no undo step, so Ctrl+Z cannot leave a no-op step or run the tab filter.
+    let unlock = AppWindow::with_store(app, store.clone());
+    unlock.set_editor_text("a\tb\n");
+    unlock
+        .editor_buffer
+        .place_cursor(&unlock.editor_buffer.iter_at_offset(2));
+    unlock.set_read_only(true);
+    unlock.last_toast.take();
+    unlock
+        .window
+        .lookup_action("read-only")
+        .unwrap()
+        .activate(None);
+    wait_for(|| unlock.window.visible_dialog().is_some());
+    let dialog = unlock
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    dialog.emit_by_name::<()>("response", &[&"yes"]);
+    wait_for(|| unlock.editor_view.is_editable());
+    assert_eq!(unlock.current_text(), "a b\n");
+    assert_eq!(unlock.editor_buffer.cursor_position(), 2);
+    assert!(unlock.flags.dirty.get());
+    assert!(
+        !unlock.editor_buffer.can_undo(),
+        "the unlock conversion must not add an undo step"
+    );
+    unlock.editor_buffer.undo();
+    assert_eq!(unlock.current_text(), "a b\n");
+    assert!(
+        unlock.last_toast.borrow().is_none(),
+        "undo must not run the tab filter"
+    );
+    unlock.window.destroy();
 
     // EOL conversion: mixed text becomes uniform, as one undo step, and
     // a read-only document is refused.
