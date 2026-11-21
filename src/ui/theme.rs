@@ -3,7 +3,6 @@
 //! The owned catalog is loaded once at startup; user theme edits require restart.
 
 use std::cell::RefCell;
-use std::fs;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -14,10 +13,13 @@ use super::theme_catalog::Catalog;
 pub use super::theme_catalog::LoadedTheme;
 use super::theme_palette::Palette;
 use crate::core::appearance::Appearance;
-use crate::core::fsutil::data_home;
+use crate::core::fsutil::{ReadError, data_home, read_utf8_limited};
 use crate::core::themes;
 
 const STYLESHEET: &str = include_str!("../../assets/notediff.css");
+
+/// The remembered-theme state file is tiny; larger files are ignored.
+const MAX_STATE_BYTES: u64 = 64 * 1024;
 
 pub const CONTENT_CLASS: &str = "notediff-content";
 pub const PREVIEW_FONT_CLASS: &str = "notediff-preview-font";
@@ -88,7 +90,7 @@ pub(crate) fn install_at(user_dir: &Path, state_path: Option<&Path>, styles_dir:
     let mut catalog = Catalog::load(user_dir, styles_dir);
     let mut selected = catalog.entries[0].clone();
     if let Some(path) = state_path {
-        match fs::read_to_string(path) {
+        match read_utf8_limited(path, MAX_STATE_BYTES) {
             Ok(text) => {
                 if let Some(id) = themes::selected_id(&text) {
                     if let Some(theme) = catalog.by_id(&id) {
@@ -100,7 +102,7 @@ pub(crate) fn install_at(user_dir: &Path, state_path: Option<&Path>, styles_dir:
                     }
                 }
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(ReadError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => catalog
                 .diagnostics
                 .push(format!("{}: {err}; using notediff Dark", path.display())),

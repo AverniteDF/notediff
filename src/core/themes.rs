@@ -5,7 +5,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::fsutil::{atomic_write, data_home};
+use super::fsutil::{atomic_write, data_home, read_utf8_limited};
+
+/// User theme descriptors are small; oversized files are reported and skipped.
+const MAX_DESCRIPTOR_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -129,8 +132,8 @@ pub fn discover(root: &Path) -> (Vec<(Theme, PathBuf)>, Vec<String>) {
     let mut themes = Vec::new();
     for dir in dirs {
         let path = dir.join("theme.conf");
-        let result = fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
+        let result = read_utf8_limited(&path, MAX_DESCRIPTOR_BYTES)
+            .map_err(|err| err.to_string())
             .and_then(|text| descriptor(&text));
         match result {
             Ok(theme) => themes.push((theme, dir.join("scheme.xml"))),
@@ -218,6 +221,25 @@ mod tests {
             selected_id(&fs::read_to_string(path).unwrap()).as_deref(),
             Some("midnight")
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn oversized_descriptors_are_rejected() {
+        let dir = std::env::temp_dir().join(format!("notediff-theme-size-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("huge")).unwrap();
+        // A huge comment is still a valid descriptor; only the size cap rejects
+        // it, so this distinguishes the bounded read from the parser.
+        fs::write(
+            dir.join("huge/theme.conf"),
+            format!("{VALID}#{}\n", "x".repeat(70 * 1024)),
+        )
+        .unwrap();
+        let (found, diagnostics) = discover(&dir);
+        assert!(found.is_empty());
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("huge/theme.conf"));
         fs::remove_dir_all(dir).unwrap();
     }
 }

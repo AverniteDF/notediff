@@ -85,6 +85,14 @@ versioning.
   **Apply Font**.
 - Escape now closes the search bar from any focus target in the window,
   including the editor and the replace field.
+- A baseline that exists but cannot be read is now reported as an error instead
+  of being treated as if the document had no baseline.
+- A moved baseline whose old snapshot cannot be removed now reports that it was
+  **moved**, not linked.
+- Translucent `current-line-number` theme colours keep their own opacity in the
+  derived gutter colour.
+- State and theme descriptor files over 64 KiB are ignored instead of being read
+  unbounded at startup.
 
 ### Changed
 

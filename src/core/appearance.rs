@@ -1,10 +1,12 @@
 //! Toolkit-free, app-written content font preferences.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::fsutil::{atomic_write, data_home};
+use super::fsutil::{atomic_write, data_home, read_utf8_limited};
+
+/// State files are small; anything larger is ignored at startup.
+const MAX_STATE_BYTES: u64 = 64 * 1024;
 
 pub const DEFAULT_FONT_FAMILY: &str = "JetBrains Mono, monospace";
 pub const DEFAULT_FONT_SIZE_PT: u32 = 12;
@@ -57,7 +59,7 @@ impl Appearance {
     }
 
     pub fn load_from(path: &Path) -> Self {
-        fs::read_to_string(path)
+        read_utf8_limited(path, MAX_STATE_BYTES)
             .map(|text| Self::parse(&text))
             .unwrap_or_default()
     }
@@ -118,6 +120,7 @@ fn valid_font_family(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -166,6 +169,13 @@ mod tests {
         value.save_to(&path).unwrap();
         assert_eq!(Appearance::load_from(&path), value);
         assert!(value.save_to(&dir).is_err());
+        // The file is otherwise valid; only the size cap must reject it.
+        fs::write(
+            &path,
+            format!("{}#{}", value.render(), "x".repeat(70 * 1024)),
+        )
+        .unwrap();
+        assert_eq!(Appearance::load_from(&path), Appearance::default());
         fs::remove_dir_all(dir).unwrap();
     }
 }

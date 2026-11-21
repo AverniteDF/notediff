@@ -80,17 +80,11 @@ impl SnapshotStore {
 
     pub fn read_for_canonical(&self, canonical: &Path) -> Result<Option<String>, ReadError> {
         let path = self.snapshot_path_for_canonical(canonical);
-        if !path.exists() {
-            return Ok(None);
+        match read_utf8_limited(&path, MAX_OPEN_BYTES) {
+            Ok(text) => Ok(Some(text)),
+            Err(ReadError::Io(err)) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
         }
-        let metadata = fs::metadata(&path).map_err(ReadError::Io)?;
-        if metadata.is_dir() {
-            return Err(ReadError::Io(io::Error::new(
-                io::ErrorKind::IsADirectory,
-                "snapshot path is a directory",
-            )));
-        }
-        read_utf8_limited(&path, MAX_OPEN_BYTES).map(Some)
     }
 
     /// True when a baseline file exists for the canonical live path.
@@ -140,7 +134,7 @@ impl SnapshotStore {
     /// `source_snapshot` (a path inside the store). Linking never replaces an
     /// existing baseline. The target is written first and the source removed
     /// afterwards (for `Move`), so a failure never loses the baseline. If only
-    /// the final removal fails, the error says the link itself succeeded.
+    /// the final removal fails, the error says the transfer itself succeeded.
     pub fn link(
         &self,
         source_snapshot: &Path,
@@ -197,7 +191,7 @@ impl SnapshotStore {
                 io::Error::new(
                     err.kind(),
                     format!(
-                        "the baseline was linked, but the old snapshot could not be removed: {err}"
+                        "the baseline was moved, but the old snapshot could not be removed: {err}"
                     ),
                 )
             })?;
@@ -395,6 +389,32 @@ mod tests {
         store.delete_for_canonical(&canonical).unwrap();
         assert_eq!(store.read_for_canonical(&canonical).unwrap(), None);
         assert!(!store.snapshot_path_for_canonical(&canonical).exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unreadable_baseline_paths_are_errors_not_missing() {
+        let dir = test_dir();
+        let store = SnapshotStore::at(dir.join("store"));
+        fs::create_dir_all(dir.join("store")).unwrap();
+        // A regular file where the snapshot's parent directory should be makes
+        // lookup fail with NotADirectory; that must not look like "no baseline".
+        fs::write(dir.join("store/blocked"), "not a directory").unwrap();
+        let error = store
+            .read_for_canonical(Path::new("/blocked/notes.md"))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ReadError::Io(err) if err.kind() == io::ErrorKind::NotADirectory
+        ));
+
+        // A directory at the snapshot path is reported as a non-regular file.
+        fs::create_dir_all(dir.join("store/ok/notes.md")).unwrap();
+        let error = store
+            .read_for_canonical(Path::new("/ok/notes.md"))
+            .unwrap_err();
+        assert!(matches!(error, ReadError::NotRegularFile));
 
         let _ = fs::remove_dir_all(dir);
     }

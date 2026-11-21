@@ -2,6 +2,9 @@
 
 use gtk::gdk;
 
+/// Minimum contrast ratio for readable review colours.
+const MIN_CONTRAST: f32 = 4.5;
+
 /// Colours for the Appearance tab's two-segment sample: the gutter with a
 /// normal line number, and one non-selected line of text.
 #[derive(Clone, Debug)]
@@ -112,7 +115,7 @@ fn css_color(c: &gdk::RGBA) -> String {
 }
 
 fn with_alpha(c: &gdk::RGBA, alpha: f32) -> gdk::RGBA {
-    gdk::RGBA::new(c.red(), c.green(), c.blue(), alpha)
+    gdk::RGBA::new(c.red(), c.green(), c.blue(), c.alpha() * alpha)
 }
 
 fn luminance(c: &gdk::RGBA) -> f32 {
@@ -132,7 +135,7 @@ pub(super) fn contrast(a: &gdk::RGBA, b: &gdk::RGBA) -> f32 {
 }
 
 fn readable(fg: &gdk::RGBA, bg: &gdk::RGBA) -> gdk::RGBA {
-    if contrast(fg, bg) >= 4.6 {
+    if contrast(fg, bg) >= MIN_CONTRAST {
         return *fg;
     }
     let (black, white) = (rgb(0.0, 0.0, 0.0), rgb(1.0, 1.0, 1.0));
@@ -165,7 +168,7 @@ fn highlight(
         foreground.unwrap_or(default_foreground),
         background.unwrap_or(default_bg),
     );
-    if contrast(&fg, &bg) < 4.5 {
+    if contrast(&fg, &bg) < MIN_CONTRAST {
         warnings.push(format!(
             "{name}: contrast below 4.5:1; using standard review colours"
         ));
@@ -213,7 +216,7 @@ pub fn resolve(
             rgb(0.18, 0.21, 0.25)
         }
     });
-    if contrast(&fg, &bg) < 4.5 {
+    if contrast(&fg, &bg) < MIN_CONTRAST {
         warnings.push("scheme text contrast is below 4.5:1; original colours are retained".into());
     }
     let gutter_bg = color(scheme, "line-numbers", true).unwrap_or(bg);
@@ -310,6 +313,17 @@ mod tests {
     }
 
     #[test]
+    fn translucent_base_colours_keep_their_opacity() {
+        let base = gdk::RGBA::parse("rgba(255, 255, 255, 0.8)").unwrap();
+        let derived = with_alpha(&base, 0.5);
+        assert!((derived.alpha() - 0.4).abs() < 1e-6);
+        assert_eq!(
+            (derived.red(), derived.green(), derived.blue()),
+            (1.0, 1.0, 1.0)
+        );
+    }
+
+    #[test]
     fn fallback_overlays_and_sample_text_are_readable_in_both_modes() {
         for dark in [false, true] {
             let (p, warnings) = resolve(None, dark, None);
@@ -317,7 +331,7 @@ mod tests {
             for style in [&p.hunk, &p.word, &p.focused_hunk, &p.focused_word] {
                 let fg = super::super::theme::rgba(style.foreground);
                 let bg = super::super::theme::rgba(style.background);
-                assert!(contrast(&fg, &bg) >= 4.5);
+                assert!(contrast(&fg, &bg) >= MIN_CONTRAST);
                 assert_eq!(
                     style.foreground,
                     if dark { [1.0; 4] } else { [0.0, 0.0, 0.0, 1.0] }
@@ -331,7 +345,7 @@ mod tests {
             );
             let p = p.preview;
             let bg = gdk::RGBA::parse(&p.background).unwrap();
-            assert!(contrast(&gdk::RGBA::parse(&p.text).unwrap(), &bg) >= 4.5);
+            assert!(contrast(&gdk::RGBA::parse(&p.text).unwrap(), &bg) >= MIN_CONTRAST);
             // The gutter deliberately keeps the theme's normal line-number
             // colour, even when that colour is dim.
         }
