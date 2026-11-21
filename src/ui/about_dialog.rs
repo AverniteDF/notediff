@@ -9,7 +9,7 @@ const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AUTHOR: &str = env!("CARGO_PKG_AUTHORS");
 const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
-const RELEASE_DATE: &str = "November 18, 2026";
+const RELEASE_DATE: &str = "November 21, 2026";
 const LICENSE_NAME: &str = "MIT License";
 const LICENSE_URL: &str = "https://opensource.org/licenses/MIT";
 
