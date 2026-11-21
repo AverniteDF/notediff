@@ -57,6 +57,9 @@ versioning.
   same bold default.
 - Fixed reference-cycle leaks in the About dialog, the status-bar whitespace dot
   and the Diff Mode line-number renderer.
+- **uninstall.sh** now succeeds when no applications directory was ever created,
+  and the installed launcher stays valid when the cargo binary path contains a
+  backtick or dollar sign.
 
 ### Changed
 

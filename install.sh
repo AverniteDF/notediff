@@ -54,9 +54,11 @@ install -m 644 "$PROJECT_DIR/assets/$ICON_NAME.svg" \
 install -m 644 "$PROJECT_DIR/assets/$ICON_NAME.png" \
   "$ICON_FILE"
 
-# Desktop Exec arguments are quoted. Escape backslashes, double quotes and
-# percent signs so an unusual CARGO_HOME still produces a valid launcher.
-exec_escaped="$(printf '%s' "$CARGO_BIN" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g')"
+# Desktop Exec arguments are quoted. Escape backslashes, double quotes,
+# backticks, dollar signs and percent signs so an unusual CARGO_HOME still
+# produces a valid launcher.
+exec_escaped="$(printf '%s' "$CARGO_BIN" |
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/`/\\`/g' -e 's/\$/\\$/g' -e 's/%/%%/g')"
 NOTEDIFF_EXEC="$exec_escaped" awk '
   /^Exec=/ { print "Exec=\"" ENVIRON["NOTEDIFF_EXEC"] "\" %F"; next }
   { print }
@@ -65,8 +67,9 @@ NOTEDIFF_EXEC="$exec_escaped" awk '
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -f -t "$ICONS_DIR" || true
 fi
-if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$APPLICATIONS_DIR"
+if command -v update-desktop-database >/dev/null 2>&1 &&
+  [[ -d "$APPLICATIONS_DIR" ]]; then
+  update-desktop-database "$APPLICATIONS_DIR" || true
 fi
 
 echo "Installed notediff:"

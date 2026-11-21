@@ -26,8 +26,9 @@ remove_file "$CARGO_BIN"
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -f -t "$ICONS_DIR" || true
 fi
-if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$APPLICATIONS_DIR"
+if command -v update-desktop-database >/dev/null 2>&1 &&
+  [[ -d "$APPLICATIONS_DIR" ]]; then
+  update-desktop-database "$APPLICATIONS_DIR" || true
 fi
 
 if [[ "$removed" -eq 0 ]]; then
