@@ -7,7 +7,9 @@ a GitHub release — require explicit user approval.
 ## 1. Preflight
 
 - Confirm the target version and release date with the user.
-- Work from a clean tree on `main`:
+- Work from a clean tree on `main`; `git status --short` must be completely
+  empty, including untracked files. Delete or commit scratch files such as a
+  session handoff before starting:
 
 ```sh
 git status --short --branch
@@ -23,7 +25,10 @@ git ls-remote --tags origin 'v*'
 ```
 
 - Confirm whether the release is source-only or should include built assets.
-  The `v1.0.0` and `v1.1.0` releases are source-only.
+  The `v1.0.0`, `v1.1.0` and `v1.2.0` releases are source-only.
+- Confirm the GitHub CLI is installed and authenticated before starting
+  (section 6). The token needs the `repo` scope, and HTTPS pushes need
+  `gh auth setup-git` when no credential helper is configured.
 - Do not release from a dirty tree, a detached HEAD, or a branch that has not
   been reviewed and merged.
 
@@ -34,7 +39,7 @@ Update all of these together:
 - `Cargo.toml`: `version`.
 - `Cargo.lock`: the root `notediff` package version. Running `cargo check`
   without `--locked` once after editing `Cargo.toml` updates it; commit the
-  result.
+  result. Confirm the root `name = "notediff"` entry shows the new version.
 - `CHANGELOG.md`:
   - keep `## [Unreleased]` at the top, empty for the next cycle;
   - copy its entries under a new `## [X.Y.Z] - YYYY-MM-DD` heading beneath it;
@@ -80,6 +85,9 @@ Optional local deployment check:
 ./install.sh
 ```
 
+Launch the installed build and confirm **About** shows the new version and
+release date.
+
 ## 5. Commit, push and tag
 
 Commit the release preparation with a message such as:
@@ -87,6 +95,14 @@ Commit the release preparation with a message such as:
 ```sh
 git add Cargo.toml Cargo.lock CHANGELOG.md src/ui/about_dialog.rs docs
 git commit -m "Release notediff X.Y.Z"
+```
+
+Before pushing, confirm the release commit is `HEAD`, the tree is clean, and
+the tag will point at it:
+
+```sh
+git status --short
+git rev-parse HEAD
 ```
 
 Push `main` only after the user approves:
@@ -157,6 +173,10 @@ Verify the result:
 
 ```sh
 gh release view vX.Y.Z --json tagName,name,isDraft,isPrerelease,url,assets
+gh release view vX.Y.Z --json body -q .body > /tmp/notediff-X.Y.Z-body.md
+diff -u /tmp/notediff-X.Y.Z-release.md /tmp/notediff-X.Y.Z-body.md
+git ls-remote origin refs/heads/main refs/tags/vX.Y.Z 'refs/tags/vX.Y.Z^{}'
+gh release list --limit 3
 ```
 
 Check that:
@@ -164,7 +184,8 @@ Check that:
 - the release is public, latest, and not a draft or prerelease;
 - the tag points at the release commit;
 - `main` and the tag are present on `origin`;
-- the release body matches the changelog.
+- the release body matches the changelog. GitHub may add a trailing newline;
+  compare the content, not the byte count.
 
 Optionally redeploy locally with `./install.sh`.
 
@@ -191,3 +212,22 @@ Optionally redeploy locally with `./install.sh`.
   GitHub release before deleting the tag.
 - Prefer a corrective commit and a new version over moving a public tag.
 - Never force-push `main` by default.
+
+## 10. Release checklist
+
+- [ ] Target version and release date confirmed with the user.
+- [ ] `git status --short` is empty, including untracked files.
+- [ ] `gh` is installed and authenticated with the `repo` scope;
+      `gh auth setup-git` is run when HTTPS pushes need it.
+- [ ] `Cargo.toml` and `Cargo.lock` show `X.Y.Z`.
+- [ ] `## [Unreleased]` is empty above `## [X.Y.Z] - YYYY-MM-DD`, and the
+      comparison links point at the new tag.
+- [ ] `RELEASE_DATE` is updated.
+- [ ] fmt, clippy, unit tests, the GTK smoke test and the 1.92 check pass.
+- [ ] The installed build's **About** shows the new version and date.
+- [ ] The release commit is `HEAD`; the tree is clean.
+- [ ] `main` and the annotated tag are pushed after approval and point at the
+      same commit.
+- [ ] The GitHub release is source-only unless assets were requested, is
+      **Latest**, and its body matches the changelog.
+- [ ] The release is public, not a draft or prerelease.
