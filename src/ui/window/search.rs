@@ -143,27 +143,33 @@ impl AppWindow {
                 }
             });
         }
-        // SearchBar connects Escape handling to the SearchEntry, not to the
-        // plain replacement Entry. Catch it before that entry consumes it and
-        // reuse Find's stop-search handler to close the bar and restore focus.
-        let replacement_keys = gtk::EventControllerKey::new();
-        replacement_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        // Escape closes the bar from any focus target in the window. Bubble
+        // phase lets the focused widget handle it first (for example the
+        // search entry's own stop-search) and only closes when nothing else
+        // did. Dialogs and popover menus keep their own Escape handling.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_name(Some("notediff-search-keys"));
+        keys.set_propagation_phase(gtk::PropagationPhase::Bubble);
         {
             let weak = Rc::downgrade(this);
-            replacement_keys.connect_key_pressed(move |_, key, _, _| {
-                if key == gdk::Key::Escape
-                    && let Some(this) = weak.upgrade()
-                    && this.search_bar.is_search_mode()
+            keys.connect_key_pressed(move |_, key, _, _| {
+                let Some(this) = weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                if key != gdk::Key::Escape
+                    || !this.search_bar.is_search_mode()
+                    || this.window.visible_dialog().is_some()
+                    || gtk::prelude::GtkWindowExt::focus(&this.window)
+                        .is_some_and(|focus| focus.ancestor(gtk::Popover::static_type()).is_some())
                 {
-                    this.search_entry.emit_by_name::<()>("stop-search", &[]);
-                    return glib::Propagation::Stop;
+                    return glib::Propagation::Proceed;
                 }
-                glib::Propagation::Proceed
+                this.search_bar.set_search_mode(false);
+                this.editor_view.grab_focus();
+                glib::Propagation::Stop
             });
         }
-        this.search_controls
-            .replacement
-            .add_controller(replacement_keys);
+        this.window.add_controller(keys);
         {
             let weak = Rc::downgrade(this);
             this.stack.connect_visible_child_name_notify(move |_| {

@@ -2979,34 +2979,64 @@ fn search_replace_scenario(app: &adw::Application, dir: &Path, store: &SnapshotS
     replace.activate(None);
     assert!(editor.search_bar.is_search_mode());
 
-    // Escape from Replace with must close the whole bar and restore editor
-    // focus, just like Escape from Find. Exercise the installed key handler.
+    // Escape closes the whole bar and restores editor focus from every focus
+    // target in the window: the replace entry, a search control, the search
+    // entry and the editor itself.
     editor.window.present();
-    editor.search_controls.replacement.grab_focus();
-    let controllers = editor.search_controls.replacement.observe_controllers();
+    let controllers = editor.window.observe_controllers();
     let keys = (0..controllers.n_items())
         .filter_map(|index| controllers.item(index))
-        .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
-        .unwrap();
-    assert_eq!(keys.propagation_phase(), gtk::PropagationPhase::Capture);
+        .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .find(|controller| controller.name().as_deref() == Some("notediff-search-keys"))
+        .expect("search key controller");
+    assert_eq!(keys.propagation_phase(), gtk::PropagationPhase::Bubble);
+    let escape = || {
+        keys.emit_by_name::<bool>(
+            "key-pressed",
+            &[
+                &gtk::gdk::Key::Escape,
+                &0u32,
+                &gtk::gdk::ModifierType::empty(),
+            ],
+        )
+    };
     assert!(!keys.emit_by_name::<bool>(
         "key-pressed",
         &[&gtk::gdk::Key::a, &0u32, &gtk::gdk::ModifierType::empty()],
     ));
     assert!(editor.search_bar.is_search_mode());
-    assert!(keys.emit_by_name::<bool>(
-        "key-pressed",
-        &[
-            &gtk::gdk::Key::Escape,
-            &0u32,
-            &gtk::gdk::ModifierType::empty()
-        ],
-    ));
+
+    for target in [
+        editor
+            .search_controls
+            .replacement
+            .clone()
+            .upcast::<gtk::Widget>(),
+        editor
+            .search_controls
+            .match_case
+            .clone()
+            .upcast::<gtk::Widget>(),
+        editor.search_entry.clone().upcast::<gtk::Widget>(),
+        editor.editor_view.clone().upcast::<gtk::Widget>(),
+    ] {
+        target.grab_focus();
+        assert!(escape());
+        assert!(!editor.search_bar.is_search_mode());
+        assert_eq!(
+            gtk::prelude::GtkWindowExt::focus(&editor.window),
+            Some(editor.editor_view.clone().upcast::<gtk::Widget>())
+        );
+        replace.activate(None);
+        assert!(editor.search_bar.is_search_mode());
+    }
+
+    // With the bar closed, Escape is left to the focused widget.
+    editor.search_bar.set_search_mode(false);
+    editor.editor_view.grab_focus();
+    assert!(!escape());
     assert!(!editor.search_bar.is_search_mode());
-    assert_eq!(
-        gtk::prelude::GtkWindowExt::focus(&editor.window),
-        Some(editor.editor_view.clone().upcast::<gtk::Widget>())
-    );
+
     replace.activate(None);
     assert!(editor.search_bar.is_search_mode());
 

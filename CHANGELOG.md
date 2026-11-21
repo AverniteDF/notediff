@@ -83,6 +83,8 @@ versioning.
   of the document.
 - Pressing Enter in the **Appearance** font fields applies the font, like
   **Apply Font**.
+- Escape now closes the search bar from any focus target in the window,
+  including the editor and the replace field.
 
 ### Changed
 
