@@ -151,7 +151,15 @@ pub fn selection_stats(text: &str, start_char: usize, end_char: usize) -> Option
     } else {
         breaks + 1 - usize::from(textlines::ends_with_break(selected))
     };
-    let first_line = textlines::break_count(&text[..start]);
+    let first_line_prefix = if start > 0
+        && text.as_bytes()[start - 1] == b'\r'
+        && text.as_bytes().get(start) == Some(&b'\n')
+    {
+        &text[..start - 1]
+    } else {
+        &text[..start]
+    };
+    let first_line = textlines::break_count(first_line_prefix);
     Some(SelectionStats {
         bytes: selected.len(),
         lines,
@@ -513,5 +521,14 @@ mod tests {
 
         let one = selection_stats("abc", 1, 2).unwrap();
         assert_eq!(one.summary(), "Sel: 1 byte, 1 line");
+    }
+
+    #[test]
+    fn selection_starting_mid_crlf_agrees_with_cursor_line() {
+        let text = "a\r\nb";
+        assert_eq!(cursor_position(text, 2).line, 1);
+        let sel = selection_stats(text, 2, 4).unwrap();
+        assert_eq!(sel.first_line, 0);
+        assert_eq!(sel.line_range(), 0..=1);
     }
 }

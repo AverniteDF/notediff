@@ -1,6 +1,5 @@
 //! Menu models, shared menu actions and application-wide accelerators.
 
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -71,7 +70,7 @@ impl AppWindow {
 /// so the quit only completes once every window has closed.
 pub(super) fn finish_quit(app: &adw::Application) {
     for window in super::WINDOWS.with_borrow(Clone::clone) {
-        if window.flags.allow_close.get() {
+        if window.flags.allow_close.get() || window.window.visible_dialog().is_some() {
             continue;
         }
         if window.flags.dirty.get() {
@@ -140,11 +139,6 @@ pub(super) fn build_title_menu() -> gio::Menu {
 /// The id used for the Open menu's path-entry row.
 pub(super) const OPEN_LOCATION_ID: &str = "open-location";
 
-/// True when there are recent paths to show below the path row.
-pub(super) fn has_recent_entries(recent: &[PathBuf]) -> bool {
-    !recent.is_empty()
-}
-
 /// The id used for a recent entry's custom two-line row.
 pub(super) fn recent_row_id(index: usize) -> String {
     format!("recent-{index}")
@@ -158,7 +152,7 @@ pub(super) fn build_open_menu(recent: &[PathBuf]) -> gio::Menu {
     location.set_attribute_value("custom", Some(&OPEN_LOCATION_ID.to_variant()));
     menu.append_item(&location);
 
-    if !has_recent_entries(recent) {
+    if recent.is_empty() {
         return menu;
     }
 
@@ -185,7 +179,7 @@ pub(super) struct OpenLocationRow {
     pub root: gtk::Box,
     pub entry: gtk::Entry,
     pub browse: gtk::Button,
-    error_generation: Rc<Cell<u64>>,
+    error_flash: Rc<super::flash::FlashState>,
 }
 
 const OPEN_LOCATION_ERROR_CLASS: &str = "notediff-open-location-error";
@@ -195,12 +189,13 @@ impl OpenLocationRow {
     /// the menu stays open so the user can correct the path in place.
     pub(super) fn flash_error(&self) {
         self.entry.add_css_class(OPEN_LOCATION_ERROR_CLASS);
-        let generation = self.error_generation.get().wrapping_add(1);
-        self.error_generation.set(generation);
-        let entry = self.entry.clone();
-        let error_generation = self.error_generation.clone();
+        let generation = self.error_flash.begin();
+        let entry = self.entry.downgrade();
+        let error_flash = self.error_flash.clone();
         glib::timeout_add_local_once(Duration::from_secs(1), move || {
-            if error_generation.get() == generation {
+            if error_flash.end(generation)
+                && let Some(entry) = entry.upgrade()
+            {
                 entry.remove_css_class(OPEN_LOCATION_ERROR_CLASS);
             }
         });
@@ -208,6 +203,7 @@ impl OpenLocationRow {
 
     /// Drop a stale error ring when the menu is reopened.
     pub(super) fn clear_error(&self) {
+        self.error_flash.cancel();
         self.entry.remove_css_class(OPEN_LOCATION_ERROR_CLASS);
     }
 }
@@ -231,11 +227,12 @@ pub(super) fn build_open_location_row() -> OpenLocationRow {
     entry_keys.set_name(Some("notediff-open-location-entry-keys"));
     entry_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
-        let browse = browse.clone();
-        let entry = entry.clone();
+        let browse = browse.downgrade();
+        let entry_ref = entry.downgrade();
         entry_keys.connect_key_pressed(move |_, key, _, modifiers| {
             if key == gtk::gdk::Key::Right
                 && !modifiers.intersects(gtk::accelerator_get_default_mod_mask())
+                && let (Some(entry), Some(browse)) = (entry_ref.upgrade(), browse.upgrade())
                 && entry.text().is_empty()
             {
                 browse.grab_focus();
@@ -250,10 +247,11 @@ pub(super) fn build_open_location_row() -> OpenLocationRow {
     browse_keys.set_name(Some("notediff-open-location-browse-keys"));
     browse_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
-        let entry = entry.clone();
+        let entry_ref = entry.downgrade();
         browse_keys.connect_key_pressed(move |_, key, _, modifiers| {
             if key == gtk::gdk::Key::Left
                 && !modifiers.intersects(gtk::accelerator_get_default_mod_mask())
+                && let Some(entry) = entry_ref.upgrade()
             {
                 let _ = entry.child_focus(gtk::DirectionType::TabForward);
                 return gtk::glib::Propagation::Stop;
@@ -269,7 +267,7 @@ pub(super) fn build_open_location_row() -> OpenLocationRow {
         root,
         entry,
         browse,
-        error_generation: Rc::new(Cell::new(0)),
+        error_flash: Rc::new(super::flash::FlashState::default()),
     }
 }
 

@@ -129,7 +129,7 @@ pub fn slice_lines(text: &str, start: usize, len: usize) -> &str {
         if index == start {
             begin = Some(offset);
         }
-        if index == start + len {
+        if index == start.saturating_add(len) {
             end = offset;
             break;
         }

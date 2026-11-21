@@ -46,7 +46,7 @@ impl AppWindow {
                     let Some(this) = weak.upgrade() else {
                         return;
                     };
-                    if this.flags.is_loading() {
+                    if this.flags.is_loading() || this.flags.in_undo_redo.get() {
                         return;
                     }
                     let target = this.doc.borrow().line_ending();
@@ -74,6 +74,34 @@ impl AppWindow {
                         this.toast(ToastKind::Info, "Tabs were converted to spaces");
                     }
                 });
+        }
+
+        // Bypass the insert filter while GtkTextBuffer replays an undo or redo
+        // step, then re-sync the document's preferred line ending so undoing an
+        // EOL conversion restores both the buffer text and future Enter breaks.
+        for signal in ["undo", "redo"] {
+            let weak = Rc::downgrade(this);
+            this.editor_buffer.connect_closure(
+                signal,
+                false,
+                glib::closure_local!(move |_buffer: sourceview5::Buffer| {
+                    if let Some(this) = weak.upgrade() {
+                        this.flags.in_undo_redo.set(true);
+                    }
+                }),
+            );
+            let weak = Rc::downgrade(this);
+            this.editor_buffer.connect_closure(
+                signal,
+                true,
+                glib::closure_local!(move |_buffer: sourceview5::Buffer| {
+                    if let Some(this) = weak.upgrade() {
+                        this.flags.in_undo_redo.set(false);
+                        let ending = textstats::detect_line_ending(&this.current_text());
+                        this.doc.borrow_mut().set_line_ending(ending);
+                    }
+                }),
+            );
         }
 
         // No-tab policy: the editor's Tab key never inserts a tab character.
@@ -870,10 +898,10 @@ impl AppWindow {
         };
         let name = path
             .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("file")
-            .to_string();
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".to_string());
         if loaded.is_empty() {
+            self.editor_view.grab_focus();
             self.toast(
                 ToastKind::Info,
                 &format!("{name} is empty, so nothing was inserted"),

@@ -3,11 +3,15 @@
 //! `AppWindow` holds shared state, builds the window and wires status updates.
 //! Feature submodules wire their own signals and actions:
 //!
+//! - `clipboard`: header Copy Selected Text button, checkmark flash and
+//!   last-focused-pane tracking.
 //! - `editing`: insert filter for tabs and document line endings, Tab key,
-//!   indentation editing, Find next trailing whitespace, EOL conversion, file
-//!   insertion, word wrap and read-only state.
+//!   indentation editing, trailing-whitespace find and trim, EOL conversion,
+//!   file insertion, word wrap and read-only state.
 //! - `file_actions`: new file and new window, open, save, save as, rename or
 //!   move, external-change handling and the save-then-continue flow.
+//! - `flags`: per-window document flags and scoped loading guards.
+//! - `flash`: generation-guarded temporary label/icon/error flashes.
 //! - `focus`: in-window focus restoration after menus and dialogs close.
 //! - `diff_actions`: the Diff Mode session wiring, Diff Mode keys, Create
 //!   Baseline and Confirm.
@@ -15,6 +19,7 @@
 //! - `search`: the search bar, Find, Replace and Go to Line.
 //! - `status`: `StatusState` (measured text, last edit, refresh timer) and the
 //!   status bar refresh methods.
+//! - `theme_keys`: hidden Alt+T / Alt+Shift+T theme cycling.
 //!
 //! # Ownership
 //!
@@ -82,10 +87,13 @@ const NO_CHANGES_LABEL: &str = "No Changes";
 /// Baseline text of the open document, cached so buffer changes can compare
 /// against it without reading the snapshot file. `key` is the snapshot path
 /// and its modification time; `None` means there is no readable baseline.
+/// `unreadable` is true when a baseline file exists on disk but failed to read,
+/// so the Review button stays enabled and clicking it surfaces the read error.
 #[derive(Default)]
 struct BaselineCache {
     key: Option<(PathBuf, Option<SystemTime>)>,
     text: String,
+    unreadable: bool,
 }
 
 /// Compose the window title: an optional dirty marker, the file name and an
@@ -249,8 +257,8 @@ impl AppWindow {
         new_button.add_css_class("flat");
         header.pack_start(&new_button);
 
-        // The Open button shows recent files when there are any; otherwise its
-        // handler opens the chooser directly. The popover is built on demand.
+        // The Open button always opens its popover menu (path field, Browse…
+        // and up to ten recent paths), built on demand when clicked.
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
         open_button.set_tooltip_text(Some("Open File (Ctrl+O)"));
         open_button.add_css_class("flat");
@@ -441,10 +449,9 @@ impl AppWindow {
         Self::connect_theme_keys(this);
     }
 
-    /// Open the chooser directly when there are no recent paths. Otherwise
-    /// refill the menu from the pruned recent list. This is the only place the
-    /// recent state is pruned, so startup and ordinary editing never scan the
-    /// remembered paths.
+    /// Wire the Open popover's path-entry row and refill the menu from the
+    /// pruned recent list on demand. This is the only place the recent state is
+    /// pruned, so startup and ordinary editing never scan the remembered paths.
     fn connect_open_menu(this: &Rc<Self>) {
         let weak = Rc::downgrade(this);
         this.open_popover.connect_visible_notify(move |_| {
@@ -533,13 +540,15 @@ impl AppWindow {
                 row.root.unparent();
             }
         }
+        if let Some(row) = self.open_location_row.borrow().as_ref()
+            && row.root.parent().is_some()
+        {
+            row.root.unparent();
+        }
         self.open_popover
             .set_menu_model(Some(&menus::build_open_menu(entries)));
 
         if let Some(row) = self.open_location_row.borrow().as_ref() {
-            if row.root.parent().is_some() {
-                row.root.unparent();
-            }
             let _ = self
                 .open_popover
                 .add_child(&row.root, menus::OPEN_LOCATION_ID);
@@ -552,8 +561,12 @@ impl AppWindow {
                 .open_popover
                 .add_child(&row.root, &menus::recent_row_id(index));
 
-            let popover = self.open_popover.clone();
-            row.open.connect_clicked(move |_| popover.popdown());
+            let popover = self.open_popover.downgrade();
+            row.open.connect_clicked(move |_| {
+                if let Some(popover) = popover.upgrade() {
+                    popover.popdown();
+                }
+            });
 
             let weak = Rc::downgrade(self);
             let delete_path = path.clone();
@@ -568,24 +581,25 @@ impl AppWindow {
     }
 
     /// Remove one recent entry from its hide/remove button without confirmation.
-    /// The open menu is rebuilt in place and focus moves to the next row, or
-    /// the previous row when the last entry was deleted.
+    /// The open menu is rebuilt in place and focus moves to the next row, the
+    /// previous row when the last entry was deleted, or the path entry when no
+    /// recent entries remain.
     fn remove_recent_entry(self: &Rc<Self>, path: &Path, index: usize) {
         self.recent.remove(path);
         if !self.open_popover.is_visible() {
             return;
         }
         let entries = self.recent.pruned_entries();
-        if entries.is_empty() {
-            self.open_popover.popdown();
-            return;
-        }
         self.fill_open_menu(&entries);
         let rows = self.open_recent_rows.borrow();
         let focus = index.min(rows.len().saturating_sub(1));
         if let Some(row) = rows.get(focus).cloned() {
             glib::idle_add_local_once(move || {
                 row.open.grab_focus();
+            });
+        } else if let Some(location) = self.open_location_row.borrow().clone() {
+            glib::idle_add_local_once(move || {
+                let _ = location.entry.child_focus(gtk::DirectionType::TabForward);
             });
         }
     }
@@ -676,11 +690,13 @@ impl AppWindow {
         let mut cache = self.baseline.borrow_mut();
         cache.key = None;
         cache.text.clear();
+        cache.unreadable = false;
     }
 
     /// Reload the cached baseline when the open document's snapshot path or
-    /// modification time changed. A missing or unreadable snapshot clears the
-    /// cache, so it never drives a stale Review suggestion.
+    /// modification time changed. A missing snapshot clears the cache; an
+    /// unreadable existing snapshot sets `unreadable` so the Review button
+    /// stays clickable to report the error.
     fn refresh_baseline_cache(&self) {
         let path = self.doc.borrow().path().map(Path::to_path_buf);
         let key = path.as_ref().and_then(|path| {
@@ -692,30 +708,38 @@ impl AppWindow {
         });
 
         let mut cache = self.baseline.borrow_mut();
-        if cache.key == key {
+        if cache.key == key && !cache.unreadable {
             return;
         }
         let loaded = path
             .as_ref()
-            .and_then(|path| self.store.read_for_canonical(path).ok().flatten());
+            .map(|path| self.store.read_for_canonical(path));
         match loaded {
-            Some(text) => {
+            Some(Ok(Some(text))) => {
                 cache.key = key;
                 cache.text = text;
+                cache.unreadable = false;
             }
-            None => {
+            Some(Err(_)) => {
                 cache.key = None;
                 cache.text.clear();
+                cache.unreadable = true;
+            }
+            Some(Ok(None)) | None => {
+                cache.key = None;
+                cache.text.clear();
+                cache.unreadable = false;
             }
         }
     }
 
-    /// True when a readable baseline is cached and `text` differs from it.
-    /// Rust's string equality checks the byte length first, so a length change
-    /// is an immediate mismatch.
+    /// True when a readable baseline is cached and `text` differs from it, or
+    /// when an existing baseline could not be read (so clicking Review surfaces
+    /// the error). Rust's string equality checks the byte length first, so a
+    /// length change is an immediate mismatch.
     fn baseline_differs_from(&self, text: &str) -> bool {
         let cache = self.baseline.borrow();
-        cache.key.is_some() && cache.text != text
+        cache.unreadable || (cache.key.is_some() && cache.text != text)
     }
 
     fn baseline_exists(&self) -> bool {
@@ -730,8 +754,7 @@ impl AppWindow {
         let name = path
             .as_deref()
             .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned)
+            .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
         let is_dirty = self.flags.dirty.get();
         // Besides the dot, gently tint the header bar (`install_css`).

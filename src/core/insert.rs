@@ -69,18 +69,20 @@ pub fn needs_confirmation(bytes: u64) -> bool {
 /// Read the file for insertion: the same checks as [`inspect`], then UTF-8
 /// text without a leading byte-order mark.
 pub fn load(path: &Path) -> Result<String, InsertError> {
-    inspect(path)?;
-    let text = read_utf8_limited(path, MAX_OPEN_BYTES).map_err(InsertError::Read)?;
+    let text = read_utf8_limited(path, MAX_OPEN_BYTES).map_err(|err| match err {
+        ReadError::NotRegularFile => InsertError::NotAFile,
+        ReadError::TooLarge { bytes, .. } => InsertError::TooLarge { bytes },
+        other => InsertError::Read(other),
+    })?;
     Ok(strip_bom(text))
 }
 
 /// Remove one leading U+FEFF (the UTF-8 byte-order mark), if present.
-pub fn strip_bom(text: String) -> String {
+pub fn strip_bom(mut text: String) -> String {
     if text.starts_with('\u{feff}') {
-        text['\u{feff}'.len_utf8()..].to_string()
-    } else {
-        text
+        text.drain(..'\u{feff}'.len_utf8());
     }
+    text
 }
 
 /// Convert the line endings of `inserted` to the style of `document`, so the

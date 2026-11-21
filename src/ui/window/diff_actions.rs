@@ -120,7 +120,7 @@ impl AppWindow {
             return;
         }
         // An untitled document has no path to key a baseline on. The header
-        // button is disabled, and the menu item and shortcuts do nothing.
+        // button reads "Save As" and opens the file chooser; F5 does nothing.
         if self.doc.borrow().path().is_none() {
             return;
         }
@@ -155,7 +155,9 @@ impl AppWindow {
             self.save_as_then(None);
             return;
         }
-        if self.baseline_exists() {
+        if self.baseline_exists()
+            || self.diff_button.label().as_deref() == Some(super::REVIEW_LABEL)
+        {
             self.enter_diff();
         } else {
             self.create_baseline();

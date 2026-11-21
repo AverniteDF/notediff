@@ -9,6 +9,11 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn parent_dir(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+}
+
 /// Atomically replace `path` with `contents`.
 ///
 /// The normal path writes a sibling temporary file and renames it over the
@@ -19,11 +24,11 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 ///
 /// When `create_parent` is true, missing parent directories are created first.
 pub fn atomic_write(path: &Path, contents: &str, create_parent: bool) -> io::Result<()> {
-    if create_parent && let Some(parent) = path.parent() {
+    if create_parent && let Some(parent) = parent_dir(path) {
         fs::create_dir_all(parent)?;
     }
 
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = parent_dir(path).unwrap_or_else(|| Path::new("."));
     let existing_permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
 
     let mut last_rename_error = None;
@@ -127,7 +132,7 @@ pub fn atomic_write_if_changed(
     contents: &str,
     create_parent: bool,
 ) -> io::Result<bool> {
-    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+    if read_utf8_limited(path, contents.len() as u64).is_ok_and(|existing| existing == contents) {
         return Ok(false);
     }
     atomic_write(path, contents, create_parent)?;
@@ -169,6 +174,25 @@ fn direct_write(path: &Path, contents: &str) -> io::Result<()> {
 /// files such as devices and FIFOs are rejected instead of blocking or
 /// producing unbounded input.
 pub fn read_utf8_limited(path: &Path, max_bytes: u64) -> Result<String, ReadError> {
+    let (text, _) = read_utf8_limited_meta(path, max_bytes)?;
+    Ok(text)
+}
+
+/// Like [`read_utf8_limited`], returning the modification time of the opened
+/// file handle so callers do not race a second `stat` against external writes.
+pub fn read_utf8_limited_with_mtime(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<(String, SystemTime), ReadError> {
+    let (text, metadata) = read_utf8_limited_meta(path, max_bytes)?;
+    let mtime = metadata.modified().map_err(ReadError::Io)?;
+    Ok((text, mtime))
+}
+
+fn read_utf8_limited_meta(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<(String, fs::Metadata), ReadError> {
     let metadata = fs::metadata(path).map_err(ReadError::Io)?;
     if !metadata.is_file() {
         return Err(ReadError::NotRegularFile);
@@ -181,6 +205,10 @@ pub fn read_utf8_limited(path: &Path, max_bytes: u64) -> Result<String, ReadErro
         });
     }
     let file = fs::File::open(path).map_err(ReadError::Io)?;
+    let open_meta = file.metadata().map_err(ReadError::Io)?;
+    if !open_meta.is_file() {
+        return Err(ReadError::NotRegularFile);
+    }
     let mut bytes = Vec::new();
     file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
@@ -195,7 +223,7 @@ pub fn read_utf8_limited(path: &Path, max_bytes: u64) -> Result<String, ReadErro
     if text.as_bytes().contains(&0) {
         return Err(ReadError::NulByte);
     }
-    Ok(text)
+    Ok((text, open_meta))
 }
 
 #[derive(Debug)]
@@ -261,7 +289,7 @@ pub fn canonical_target(path: &Path) -> io::Result<PathBuf> {
         return fs::canonicalize(path);
     }
 
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = parent_dir(path).unwrap_or_else(|| Path::new("."));
     let canonical_parent = fs::canonicalize(parent)?;
     let name = path
         .file_name()
@@ -294,9 +322,25 @@ pub fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
     match fs::rename(from, to) {
         Ok(()) => Ok(false),
         Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
-            if let Err(err) = fs::copy(from, to) {
+            let mut src = fs::File::open(from)?;
+            let src_permissions = src.metadata().ok().map(|meta| meta.permissions());
+            let mut dst = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(to)?;
+            if let Err(err) = io::copy(&mut src, &mut dst).and_then(|_| {
+                if let Some(permissions) = src_permissions {
+                    let _ = dst.set_permissions(permissions);
+                }
+                dst.sync_all()
+            }) {
+                drop(dst);
                 let _ = fs::remove_file(to);
                 return Err(err);
+            }
+            drop(dst);
+            if let Some(parent) = parent_dir(to) {
+                sync_parent_dir(parent);
             }
             if let Err(err) = fs::remove_file(from) {
                 let _ = fs::remove_file(to);
@@ -532,5 +576,16 @@ mod tests {
         assert!(!from.exists());
         assert_eq!(fs::read_to_string(&to).unwrap(), "x");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parent_dir_normalizes_empty_relative_parent() {
+        assert_eq!(parent_dir(Path::new("bare.txt")), None);
+        assert_eq!(
+            parent_dir(Path::new("sub/file.txt")),
+            Some(Path::new("sub"))
+        );
+        assert_eq!(parent_dir(Path::new("/file.txt")), Some(Path::new("/")));
+        assert!(canonical_target(Path::new("nonexistent-bare-file.txt")).is_ok());
     }
 }

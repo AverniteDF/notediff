@@ -36,6 +36,7 @@ const LINE_NUMBER_CLASS: &str = "notediff-diff-line-number";
 /// character on it. The marker exists only in the display buffers; this
 /// unstyled tag identifies it so it can be left out of copied text.
 const TAG_MARKER: &str = "notediff-marker";
+const TAG_MARKER_FOCUSED: &str = "notediff-marker-focused";
 const BLANK_MARKER: char = '\u{b6}';
 /// The marker is an annotation, not document text: keep its foreground faded
 /// so it cannot be mistaken for a real character.
@@ -87,6 +88,7 @@ pub struct DiffPage {
     inspection_pending: Cell<bool>,
     full_revision: Cell<Option<u64>>,
     full_stats: Cell<Option<[TextStats; 2]>>,
+    full_line_counts: Cell<[usize; 2]>,
     /// Character offsets of display-only blank-line markers in each full pane.
     left_markers: RefCell<Vec<i32>>,
     right_markers: RefCell<Vec<i32>>,
@@ -294,6 +296,7 @@ impl DiffPage {
             inspection_pending: Cell::new(false),
             full_revision: Cell::new(None),
             full_stats: Cell::new(None),
+            full_line_counts: Cell::new([0, 0]),
             left_markers: RefCell::new(Vec::new()),
             right_markers: RefCell::new(Vec::new()),
             left_trailing_blank: Cell::new(false),
@@ -421,7 +424,7 @@ impl DiffPage {
     fn refresh_after_style(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         let first = Cell::new(true);
-        self.left_view.add_tick_callback(move |_, _| {
+        self.root.add_tick_callback(move |_, _| {
             if first.replace(false) {
                 return glib::ControlFlow::Continue;
             }
@@ -440,7 +443,7 @@ impl DiffPage {
     /// unallocated for the frame that snapshots it.
     fn schedule_caret_reanchor(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
-        self.left_view.add_tick_callback(move |_, _| {
+        self.root.add_tick_callback(move |_, _| {
             if let Some(page) = weak.upgrade() {
                 page.reanchor_inspection_carets();
                 page.reanchor_full_carets();
@@ -740,6 +743,8 @@ impl DiffPage {
             };
             let live_line_count = crate::core::diff::split_lines(session.live()).len();
             let baseline_line_count = crate::core::diff::split_lines(session.baseline()).len();
+            self.full_line_counts
+                .set([live_line_count, baseline_line_count]);
             // The display-only line after a final newline belongs to the last
             // hunk only when that side changed content there. A pure insertion
             // or deletion leaves the other side's final newline unchanged.
@@ -836,11 +841,12 @@ impl DiffPage {
             let hunk = &diff.hunks[index];
             let live = hunk_text(session.live(), hunk.new_start, hunk.new_len);
             let baseline = hunk_text(session.baseline(), hunk.old_start, hunk.old_len);
+            let [live_line_count, baseline_line_count] = self.full_line_counts.get();
             let live_trailing = self.left_trailing_blank.get()
-                && hunk.new_end() == crate::core::diff::split_lines(session.live()).len()
+                && hunk.new_end() == live_line_count
                 && has_trailing_display_line(live);
             let baseline_trailing = self.right_trailing_blank.get()
-                && hunk.old_end() == crate::core::diff::split_lines(session.baseline()).len()
+                && hunk.old_end() == baseline_line_count
                 && has_trailing_display_line(baseline);
             let whole = 0..usize::MAX;
             let whole = std::slice::from_ref(&whole);
@@ -868,6 +874,18 @@ impl DiffPage {
                 &baseline_markers,
                 0..usize::MAX,
                 TAG_INLINE_NORMAL,
+            );
+            tag_markers(
+                &self.inspection_left_buffer,
+                &live_markers,
+                0..usize::MAX,
+                TAG_MARKER_FOCUSED,
+            );
+            tag_markers(
+                &self.inspection_right_buffer,
+                &baseline_markers,
+                0..usize::MAX,
+                TAG_MARKER_FOCUSED,
             );
             let live_word_ranges = tag_excerpt(
                 &self.inspection_left_buffer,
@@ -975,7 +993,7 @@ impl DiffPage {
     /// focused hunk, leaving every other hunk in the yellowish base colors.
     fn apply_focus(&self, diff: &DiffResult, focus: Option<usize>) {
         for buffer in [&self.left_buffer, &self.right_buffer] {
-            for tag in [TAG_FOCUS, TAG_WORD_FOCUS] {
+            for tag in [TAG_FOCUS, TAG_WORD_FOCUS, TAG_MARKER_FOCUSED] {
                 buffer.remove_tag_by_name(tag, &buffer.start_iter(), &buffer.end_iter());
             }
         }
@@ -1033,14 +1051,26 @@ impl DiffPage {
         tag_markers(
             &self.left_buffer,
             &self.left_markers.borrow(),
-            live_lines,
+            live_lines.clone(),
             TAG_WORD_FOCUS,
         );
         tag_markers(
             &self.right_buffer,
             &self.right_markers.borrow(),
-            baseline_lines,
+            baseline_lines.clone(),
             TAG_WORD_FOCUS,
+        );
+        tag_markers(
+            &self.left_buffer,
+            &self.left_markers.borrow(),
+            live_lines,
+            TAG_MARKER_FOCUSED,
+        );
+        tag_markers(
+            &self.right_buffer,
+            &self.right_markers.borrow(),
+            baseline_lines,
+            TAG_MARKER_FOCUSED,
         );
     }
 
@@ -1347,8 +1377,14 @@ fn apply_exit_state(button: &gtk::Button, state: ExitState, accepted: usize) {
 
 /// Faded foreground for the display-only blank-line marker. It inherits the
 /// hunk/word background underneath, so only the glyph is dimmed.
-fn marker_color() -> gtk::gdk::RGBA {
-    let mut color = theme::rgba(theme::current().palette.hunk.foreground);
+fn marker_color(focused: bool) -> gtk::gdk::RGBA {
+    let palette = &theme::current().palette;
+    let base = if focused {
+        palette.focused_hunk.foreground
+    } else {
+        palette.hunk.foreground
+    };
+    let mut color = theme::rgba(base);
     color.set_alpha(MARKER_FOREGROUND_ALPHA);
     color
 }
@@ -1375,7 +1411,10 @@ fn refresh_tag_colors(buffer: &sourceview5::Buffer) {
         }
     }
     if let Some(tag) = table.lookup(TAG_MARKER) {
-        tag.set_foreground_rgba(Some(&marker_color()));
+        tag.set_foreground_rgba(Some(&marker_color(false)));
+    }
+    if let Some(tag) = table.lookup(TAG_MARKER_FOCUSED) {
+        tag.set_foreground_rgba(Some(&marker_color(true)));
     }
 }
 
@@ -1390,10 +1429,12 @@ fn install_tags(buffer: &sourceview5::Buffer) {
         table.add(&tag);
         tag.set_priority(table.size() - 1);
     }
-    table.add(&gtk::TextTag::new(Some(TAG_MARKER)));
-    if let Some(marker) = table.lookup(TAG_MARKER) {
-        marker.set_foreground_rgba(Some(&marker_color()));
-        marker.set_priority(table.size() - 1);
+    for (name, focused) in [(TAG_MARKER, false), (TAG_MARKER_FOCUSED, true)] {
+        table.add(&gtk::TextTag::new(Some(name)));
+        if let Some(marker) = table.lookup(name) {
+            marker.set_foreground_rgba(Some(&marker_color(focused)));
+            marker.set_priority(table.size() - 1);
+        }
     }
 }
 

@@ -33,6 +33,12 @@ impl FlashState {
         }
     }
 
+    /// Cancel any active flash so its pending timer becomes a no-op.
+    pub(super) fn cancel(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.active.set(false);
+    }
+
     /// True while a flash owns the button.
     pub(super) fn is_active(&self) -> bool {
         self.active.get()

@@ -9,7 +9,8 @@
 //!
 //! The live file is moved first because it is the source of truth; the
 //! baseline follows. If the baseline cannot be moved, the file stays where it
-//! went and the old baseline remains an orphan that Manage Snapshots can link.
+//! went and the old baseline remains an orphan that Manage App… → Baseline
+//! Snapshots can link.
 
 use std::fmt;
 use std::fs;
@@ -105,8 +106,15 @@ pub fn plan(current: &Path, input: &str) -> Result<PathBuf, RenameError> {
         .ok_or(RenameError::InvalidName)?
         .to_owned();
     let folder = target.parent().unwrap_or_else(|| Path::new("/"));
-    let canonical_folder =
-        fs::canonicalize(folder).map_err(|_| RenameError::MissingFolder(folder.to_path_buf()))?;
+    let canonical_folder = fs::canonicalize(folder).map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => {
+            RenameError::MissingFolder(folder.to_path_buf())
+        }
+        _ => RenameError::Io(err),
+    })?;
+    if !canonical_folder.is_dir() {
+        return Err(RenameError::MissingFolder(folder.to_path_buf()));
+    }
 
     let planned = canonical_folder.join(name);
     if planned == current {
@@ -346,6 +354,18 @@ mod tests {
             rename_document(&mut doc, &store, "b.md"),
             Err(RenameError::NoPath)
         ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn regular_file_cannot_be_used_as_parent_folder() {
+        let dir = test_dir();
+        let current = dir.join("a.md");
+        let blocker = dir.join("blocker.md");
+        fs::write(&current, "a\n").unwrap();
+        fs::write(&blocker, "b\n").unwrap();
+        let err = plan(&current, "blocker.md/new.md").unwrap_err();
+        assert!(matches!(err, RenameError::MissingFolder(_)));
         let _ = fs::remove_dir_all(dir);
     }
 }

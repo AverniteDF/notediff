@@ -23,8 +23,20 @@ impl AppWindow {
         // These actions do not claim focus. Choosing one must still restore the
         // editor. The Trim Whitespace submenu action only controls the heading's
         // sensitivity.
-        const FOCUS_NEUTRAL_ACTIONS: [&str; 3] =
-            ["copy-file-name", "copy-full-path", "trim-whitespace-menu"];
+        const FOCUS_NEUTRAL_ACTIONS: [&str; 12] = [
+            "copy-file-name",
+            "copy-full-path",
+            "trim-whitespace-menu",
+            "indent-increase-include-empty",
+            "indent-decrease-no-flattening",
+            "indent-double",
+            "indent-halve",
+            "trim-leading-whitespace",
+            "trim-trailing-whitespace",
+            "trim-blank-lines-strip",
+            "trim-blank-lines-remove",
+            "save",
+        ];
         for name in this.window.list_actions() {
             if FOCUS_NEUTRAL_ACTIONS.contains(&name.as_str()) {
                 continue;

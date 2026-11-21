@@ -70,9 +70,8 @@ impl SnapshotStore {
     pub fn snapshot_path_for_canonical(&self, canonical: &Path) -> PathBuf {
         let mut relative = PathBuf::new();
         for component in canonical.components() {
-            match component {
-                Component::RootDir | Component::Prefix(_) => {}
-                other => relative.push(other.as_os_str()),
+            if let Component::Normal(value) = component {
+                relative.push(value);
             }
         }
         self.root.join(relative)
@@ -154,10 +153,19 @@ impl SnapshotStore {
                 "a baseline cannot be linked to its own document",
             ));
         }
-        if !source_snapshot.is_file() {
+        let source_meta = match fs::symlink_metadata(source_snapshot) {
+            Ok(meta) => meta,
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "the baseline to link no longer exists",
+                ));
+            }
+        };
+        if !source_meta.file_type().is_file() {
             return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "the baseline to link no longer exists",
+                io::ErrorKind::PermissionDenied,
+                "refusing to link a baseline that is not a regular file inside the store",
             ));
         }
         if fs::symlink_metadata(&destination).is_ok() {
@@ -267,14 +275,16 @@ fn mount_root(path: &Path) -> Option<PathBuf> {
 
     let first = components.first().and_then(|value| value.to_str())?;
     let second = components.get(1).and_then(|value| value.to_str());
-    let root_len = match (first, second) {
-        ("mnt", Some("chromeos")) => 3,
-        ("mnt", _) => 2,
-        ("media", _) => 3,
-        ("run", Some("media")) => 4,
+    let third = components.get(2).and_then(|value| value.to_str());
+    let root_len = match (first, second, third) {
+        ("mnt", Some("chromeos"), Some("removable")) => 4,
+        ("mnt", Some("chromeos"), _) => 3,
+        ("mnt", _, _) => 2,
+        ("media", _, _) => 3,
+        ("run", Some("media"), _) => 4,
         _ => return None,
     };
-    if components.len() < root_len {
+    if components.len() <= root_len {
         return None;
     }
 
@@ -318,7 +328,8 @@ fn read_error_to_io(err: ReadError) -> io::Error {
 }
 
 fn within_store(root: &Path, path: &Path) -> bool {
-    path.starts_with(root)
+    path != root
+        && path.starts_with(root)
         && !path
             .components()
             .any(|component| matches!(component, Component::ParentDir))
@@ -624,6 +635,50 @@ mod tests {
             store.read_for_canonical(&to).unwrap().as_deref(),
             Some("base\n")
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mount_root_requires_a_path_inside_the_mount_and_handles_chromeos_removable() {
+        assert_eq!(mount_root(Path::new("/mnt/foo.md")), None);
+        assert_eq!(
+            mount_root(Path::new("/mnt/drive/foo.md")),
+            Some(PathBuf::from("/mnt/drive"))
+        );
+        assert_eq!(mount_root(Path::new("/mnt/chromeos/foo.md")), None);
+        assert_eq!(
+            mount_root(Path::new("/mnt/chromeos/MyFiles/foo.md")),
+            Some(PathBuf::from("/mnt/chromeos/MyFiles"))
+        );
+        assert_eq!(mount_root(Path::new("/mnt/chromeos/removable/USB")), None);
+        assert_eq!(
+            mount_root(Path::new("/mnt/chromeos/removable/USB/notes.md")),
+            Some(PathBuf::from("/mnt/chromeos/removable/USB"))
+        );
+    }
+
+    #[test]
+    fn within_store_rejects_store_root_and_link_rejects_symlinks() {
+        let dir = test_dir();
+        let store = SnapshotStore::at(dir.join("store"));
+        assert!(!within_store(store.root(), store.root()));
+        assert!(within_store(store.root(), &store.root().join("a.md")));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let outside = dir.join("secret.txt");
+            fs::write(&outside, "secret\n").unwrap();
+            let link_in_store = store.root().join("gone/link.md");
+            fs::create_dir_all(link_in_store.parent().unwrap()).unwrap();
+            symlink(&outside, &link_in_store).unwrap();
+            let target = dir.join("target.md");
+            let err = store
+                .link(&link_in_store, &target, LinkMode::Copy)
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        }
+
         let _ = fs::remove_dir_all(dir);
     }
 }

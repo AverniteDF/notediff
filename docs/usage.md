@@ -576,7 +576,8 @@ done
 loaded schemes and palettes are retained for the process lifetime; there is no
 live file monitor, Reload button or in-app installer. The Appearance picker and
 theme cycling use the same order: Dark, Light, then bundle directory names sorted case-sensitively
-by OS filename ordering. Symlink directories and loose files are ignored. For
+by OS filename ordering. Symlink directories, symlinked `scheme.xml` files, `scheme.xml` files over 1 MiB
+and loose files are ignored. For
 repeated descriptor IDs, the first loadable bundle wins; invalid earlier bundles
 do not reserve an ID. Invalid descriptors, missing/mismatched/unloadable XML,
 unresolved parents, duplicates and unavailable saved choices appear in Appearance

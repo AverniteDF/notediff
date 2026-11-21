@@ -17,6 +17,9 @@ pub(super) struct DocumentFlags {
     /// Keep the line endings already chosen by Add Text from File instead of
     /// normalizing them again in the generic insert filter.
     pub(super) keep_inserted_line_endings: Cell<bool>,
+    /// True while GtkTextBuffer is replaying an undo or redo step, so the
+    /// insert filter does not rewrite restored text or line endings.
+    pub(super) in_undo_redo: Cell<bool>,
     loading: Cell<bool>,
 }
 

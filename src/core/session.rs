@@ -181,7 +181,9 @@ impl DiffSession {
             return false;
         }
         self.focus = Some(match self.focus {
-            Some(current) => (current as i32 + direction).clamp(0, count as i32 - 1) as usize,
+            Some(current) => {
+                (current as i64 + i64::from(direction)).clamp(0, count as i64 - 1) as usize
+            }
             None => 0,
         });
         true

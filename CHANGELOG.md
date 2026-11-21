@@ -9,6 +9,21 @@ versioning.
 - **Quit** now handles every window at once: clean windows close immediately
   and each dirty window or window with accepted review changes shows its own
   prompt, instead of waiting for the previous window.
+- Undoing (**Ctrl+Z**) after **EOL Conversion** now restores the original line
+  endings and preferred line-ending style instead of re-converting them back.
+- Hiding the last recent file in the **Open** menu now keeps the menu open with
+  the path field focused instead of closing it.
+- **Rename or Move** now refuses a destination path that is already open in
+  another window, matching **Save As**.
+- Resizing the window or changing the content font while inspecting a Diff Mode
+  hunk now updates empty-side carets immediately.
+- Fixed GObject reference-cycle leaks in the **Appearance** font controls and
+  the **Open** menu, and improved focus restoration after context-menu edits.
+- Hardened file I/O and theme loading: snapshots under ejected ChromeOS
+  removable drives (`/mnt/chromeos/removable/...`) are now treated as
+  unavailable rather than orphaned, user `scheme.xml` files are bounded to
+  1 MiB (ignoring symlinks and commented-out line-number styles), and
+  cross-filesystem moves sync the destination before removing the source.
 
 ## [1.2.0] - 2026-11-21
 

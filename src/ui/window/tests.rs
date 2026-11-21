@@ -2782,7 +2782,8 @@ fn recent_trash_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSto
     assert!(rows[0].open.is_focusable());
 
     rows[0].trash.emit_clicked();
-    assert!(!window.open_popover.is_visible());
+    assert!(window.open_popover.is_visible());
+    assert!(window.open_recent_rows.borrow().is_empty());
     assert!(window.recent.pruned_entries().is_empty());
     assert!(!state.exists());
 
@@ -3475,6 +3476,19 @@ fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     editor.set_editor_text("a\nb\r\nc\n");
     editor.convert_line_endings(LineEnding::CrLf);
     assert_eq!(editor.current_text(), "a\r\nb\r\nc\r\n");
+    editor.editor_buffer.undo();
+    assert_eq!(editor.current_text(), "a\nb\r\nc\n");
+    assert_eq!(editor.doc.borrow().line_ending(), LineEnding::Mixed);
+    editor.editor_buffer.redo();
+    assert_eq!(editor.current_text(), "a\r\nb\r\nc\r\n");
+    assert_eq!(editor.doc.borrow().line_ending(), LineEnding::CrLf);
+    editor.set_editor_text("a\r\nb\r\nc\r\n");
+    editor.doc.borrow_mut().set_line_ending(LineEnding::CrLf);
+    editor.convert_line_endings(LineEnding::Lf);
+    assert_eq!(editor.current_text(), "a\nb\nc\n");
+    editor.editor_buffer.undo();
+    assert_eq!(editor.current_text(), "a\r\nb\r\nc\r\n");
+    assert_eq!(editor.doc.borrow().line_ending(), LineEnding::CrLf);
     editor.convert_line_endings(LineEnding::Lf);
     assert_eq!(editor.current_text(), "a\nb\nc\n");
     editor.set_read_only(true);

@@ -5,8 +5,9 @@
 //! suggestions are never applied automatically.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-use similar::TextDiff;
+use similar::TextDiffConfig;
 
 use super::LARGE_FILE_WARNING_BYTES;
 use super::fsutil::read_utf8_limited;
@@ -37,7 +38,9 @@ impl Candidate {
 
 /// Line-based similarity of two texts, from 0.0 (nothing in common) to 1.0.
 pub fn similarity(a: &str, b: &str) -> f64 {
-    f64::from(TextDiff::from_lines(a, b).ratio())
+    let mut config = TextDiffConfig::default();
+    config.deadline(Instant::now() + Duration::from_millis(250));
+    f64::from(config.diff_lines(a, b).ratio())
 }
 
 /// Read a snapshot for similarity measurement. Snapshots above the large-file

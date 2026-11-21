@@ -30,7 +30,7 @@ src/
                         save-size limit, rename
     snapshot_store.rs   canonical path mapping, atomic writes, scan,
                         link (move/copy) and baseline move
-    undo.rs             bounded in-memory undo stack (100 entries or 64 MiB)
+    undo.rs             generic bounded in-memory undo stack (`UndoStack<T>`)
     textstats.rs        status-bar numbers: byte and character counts, line count,
                         line-ending style, trailing-whitespace and non-empty
                         blank-line flags, cursor line/column/byte position,
@@ -57,7 +57,8 @@ src/
     relink.rs           ranking of baselines that could be linked
     rename.rs           plan a rename or move (name or path); move a file
                         with its baseline
-    session.rs          Diff Mode session: focus, inspection, accept, accept all, undo
+    session.rs          Diff Mode session: focus, inspection, accept, accept all,
+                        bounded undo (100 entries or 64 MiB)
     fsutil.rs           atomic replace with a rename-only fallback, bounded
                         UTF-8 reads, regular-file/NUL/size refusal, path helpers
   ui/
@@ -81,7 +82,8 @@ src/
                         actions, accelerators and Quit
       flags.rs          DocumentFlags (dirty, read-only, close, external-change,
                         inserted line endings) and scoped loading guards
-      flash.rs          FlashState: the header button's "No Changes" flash
+      flash.rs          FlashState: generation-guarded temporary label, copy-checkmark
+                        and Open-location error flashes
       focus.rs          restore content focus after menus and dialogs close
       search.rs         search bar, Find, Replace and Go to Line
       status.rs         StatusState (measured text, last edit, refresh timer),
@@ -119,7 +121,7 @@ primary invariant — accepting every hunk, in any order, leaves the baseline
 byte-identical to the live text — is covered by a deterministic property test
 with random texts, CRLF, LF, lone CR and U+2029 endings.
 
-Diffing and inline refinement share a one-second time budget. A timed-out diff
+Full diffing and inspection inline refinement each use a one-second time budget. A timed-out diff
 is still valid; it may be less minimal, but every hunk range remains usable.
 `apply_all_hunks` builds its result in one pass rather than re-diffing per hunk.
 

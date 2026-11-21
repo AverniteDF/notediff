@@ -7,9 +7,14 @@ use std::rc::Rc;
 
 use super::theme_palette::{self, Palette};
 use crate::core::{
-    fsutil::atomic_write_if_changed,
+    fsutil::{atomic_write_if_changed, read_utf8_limited},
     themes::{self, Theme},
 };
+
+/// Upper bound on a user bundle's `scheme.xml`. Real GtkSourceView schemes are
+/// a few kilobytes; bounding the read keeps a huge or special file from
+/// hanging or exhausting memory at startup.
+const MAX_SCHEME_BYTES: u64 = 1024 * 1024;
 
 const SCHEMES: [(&str, &str); 2] = [
     (
@@ -84,7 +89,23 @@ impl Catalog {
                 ));
                 continue;
             }
-            let xml = match fs::read_to_string(&path) {
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    result.diagnostics.push(format!(
+                        "{}: symlinked scheme.xml is ignored",
+                        path.display()
+                    ));
+                    continue;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    result
+                        .diagnostics
+                        .push(format!("{}: {err}", path.display()));
+                    continue;
+                }
+            }
+            let xml = match read_utf8_limited(&path, MAX_SCHEME_BYTES) {
                 Ok(xml) => xml,
                 Err(err) => {
                     result
@@ -101,7 +122,7 @@ impl Catalog {
                     Err(err) => {
                         result
                             .diagnostics
-                            .push(format!("{}: {err}", path.display()));
+                            .push(format!("{}: {err}", cached.display()));
                         continue;
                     }
                 }
@@ -185,7 +206,7 @@ fn prepare_scheme_xml(xml: &str) -> (String, Option<f32>) {
     while let Some(start) = find_style_start(rest) {
         let (before, after) = rest.split_at(start);
         out.push_str(before);
-        let Some(end) = after.find('>') else {
+        let Some(end) = find_tag_end(after) else {
             out.push_str(after);
             return (out, alpha);
         };
@@ -211,16 +232,45 @@ fn prepare_scheme_xml(xml: &str) -> (String, Option<f32>) {
 
 fn find_style_start(xml: &str) -> Option<usize> {
     let mut search = 0;
-    while let Some(relative) = xml[search..].find("<style") {
-        let index = search + relative;
-        if xml
-            .as_bytes()
-            .get(index + "<style".len())
-            .is_some_and(|byte| byte.is_ascii_whitespace())
-        {
+    while search < xml.len() {
+        let tail = &xml[search..];
+        let next_comment = tail.find("<!--");
+        let next_style = tail.find("<style");
+        match (next_comment, next_style) {
+            (Some(comment), Some(style)) if comment < style => {
+                let comment_body = search + comment + "<!--".len();
+                let end = xml[comment_body..].find("-->")?;
+                search = comment_body + end + "-->".len();
+            }
+            (_, Some(relative)) => {
+                let index = search + relative;
+                if xml
+                    .as_bytes()
+                    .get(index + "<style".len())
+                    .is_some_and(|byte| byte.is_ascii_whitespace())
+                {
+                    return Some(index);
+                }
+                search = index + "<style".len();
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn find_tag_end(tag: &str) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    for (index, byte) in tag.bytes().enumerate() {
+        if let Some(active) = quote {
+            if byte == active {
+                quote = None;
+            }
+        } else if byte == b'"' || byte == b'\'' {
+            quote = Some(byte);
+        } else if byte == b'>' {
             return Some(index);
         }
-        search = index + "<style".len();
     }
     None
 }
@@ -230,42 +280,53 @@ fn find_style_start(xml: &str) -> Option<usize> {
 /// scan; style values are not entity-decoded.
 fn attribute_value<'a>(tag: &'a str, name: &str) -> Option<(&'a str, (usize, usize))> {
     let bytes = tag.as_bytes();
-    let mut search = 0;
-    while let Some(relative) = tag[search..].find(name) {
-        let index = search + relative;
-        let before_ok = index == 0 || bytes[index - 1].is_ascii_whitespace();
-        let mut after_name = index + name.len();
-        if before_ok {
-            while after_name < bytes.len() && bytes[after_name].is_ascii_whitespace() {
-                after_name += 1;
-            }
-            if after_name < bytes.len() && bytes[after_name] == b'=' {
-                let mut value_start = after_name + 1;
-                while value_start < bytes.len() && bytes[value_start].is_ascii_whitespace() {
-                    value_start += 1;
-                }
-                if value_start < bytes.len()
-                    && (bytes[value_start] == b'"' || bytes[value_start] == b'\'')
-                {
-                    let quote = bytes[value_start];
-                    let content_start = value_start + 1;
-                    if let Some(content_len) = tag[content_start..].find(quote as char) {
-                        let content_end = content_start + content_len;
-                        let mut attribute_start = index;
-                        while attribute_start > 0
-                            && bytes[attribute_start - 1].is_ascii_whitespace()
-                        {
-                            attribute_start -= 1;
-                        }
-                        return Some((
-                            &tag[content_start..content_end],
-                            (attribute_start, content_end + 1),
-                        ));
-                    }
-                }
-            }
+    let mut pos = 0;
+    // Skip the opening tag name (e.g. `<style`).
+    while pos < bytes.len() && !bytes[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    while pos < bytes.len() {
+        let ws_start = pos;
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
         }
-        search = index + name.len();
+        if pos >= bytes.len() || bytes[pos] == b'>' || bytes[pos] == b'/' {
+            break;
+        }
+        let name_start = pos;
+        while pos < bytes.len()
+            && !bytes[pos].is_ascii_whitespace()
+            && bytes[pos] != b'='
+            && bytes[pos] != b'>'
+            && bytes[pos] != b'/'
+        {
+            pos += 1;
+        }
+        let attr_name = &tag[name_start..pos];
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= bytes.len() || bytes[pos] != b'=' {
+            continue;
+        }
+        pos += 1;
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= bytes.len() || (bytes[pos] != b'"' && bytes[pos] != b'\'') {
+            break;
+        }
+        let quote = bytes[pos];
+        let content_start = pos + 1;
+        let content_len = tag[content_start..].find(quote as char)?;
+        let content_end = content_start + content_len;
+        if attr_name == name {
+            return Some((
+                &tag[content_start..content_end],
+                (ws_start, content_end + 1),
+            ));
+        }
+        pos = content_end + 1;
     }
     None
 }
@@ -586,5 +647,14 @@ mod tests {
         assert!(!prepared.contains("foreground="));
         assert!(prepared.contains("background=\"#101010\""));
         assert!(prepared.contains("name=\"line-numbers\""));
+    }
+
+    #[test]
+    fn sentinel_scan_ignores_xml_comments_and_quoted_attributes() {
+        let xml = r##"<!-- <style name="line-numbers" foreground="70%"/> -->
+<style name="line-numbers" background="#101010" foreground="#888888"/>"##;
+        let (prepared, alpha) = prepare_scheme_xml(xml);
+        assert_eq!(alpha, None);
+        assert_eq!(prepared, xml);
     }
 }

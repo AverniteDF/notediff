@@ -40,6 +40,12 @@ pub(super) struct StatusState {
     last_edit_timer: RefCell<Option<glib::SourceId>>,
 }
 
+impl Drop for StatusState {
+    fn drop(&mut self) {
+        self.cancel_timer();
+    }
+}
+
 impl StatusState {
     /// The buffer changed: forget the measured text.
     pub fn invalidate_text(&self) {

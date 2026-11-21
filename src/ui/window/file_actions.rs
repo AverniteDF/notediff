@@ -140,6 +140,9 @@ impl AppWindow {
                 if this.flags.allow_close.get() {
                     return glib::Propagation::Proceed;
                 }
+                if this.window.visible_dialog().is_some() {
+                    return glib::Propagation::Stop;
+                }
                 if this.flags.dirty.get() {
                     this.require_saved(PendingAction::CloseWindow);
                     return glib::Propagation::Stop;
@@ -469,6 +472,7 @@ impl AppWindow {
                 "cancel",
                 move |response| {
                     if response == "reload" {
+                        this.flags.external_dialog_open.set(true);
                         this.reload_from_disk(ExternalCheck::Focus);
                     }
                 },
@@ -488,7 +492,10 @@ impl AppWindow {
                     "Document is identical with its file on disk",
                 );
             }
-            _ => self.reload_from_disk(ExternalCheck::Focus),
+            _ => {
+                self.flags.external_dialog_open.set(true);
+                self.reload_from_disk(ExternalCheck::Focus);
+            }
         }
     }
 
@@ -1032,6 +1039,17 @@ impl AppWindow {
         let old_folder = old_path
             .as_deref()
             .and_then(|path| path.parent().map(Path::to_path_buf));
+        if let Some(old) = old_path.as_deref()
+            && let Ok(planned) = rename::plan(old, input)
+            && let Some(owner) = super::window_for_canonical_path(&planned)
+            && !std::ptr::eq(self, owner.as_ref())
+        {
+            self.show_error(
+                "Could not rename or move file",
+                "That file is already open in another window.",
+            );
+            return;
+        }
         let result = {
             let mut doc = self.doc.borrow_mut();
             rename::rename_document(&mut doc, &self.store, input)
@@ -1046,9 +1064,8 @@ impl AppWindow {
                 }
                 let name = new_path
                     .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default()
-                    .to_string();
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let moved = new_path.parent().map(Path::to_path_buf) != old_folder;
                 let what = if moved {
                     format!("Moved to {}", new_path.display())

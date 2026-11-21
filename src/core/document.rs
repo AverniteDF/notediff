@@ -8,6 +8,7 @@ use std::time::SystemTime;
 use super::MAX_OPEN_BYTES;
 use super::fsutil::{
     ReadError, atomic_write, canonical_target, file_mtime, move_file, read_utf8_limited,
+    read_utf8_limited_with_mtime,
 };
 use super::textstats::{LineEnding, detect_line_ending};
 
@@ -27,8 +28,7 @@ impl Document {
 
     pub fn open(path: &Path) -> Result<Self, ReadError> {
         let canonical = fs::canonicalize(path).map_err(ReadError::Io)?;
-        let text = read_utf8_limited(&canonical, MAX_OPEN_BYTES)?;
-        let last_mtime = file_mtime(&canonical).map_err(ReadError::Io)?;
+        let (text, last_mtime) = read_utf8_limited_with_mtime(&canonical, MAX_OPEN_BYTES)?;
         Ok(Self {
             path: Some(canonical),
             line_ending: detect_line_ending(&text),
@@ -129,8 +129,7 @@ impl Document {
             .path
             .clone()
             .ok_or_else(|| ReadError::Io(io::Error::from(io::ErrorKind::NotFound)))?;
-        let text = read_utf8_limited(&path, MAX_OPEN_BYTES)?;
-        let last_mtime = file_mtime(&path).map_err(ReadError::Io)?;
+        let (text, last_mtime) = read_utf8_limited_with_mtime(&path, MAX_OPEN_BYTES)?;
         self.line_ending = detect_line_ending(&text);
         self.saved_chars = text.chars().count();
         self.text = text;

@@ -68,10 +68,13 @@ pub(super) fn build(toasts: &adw::ToastOverlay, persist: bool) -> FontControls {
         size: size.clone(),
     };
     let apply_font: Rc<dyn Fn()> = {
-        let family = family.clone();
-        let size = size.clone();
+        let weak_family = family.downgrade();
+        let weak_size = size.downgrade();
         let weak_toasts = toasts.downgrade();
         Rc::new(move || {
+            let (Some(family), Some(size)) = (weak_family.upgrade(), weak_size.upgrade()) else {
+                return;
+            };
             // Commit text that has not yet lost focus before reading the adjustment.
             size.update();
             let value = match Appearance::new(family.text().as_str(), size.value_as_int() as u32) {
