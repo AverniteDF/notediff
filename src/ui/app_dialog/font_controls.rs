@@ -1,5 +1,7 @@
 //! Staged font fields; Apply Font updates all content views via their CSS class.
 
+use std::rc::Rc;
+
 use adw::prelude::*;
 
 use crate::core::appearance::{Appearance, MAX_FONT_SIZE_PT, MIN_FONT_SIZE_PT};
@@ -60,41 +62,74 @@ pub(super) fn build(toasts: &adw::ToastOverlay, persist: bool) -> FontControls {
     let apply = gtk::Button::with_label("Apply Font");
     apply.add_css_class("suggested-action");
     apply.set_halign(gtk::Align::End);
-    let weak_toasts = toasts.downgrade();
     let fields = FontControls {
         root: root.clone(),
         family: family.clone(),
         size: size.clone(),
     };
-    apply.connect_clicked(move |_| {
-        // Commit text that has not yet lost focus before reading the adjustment.
-        size.update();
-        let value = match Appearance::new(family.text().as_str(), size.value_as_int() as u32) {
-            Ok(value) => value,
-            Err(message) => {
-                if let Some(toasts) = weak_toasts.upgrade() {
-                    toasts.add_toast(toast::new(ToastKind::Warning, message));
+    let apply_font: Rc<dyn Fn()> = {
+        let family = family.clone();
+        let size = size.clone();
+        let weak_toasts = toasts.downgrade();
+        Rc::new(move || {
+            // Commit text that has not yet lost focus before reading the adjustment.
+            size.update();
+            let value = match Appearance::new(family.text().as_str(), size.value_as_int() as u32) {
+                Ok(value) => value,
+                Err(message) => {
+                    if let Some(toasts) = weak_toasts.upgrade() {
+                        toasts.add_toast(toast::new(ToastKind::Warning, message));
+                    }
+                    return;
                 }
-                return;
-            }
-        };
-        theme::apply_appearance(value.clone());
-        let result = if persist {
-            value.save_to(&Appearance::default_path())
-        } else {
-            Ok(())
-        };
-        if let Some(toasts) = weak_toasts.upgrade() {
-            let notice = match result {
-                Ok(()) => toast::new(ToastKind::Success, "Font applied"),
-                Err(err) => toast::new(
-                    ToastKind::Warning,
-                    &format!("Font applied, but could not be remembered: {err}"),
-                ),
             };
-            toasts.add_toast(notice);
-        }
-    });
+            theme::apply_appearance(value.clone());
+            let result = if persist {
+                value.save_to(&Appearance::default_path())
+            } else {
+                Ok(())
+            };
+            if let Some(toasts) = weak_toasts.upgrade() {
+                let notice = match result {
+                    Ok(()) => toast::new(ToastKind::Success, "Font applied"),
+                    Err(err) => toast::new(
+                        ToastKind::Warning,
+                        &format!("Font applied, but could not be remembered: {err}"),
+                    ),
+                };
+                toasts.add_toast(notice);
+            }
+        })
+    };
+    {
+        let apply_font = apply_font.clone();
+        apply.connect_clicked(move |_| apply_font());
+    }
+    {
+        let apply_font = apply_font.clone();
+        size.connect_activate(move |_| apply_font());
+    }
+    {
+        // GtkSpinButton suppresses its activate signal on the first Enter after
+        // the text was edited: that press only commits the typed value. Apply
+        // here, after committing the text ourselves, so one Enter is enough.
+        let apply_font = apply_font.clone();
+        let keys = gtk::EventControllerKey::new();
+        keys.set_name(Some("notediff-font-size-enter"));
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
+                apply_font();
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        size.add_controller(keys);
+    }
+    {
+        let apply_font = apply_font.clone();
+        family.connect_activate(move |_| apply_font());
+    }
     root.append(&apply);
     fields
 }

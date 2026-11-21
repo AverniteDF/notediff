@@ -218,6 +218,7 @@ fn gtk_window_smoke() {
     theme_scenario(&app, &store);
     focused_line_number_color_scenario(&app, &dir, &store);
     font_appearance_scenario(&app, &store);
+    font_enter_applies_scenario(&app, &store);
     diff_line_number_width_scenario(&app, &dir, &store);
     caret_font_size_scenario(&app, &dir, &store);
     inspection_caret_resize_scenario(&app, &dir, &store);
@@ -955,6 +956,20 @@ fn find_response_button(widget: &gtk::Widget, label: &str) -> Option<gtk::Button
     None
 }
 
+fn find_spin_button(root: &gtk::Widget) -> Option<gtk::SpinButton> {
+    if let Some(spin) = root.downcast_ref::<gtk::SpinButton>() {
+        return Some(spin.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        if let Some(found) = find_spin_button(&widget) {
+            return Some(found);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
 fn find_widget_with_class(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     if root.has_css_class(class) {
         return Some(root.clone());
@@ -1581,12 +1596,18 @@ fn plain_text_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
         window.current_text(),
         "fn main() { println!(\"plain\"); }\n"
     );
+    assert_eq!(
+        window.editor_buffer.cursor_position(),
+        0,
+        "a newly opened file starts at the top"
+    );
 
     // Markdown is plain text too; headings and emphasis are not styled.
     let markdown = dir.join("plain.md");
     std::fs::write(&markdown, "# Title\n\n* emphasis * and `code`\n").unwrap();
     AppWindow::open_path(&window, &markdown);
     assert_plain_text(&window);
+    assert_eq!(window.editor_buffer.cursor_position(), 0);
     window.window.destroy();
 }
 
@@ -5285,6 +5306,56 @@ fn font_appearance_scenario(app: &adw::Application, store: &SnapshotStore) {
     for window in [&first, &second, &third] {
         window.window.destroy();
     }
+}
+
+fn font_enter_applies_scenario(app: &adw::Application, store: &SnapshotStore) {
+    use crate::core::appearance::Appearance;
+
+    let previous = theme::appearance();
+    let family = previous.font_family().to_string();
+    let window = AppWindow::with_store(app, store.clone());
+    window.window.present();
+    window
+        .window
+        .lookup_action("manage-app")
+        .unwrap()
+        .activate(None);
+    wait_for(|| window.window.visible_dialog().is_some());
+    let dialog = window.window.visible_dialog().unwrap();
+    let stack = app_data_stack(&dialog);
+    stack.set_visible_child_name("appearance");
+    let root = dialog.child().expect("Manage App content");
+    let size = find_spin_button(&root).expect("font size field");
+    // Simulate typed text: GtkSpinButton marks the field edited, then suppresses
+    // its activate signal on the first Enter. One key press must still apply.
+    size.set_value(12.0);
+    size.set_text("20");
+    assert_eq!(size.value_as_int(), 12);
+    let controllers = size.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .filter_map(|index| controllers.item(index))
+        .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .find(|controller| controller.name().as_deref() == Some("notediff-font-size-enter"))
+        .expect("font size Enter controller");
+    assert!(keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &gtk::gdk::Key::Return,
+            &0u32,
+            &gtk::gdk::ModifierType::empty()
+        ],
+    ));
+    assert_eq!(size.value_as_int(), 20);
+    assert_eq!(
+        theme::appearance(),
+        Appearance::new(&family, 20).unwrap(),
+        "one Enter in the font size field applies the font"
+    );
+
+    dialog.close();
+    wait_for(|| window.window.visible_dialog().is_none());
+    theme::apply_appearance(previous);
+    window.window.destroy();
 }
 
 fn diff_line_number_width_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {

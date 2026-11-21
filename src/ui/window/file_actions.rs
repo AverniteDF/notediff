@@ -218,6 +218,10 @@ impl AppWindow {
         // The declined-reload marker belongs to the previous file.
         self.flags.declined_reload_mtime.set(None);
         self.show_document_text(mode);
+        let mut start = self.editor_buffer.start_iter();
+        self.editor_buffer.place_cursor(&start);
+        self.editor_view
+            .scroll_to_iter(&mut start, 0.0, true, 0.0, 0.0);
         self.stack.set_visible_child_name("editor");
         *self.diff_state.borrow_mut() = None;
         self.search_bar.set_search_mode(false);
