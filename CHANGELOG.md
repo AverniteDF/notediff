@@ -63,6 +63,8 @@ versioning.
 - Changing the content font now re-measures the Diff Mode line-number gutter, so
   larger line numbers no longer clip and smaller fonts no longer leave excess
   width.
+- Changing the content font now resizes the Diff Mode caret on an empty hunk side
+  to the new line height instead of keeping the previous height.
 
 ### Changed
 

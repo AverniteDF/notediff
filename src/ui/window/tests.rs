@@ -216,6 +216,7 @@ fn gtk_window_smoke() {
     focused_line_number_color_scenario(&app, &dir, &store);
     font_appearance_scenario(&app, &store);
     diff_line_number_width_scenario(&app, &dir, &store);
+    caret_font_size_scenario(&app, &dir, &store);
     restore_appearance_scenario(&app, &store);
     external_change_in_diff_scenario(&app, &dir, &store);
     diff_actions_scenario(&app, &dir, &store);
@@ -5234,9 +5235,93 @@ fn diff_line_number_width_scenario(app: &adw::Application, dir: &Path, store: &S
     window.window.destroy();
 }
 
-fn restore_appearance_scenario(app: &adw::Application, store: &SnapshotStore) {
+fn caret_font_size_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     use crate::core::appearance::Appearance;
 
+    let previous_font = theme::appearance();
+    let small = Appearance::new("monospace", 12).unwrap();
+    let large = Appearance::new("monospace", 32).unwrap();
+    theme::apply_appearance(small.clone());
+
+    // Inspection caret: an inline insertion leaves the baseline side empty.
+    let path = dir.join("caret-font-size-inspection.txt");
+    std::fs::write(&path, "The quick brown fox\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text("The quick brown fox jumps\n");
+    window.persist(None).unwrap();
+    window.window.present();
+    window.enter_diff();
+    window.focus_relative(1);
+    window.diff.inspect_button.emit_clicked();
+    wait_for(|| window.diff.inspection_caret_ready(true));
+    let small_height = window
+        .diff
+        .inspection_caret_geometry(true)
+        .expect("inspection caret geometry")
+        .2;
+
+    theme::apply_appearance(large.clone());
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| {
+        window
+            .diff
+            .inspection_caret_geometry(true)
+            .is_some_and(|geometry| geometry.2 > small_height)
+    });
+    theme::apply_appearance(small.clone());
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| {
+        window
+            .diff
+            .inspection_caret_geometry(true)
+            .is_some_and(|geometry| geometry.2 == small_height)
+    });
+    window.diff.exit_button.emit_clicked();
+    window.window.destroy();
+
+    // Full-pane boundary caret: a whole-line insertion leaves its side empty.
+    let path = dir.join("caret-font-size-boundary.txt");
+    std::fs::write(&path, "a\nb\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text("a\nb\nc\n");
+    window.persist(None).unwrap();
+    window.window.present();
+    window.enter_diff();
+    window.focus_relative(1);
+    wait_for(|| window.diff.full_boundary_marker_ready(true));
+    let small_height = window
+        .diff
+        .full_boundary_marker_geometry(true)
+        .expect("full boundary caret geometry")
+        .2;
+
+    theme::apply_appearance(large);
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| {
+        window
+            .diff
+            .full_boundary_marker_geometry(true)
+            .is_some_and(|geometry| geometry.2 > small_height)
+    });
+    theme::apply_appearance(small);
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| {
+        window
+            .diff
+            .full_boundary_marker_geometry(true)
+            .is_some_and(|geometry| geometry.2 == small_height)
+    });
+
+    theme::apply_appearance(previous_font);
+    window.window.destroy();
+}
+
+fn restore_appearance_scenario(app: &adw::Application, store: &SnapshotStore) {
+    use crate::core::appearance::Appearance;
     fn widgets(root: &gtk::Widget) -> Vec<gtk::Widget> {
         let mut result = vec![root.clone()];
         let mut index = 0;

@@ -357,7 +357,7 @@ impl DiffPage {
                 let Some(page) = weak.upgrade() else {
                     return false;
                 };
-                page.remeasure_line_numbers_after_style();
+                page.refresh_after_style();
                 true
             });
         }
@@ -399,10 +399,10 @@ impl DiffPage {
         self.right_line_numbers.sync_width(&self.right_buffer);
     }
 
-    /// A CSS font change refreshes the renderer's Pango context while the next
-    /// frame is laid out, after that frame's tick callbacks. Measure on the
-    /// following tick so the gutter uses the new font, not the previous one.
-    fn remeasure_line_numbers_after_style(self: &Rc<Self>) {
+    /// A CSS font change refreshes the renderer's Pango context and text
+    /// geometry while the next frame is laid out, after that frame's tick
+    /// callbacks. Refresh on the following tick so both use the new font.
+    fn refresh_after_style(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         let first = Cell::new(true);
         self.left_view.add_tick_callback(move |_, _| {
@@ -411,6 +411,8 @@ impl DiffPage {
             }
             if let Some(page) = weak.upgrade() {
                 page.sync_line_number_widths();
+                page.update_inspection_carets();
+                page.update_full_carets();
             }
             glib::ControlFlow::Break
         });
@@ -529,6 +531,18 @@ impl DiffPage {
             &self.inspection_left_caret
         };
         caret.width()
+    }
+
+    /// Last applied inspection caret geometry, `(x, y, height)` in buffer
+    /// coordinates.
+    #[cfg(test)]
+    pub(crate) fn inspection_caret_geometry(&self, right: bool) -> Option<(i32, i32, i32)> {
+        let caret = if right {
+            &self.inspection_right_caret
+        } else {
+            &self.inspection_left_caret
+        };
+        caret.geometry.get()
     }
 
     #[cfg(test)]
