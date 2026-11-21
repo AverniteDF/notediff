@@ -271,12 +271,13 @@ pub(super) fn build_open_location_row() -> OpenLocationRow {
     }
 }
 
-/// The widgets of one custom recent entry: the clickable two-line open area and
-/// its trailing hide/remove button.
+/// The widgets of one custom recent entry: the clickable two-line open area,
+/// its Shift-preview new-window icon, and its trailing hide/remove button.
 #[derive(Clone)]
 pub(super) struct RecentRow {
     pub root: gtk::Box,
     pub open: gtk::Button,
+    pub new_window_icon: gtk::Image,
     pub trash: gtk::Button,
 }
 
@@ -291,13 +292,11 @@ pub(super) fn build_recent_row(path: &Path) -> RecentRow {
     open.add_css_class("flat");
     open.set_halign(gtk::Align::Fill);
     open.set_hexpand(true);
-    open.set_action_name(Some("win.open-recent"));
-    open.set_action_target_value(Some(&path.to_string_lossy().to_variant()));
 
     let home = glib::home_dir();
     let name = path
         .file_name()
-        .and_then(|name| name.to_str())
+        .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let directory = path
         .parent()
@@ -307,13 +306,24 @@ pub(super) fn build_recent_row(path: &Path) -> RecentRow {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.set_hexpand(true);
 
-    let name_label = gtk::Label::new(Some(name));
+    let name_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    name_row.set_hexpand(true);
+
+    let name_label = gtk::Label::new(Some(&name));
     name_label.set_xalign(0.0);
     name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     name_label.set_max_width_chars(48);
     let attributes = gtk::pango::AttrList::new();
     attributes.insert(gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Bold));
     name_label.set_attributes(Some(&attributes));
+
+    let new_window_icon = gtk::Image::from_icon_name("adw-external-link-symbolic");
+    new_window_icon.add_css_class("open-new-window-icon");
+    new_window_icon.set_valign(gtk::Align::Center);
+    new_window_icon.set_visible(false);
+
+    name_row.append(&name_label);
+    name_row.append(&new_window_icon);
 
     let directory_label = gtk::Label::new(Some(&directory));
     directory_label.set_xalign(0.0);
@@ -322,7 +332,7 @@ pub(super) fn build_recent_row(path: &Path) -> RecentRow {
     directory_label.add_css_class("caption");
     directory_label.add_css_class("dim-label");
 
-    content.append(&name_label);
+    content.append(&name_row);
     content.append(&directory_label);
     open.set_child(Some(&content));
 
@@ -333,7 +343,12 @@ pub(super) fn build_recent_row(path: &Path) -> RecentRow {
 
     root.append(&open);
     root.append(&trash);
-    RecentRow { root, open, trash }
+    RecentRow {
+        root,
+        open,
+        new_window_icon,
+        trash,
+    }
 }
 
 /// A directory label always ends with `/`, without doubling the root separator.

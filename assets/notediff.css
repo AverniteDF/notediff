@@ -17,6 +17,10 @@ entry.notediff-open-location-error:focus-within {
     outline-color: #e01b24;
 }
 
+.open-new-window-icon {
+    -gtk-icon-size: 1em;
+}
+
 /* The custom diff renderer supplies its own opaque markup colours. An opaque
    inherited colour stops the gutter's translucent fallback colour from dimming
    those colours a second time. */

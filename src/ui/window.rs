@@ -178,6 +178,9 @@ pub struct AppWindow {
     /// The Open menu's path field and Browse button, installed while the
     /// popover is built.
     open_location_row: RefCell<Option<menus::OpenLocationRow>>,
+    /// True while Shift is held in the Open menu, showing the new-window icon
+    /// on recent entries and routing activations to a new window.
+    open_menu_shift: Cell<bool>,
     diff_button: gtk::Button,
     copy_button: gtk::Button,
     title_label: gtk::Label,
@@ -371,6 +374,7 @@ impl AppWindow {
             open_popover: open_popover.clone(),
             open_recent_rows: RefCell::new(Vec::new()),
             open_location_row: RefCell::new(None),
+            open_menu_shift: Cell::new(false),
             diff_button: diff_button.clone(),
             copy_button: copy_button.clone(),
             title_label: title_label.clone(),
@@ -449,18 +453,87 @@ impl AppWindow {
         Self::connect_theme_keys(this);
     }
 
+    /// Show or hide the new-window icon on every recent row while Shift is
+    /// held in the Open menu.
+    fn set_open_menu_shift(&self, held: bool) {
+        if self.open_menu_shift.replace(held) == held {
+            return;
+        }
+        for row in self.open_recent_rows.borrow().iter() {
+            row.new_window_icon.set_visible(held);
+        }
+    }
+
     /// Wire the Open popover's path-entry row and refill the menu from the
     /// pruned recent list on demand. This is the only place the recent state is
     /// pruned, so startup and ordinary editing never scan the remembered paths.
     fn connect_open_menu(this: &Rc<Self>) {
         let weak = Rc::downgrade(this);
-        this.open_popover.connect_visible_notify(move |_| {
+        this.open_popover.connect_visible_notify(move |popover| {
             if let Some(this) = weak.upgrade() {
                 this.update_open_tooltip();
+                if !popover.is_visible() {
+                    this.set_open_menu_shift(false);
+                }
             }
         });
 
+        let weak = Rc::downgrade(this);
+        this.window.connect_is_active_notify(move |window| {
+            if !window.is_active()
+                && let Some(this) = weak.upgrade()
+            {
+                this.set_open_menu_shift(false);
+            }
+        });
+
+        let popover_keys = gtk::EventControllerKey::new();
+        popover_keys.set_name(Some("notediff-open-menu-shift"));
+        popover_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let weak = Rc::downgrade(this);
+            popover_keys.connect_key_pressed(move |_, key, _, modifiers| {
+                if (matches!(key, gtk::gdk::Key::Shift_L | gtk::gdk::Key::Shift_R)
+                    || modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK))
+                    && let Some(this) = weak.upgrade()
+                {
+                    this.set_open_menu_shift(true);
+                }
+                glib::Propagation::Proceed
+            });
+        }
+        {
+            let weak = Rc::downgrade(this);
+            popover_keys.connect_key_released(move |_, key, _, _| {
+                if matches!(key, gtk::gdk::Key::Shift_L | gtk::gdk::Key::Shift_R)
+                    && let Some(this) = weak.upgrade()
+                {
+                    this.set_open_menu_shift(false);
+                }
+            });
+        }
+        this.open_popover.add_controller(popover_keys);
+
         let row = menus::build_open_location_row();
+        {
+            let shift_enter = gtk::EventControllerKey::new();
+            shift_enter.set_name(Some("notediff-open-location-shift-enter"));
+            shift_enter.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let weak = Rc::downgrade(this);
+            let entry = row.entry.downgrade();
+            shift_enter.connect_key_pressed(move |_, key, _, modifiers| {
+                let active_mods = modifiers & gtk::accelerator_get_default_mod_mask();
+                if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
+                    && active_mods == gtk::gdk::ModifierType::SHIFT_MASK
+                    && let (Some(this), Some(entry)) = (weak.upgrade(), entry.upgrade())
+                {
+                    this.request_open_location_in(entry.text().as_str(), true);
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            });
+            row.entry.add_controller(shift_enter);
+        }
         {
             let weak = Rc::downgrade(this);
             row.entry.connect_activate(move |entry| {
@@ -470,16 +543,46 @@ impl AppWindow {
             });
         }
         {
+            let browse_shift = Rc::new(Cell::new(false));
+            let gesture = gtk::GestureClick::new();
+            gesture.set_button(1);
+            gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let pressed_shift = browse_shift.clone();
+            gesture.connect_pressed(move |gesture, _, _, _| {
+                pressed_shift.set(
+                    gesture
+                        .current_event_state()
+                        .contains(gtk::gdk::ModifierType::SHIFT_MASK),
+                );
+            });
+            row.browse.add_controller(gesture);
+
             let weak = Rc::downgrade(this);
             row.browse.connect_clicked(move |_| {
                 if let Some(this) = weak.upgrade() {
+                    let new_window = browse_shift.replace(false) || this.open_menu_shift.get();
                     this.open_popover.popdown();
-                    this.request_open_dialog();
+                    this.request_open_dialog_in(new_window);
                 }
             });
         }
         *this.open_location_row.borrow_mut() = Some(row);
 
+        let open_shift = Rc::new(Cell::new(false));
+        {
+            let gesture = gtk::GestureClick::new();
+            gesture.set_button(1);
+            gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let pressed_shift = open_shift.clone();
+            gesture.connect_pressed(move |gesture, _, _, _| {
+                pressed_shift.set(
+                    gesture
+                        .current_event_state()
+                        .contains(gtk::gdk::ModifierType::SHIFT_MASK),
+                );
+            });
+            this.open_button.add_controller(gesture);
+        }
         let weak = Rc::downgrade(this);
         this.open_button.connect_clicked(move |_| {
             let Some(this) = weak.upgrade() else {
@@ -489,6 +592,7 @@ impl AppWindow {
                 this.open_popover.popdown();
                 return;
             }
+            this.open_menu_shift.set(open_shift.replace(false));
             let entries = this.recent.pruned_entries();
             this.fill_open_menu(&entries);
             if let Some(row) = this.open_location_row.borrow().as_ref() {
@@ -555,16 +659,35 @@ impl AppWindow {
         }
 
         let mut rows = Vec::with_capacity(entries.len());
+        let shift_held = self.open_menu_shift.get();
         for (index, path) in entries.iter().enumerate() {
             let row = menus::build_recent_row(path);
+            row.new_window_icon.set_visible(shift_held);
             let _ = self
                 .open_popover
                 .add_child(&row.root, &menus::recent_row_id(index));
 
-            let popover = self.open_popover.downgrade();
+            let row_shift = Rc::new(Cell::new(false));
+            let gesture = gtk::GestureClick::new();
+            gesture.set_button(1);
+            gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let pressed_shift = row_shift.clone();
+            gesture.connect_pressed(move |gesture, _, _, _| {
+                pressed_shift.set(
+                    gesture
+                        .current_event_state()
+                        .contains(gtk::gdk::ModifierType::SHIFT_MASK),
+                );
+            });
+            row.open.add_controller(gesture);
+
+            let weak = Rc::downgrade(self);
+            let open_path = path.clone();
             row.open.connect_clicked(move |_| {
-                if let Some(popover) = popover.upgrade() {
-                    popover.popdown();
+                if let Some(this) = weak.upgrade() {
+                    let new_window = row_shift.replace(false) || this.open_menu_shift.get();
+                    this.open_popover.popdown();
+                    this.request_open_recent(open_path.clone(), new_window);
                 }
             });
 

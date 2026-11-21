@@ -2619,13 +2619,29 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         .downcast::<gtk::Box>()
         .unwrap();
     assert_eq!(content.orientation(), gtk::Orientation::Vertical);
-    let name_label = content
+    let name_row = content
+        .first_child()
+        .unwrap()
+        .downcast::<gtk::Box>()
+        .unwrap();
+    assert_eq!(name_row.orientation(), gtk::Orientation::Horizontal);
+    let name_label = name_row
         .first_child()
         .unwrap()
         .downcast::<gtk::Label>()
         .unwrap();
     assert_eq!(name_label.label().as_str(), "recent-second.txt");
     assert!(name_label.attributes().is_some());
+    let new_window_icon = name_row
+        .last_child()
+        .unwrap()
+        .downcast::<gtk::Image>()
+        .unwrap();
+    assert_eq!(
+        new_window_icon.icon_name().as_deref(),
+        Some("adw-external-link-symbolic")
+    );
+    assert!(!new_window_icon.is_visible());
     assert!(rows[0].open.tooltip_text().is_none());
     assert!(rows[0].trash.tooltip_text().is_none());
     let directory_label = content
@@ -2765,6 +2781,67 @@ fn recent_trash_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSto
         window.recent.pruned_entries(),
         vec![second.clone(), first.clone()]
     );
+
+    window.open_button.emit_clicked();
+    let rows = window.open_recent_rows.borrow().clone();
+    assert_eq!(rows.len(), 2);
+    assert!(!rows[0].new_window_icon.is_visible());
+    assert!(!rows[1].new_window_icon.is_visible());
+
+    // Holding Shift in the Open menu reveals the new-window icon on every
+    // recent row and resets when released.
+    window.set_open_menu_shift(true);
+    assert!(rows[0].new_window_icon.is_visible());
+    assert!(rows[1].new_window_icon.is_visible());
+    window.set_open_menu_shift(false);
+    assert!(!rows[0].new_window_icon.is_visible());
+    assert!(!rows[1].new_window_icon.is_visible());
+
+    // Shift-activating a recent entry, Shift+Enter in the path field, and
+    // Shift-Browse each open the target file in a new window without touching
+    // a dirty current document.
+    window.editor_buffer.insert_at_cursor("unsaved\n");
+    assert!(window.flags.dirty.get());
+    let before_windows = super::WINDOWS.with_borrow(Vec::len);
+    let context = gtk::glib::MainContext::default();
+    window.request_open_recent(first.clone(), true);
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before_windows + 1);
+    assert!(window.window.visible_dialog().is_none());
+    assert_eq!(window.doc.borrow().path(), Some(second.as_path()));
+    let opened_recent = super::WINDOWS
+        .with_borrow(|windows| windows.last().cloned())
+        .unwrap();
+    assert_eq!(opened_recent.doc.borrow().path(), Some(first.as_path()));
+    opened_recent.window.destroy();
+    while context.pending() {
+        context.iteration(false);
+    }
+
+    window.request_open_location_in(&first.to_string_lossy(), true);
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before_windows + 1);
+    assert!(window.window.visible_dialog().is_none());
+    let opened_location = super::WINDOWS
+        .with_borrow(|windows| windows.last().cloned())
+        .unwrap();
+    assert_eq!(opened_location.doc.borrow().path(), Some(first.as_path()));
+    opened_location.window.destroy();
+    while context.pending() {
+        context.iteration(false);
+    }
+
+    AppWindow::finish_open_dialog_in(&window, Ok(gtk::gio::File::for_path(&first)), true);
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before_windows + 1);
+    assert!(window.window.visible_dialog().is_none());
+    let opened_browse = super::WINDOWS
+        .with_borrow(|windows| windows.last().cloned())
+        .unwrap();
+    assert_eq!(opened_browse.doc.borrow().path(), Some(first.as_path()));
+    opened_browse.window.destroy();
+    while context.pending() {
+        context.iteration(false);
+    }
+    window.flags.dirty.set(false);
+    window.recent.record(&second);
 
     window.open_button.emit_clicked();
     let rows = window.open_recent_rows.borrow().clone();

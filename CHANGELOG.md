@@ -6,6 +6,10 @@ versioning.
 
 ## [Unreleased]
 
+- Holding **Shift** in the header **Open** menu now shows a small new-window
+  icon beside each recent file name; **Shift-clicking** a recent entry or
+  **Browse…**, or pressing **Shift+Enter** in the path field, opens the file in
+  a new window without disturbing the current document.
 - **Quit** now handles every window at once: clean windows close immediately
   and each dirty window or window with accepted review changes shows its own
   prompt, instead of waiting for the previous window.

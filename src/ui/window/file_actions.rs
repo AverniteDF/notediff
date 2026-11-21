@@ -351,10 +351,27 @@ impl AppWindow {
     }
 
     pub(super) fn request_open_dialog(self: &Rc<Self>) {
+        self.request_open_dialog_in(false);
+    }
+
+    pub(super) fn request_open_dialog_in(self: &Rc<Self>, new_window: bool) {
         if self.diff_active() {
             return;
         }
-        self.show_open_dialog();
+        self.show_open_dialog_with(None, None, new_window);
+    }
+
+    /// Open a recent entry in this window or, when Shift was held, in a new
+    /// window without disturbing the current draft.
+    pub(super) fn request_open_recent(self: &Rc<Self>, path: PathBuf, new_window: bool) {
+        if self.diff_active() {
+            return;
+        }
+        if new_window {
+            self.open_path_in_new_window(&path);
+        } else {
+            self.request_open_path(path);
+        }
     }
 
     /// Open a path chosen from the chooser or the recent list. The path is
@@ -377,6 +394,10 @@ impl AppWindow {
     /// resolve from the current document's folder, or from home when the
     /// document is untitled.
     pub(super) fn request_open_location(self: &Rc<Self>, text: &str) {
+        self.request_open_location_in(text, false);
+    }
+
+    pub(super) fn request_open_location_in(self: &Rc<Self>, text: &str, new_window: bool) {
         if self.diff_active() {
             return;
         }
@@ -394,12 +415,12 @@ impl AppWindow {
         match location_kind(&metadata) {
             LocationKind::Folder => {
                 self.open_popover.popdown();
-                self.show_open_dialog_with(Some(&path), None);
+                self.show_open_dialog_with(Some(&path), None, new_window);
                 return;
             }
             LocationKind::Device => {
                 self.open_popover.popdown();
-                self.show_open_dialog_with(None, Some(&path));
+                self.show_open_dialog_with(None, Some(&path), new_window);
                 return;
             }
             LocationKind::Other => {
@@ -424,7 +445,11 @@ impl AppWindow {
             return;
         }
         self.open_popover.popdown();
-        self.request_open_path(path);
+        if new_window {
+            self.open_path_in_new_window(&path);
+        } else {
+            self.request_open_path(path);
+        }
     }
 
     /// Leave the Open menu showing and flash the path field so the user can try
@@ -499,12 +524,13 @@ impl AppWindow {
         }
     }
 
-    fn show_open_dialog(self: &Rc<Self>) {
-        self.show_open_dialog_with(None, None);
-    }
-
     /// Open the chooser, optionally starting at a typed folder or file.
-    fn show_open_dialog_with(self: &Rc<Self>, folder: Option<&Path>, file: Option<&Path>) {
+    fn show_open_dialog_with(
+        self: &Rc<Self>,
+        folder: Option<&Path>,
+        file: Option<&Path>,
+        new_window: bool,
+    ) {
         let dialog = gtk::FileDialog::builder()
             .title("Open File")
             .modal(true)
@@ -519,14 +545,23 @@ impl AppWindow {
         dialog.open(
             Some(&self.window),
             None::<&gio::Cancellable>,
-            move |result| Self::finish_open_dialog(&this, result),
+            move |result| Self::finish_open_dialog_in(&this, result, new_window),
         );
     }
 
     /// A cancelled chooser must return keyboard input to the editor, not the
     /// Open button or another non-editable widget. Successful loads restore
     /// focus themselves, after any Convert Tabs prompt has been answered.
+    #[cfg(test)]
     pub(super) fn finish_open_dialog(this: &Rc<Self>, result: Result<gio::File, glib::Error>) {
+        Self::finish_open_dialog_in(this, result, false);
+    }
+
+    pub(super) fn finish_open_dialog_in(
+        this: &Rc<Self>,
+        result: Result<gio::File, glib::Error>,
+        new_window: bool,
+    ) {
         // File-replacing actions are disabled in Diff Mode; ignore a chooser
         // result that arrives after a review has started.
         if this.diff_active() {
@@ -535,9 +570,13 @@ impl AppWindow {
         if let Ok(file) = result
             && let Some(path) = file.path()
         {
-            // The chooser already committed to a path; the save prompt, if
-            // any, comes now so cancelling the chooser costs nothing.
-            this.request_open_path(path);
+            if new_window {
+                this.open_path_in_new_window(&path);
+            } else {
+                // The chooser already committed to a path; the save prompt, if
+                // any, comes now so cancelling the chooser costs nothing.
+                this.request_open_path(path);
+            }
         } else {
             this.editor_view.grab_focus();
         }

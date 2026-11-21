@@ -12,8 +12,11 @@ notes for details and workarounds.
   button always opens a menu: its first row has a path field and a **Browse…**
   button, followed by up to ten recently opened file paths, newest first. Type
   an absolute path or `~/...`, or a path relative to the current document's
-  folder, and press Enter to open it; **Browse…** opens the chooser. A directory
-  or device opens the chooser at that location. A missing or unreadable path
+  folder, and press Enter to open it (or **Shift+Enter** to open it in a new
+  window); **Browse…** opens the chooser (**Shift-click** opens the chosen file
+  in a new window). A directory
+  or device opens the chooser at that location (opening the chosen file in a
+  new window when **Shift+Enter** was used). A missing or unreadable path
   flashes the field red for a second and keeps the menu open so you can try
   again; content errors (invalid UTF-8, NUL byte, too large) show a dialog.
   This happens before any unsaved-changes prompt. With the path field empty,
@@ -24,7 +27,9 @@ notes for details and workarounds.
   with a slash. Directories under your home folder are shortened to `~/...`; the
   stored paths stay absolute. Each entry has a right-aligned hide icon (an eye
   with a slash); clicking it removes just that entry immediately, without
-  confirmation.
+  confirmation. While **Shift** is held, a small new-window icon appears beside
+  each recent file name, and clicking an entry opens it in a new window without
+  disturbing the current document.
   Choosing the rest of the entry behaves like Open File.
   The chooser is shown first; a chosen file replaces the document in the
   current window. If the document has unsaved changes, the **Save changes?**

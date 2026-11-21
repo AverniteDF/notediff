@@ -184,17 +184,22 @@ The header Open button always shows a menu: first a custom path row with a text
 entry and **Browse…** button, then up to ten recent file paths. The entry
 accepts an absolute path, `~`/`~/...`, or a path relative to the current
 document's folder (home for an untitled document). Enter opens a regular file
-after validating its contents and before any dirty-document save prompt. A
-directory, block device or character device opens the chooser at that location.
+after validating its contents and before any dirty-document save prompt;
+**Shift+Enter** opens it in a new window instead (leaving the current draft
+untouched). A directory, block device or character device opens the chooser at
+that location (preserving the new-window choice for **Shift+Enter**).
+**Shift-clicking** **Browse…** likewise opens the chosen file in a new window.
 A missing or unreadable path, or another non-regular file, adds a red focus
 ring to the entry for one second and keeps the menu open for another try;
 invalid UTF-8, a NUL byte and oversized files keep the usual open dialog. With
 the field empty, Right moves focus to **Browse…**, and Left returns to the
 field. Each recent path is a custom
 two-line row: a bold,
-end-ellipsized file name above a smaller, dimmed, middle-ellipsized directory
+end-ellipsized file name (with a `1em` `adw-external-link-symbolic` icon appended
+while **Shift** is held) above a smaller, dimmed, middle-ellipsized directory
 ending in `/`. Directories below the user's home are shortened to `~/...`;
-stored paths and action targets remain absolute. Every row also has a
+stored paths and action targets remain absolute. Shift-clicking a recent entry
+opens it in a new window without disturbing the current document. Every row also has a
 right-aligned `view-conceal-symbolic` button that removes just that entry
 immediately, with no confirmation. The open menu is rebuilt in place and focus
 moves to the next row, the previous row when the last entry was deleted, or the
