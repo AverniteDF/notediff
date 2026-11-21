@@ -222,7 +222,7 @@ impl std::fmt::Display for ReadError {
                 "The file is not valid UTF-8, so it cannot be opened in notediff."
             ),
             ReadError::NotRegularFile => {
-                write!(f, "That is not a regular file, so it cannot be opened.")
+                write!(f, "That is not a regular file.")
             }
             ReadError::NulByte => write!(
                 f,

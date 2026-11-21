@@ -28,10 +28,12 @@ versioning.
   is greyed out when all four are unavailable.
 - The header Open button now opens a menu with a path field and a **Browse…**
   button. Typing a path and pressing Enter opens it; relative paths resolve
-  from the current document's folder, and `~` expands to the home folder. An
-  invalid typed path is reported before a dirty document's save prompt, without
-  an OS error number. With an empty path field, Right moves to **Browse…**
-  and Left returns to the field.
+  from the current document's folder, and `~` expands to the home folder.
+  Directories and devices open the chooser at that location. A missing or
+  unreadable typed path flashes the field red for a second and keeps the menu
+  open for another try; content errors still show a short open dialog, before
+  any dirty document's save prompt. With an empty path field, Right moves to
+  **Browse…** and Left returns to the field.
 - Diff Mode pane headers show the live document's canonical path, shortened to
   `~/...` under the home directory with the full path in a tooltip, and
   right-aligned local timestamps for the last document edit (or save) and the
@@ -107,6 +109,7 @@ versioning.
 - The Appearance tab explanation is shorter, and the user-theme restart note
   uses the same subdued style as the other explanatory text.
 - The About dialog's version-copy toast now disappears after two seconds.
+- A non-regular file is now reported as **That is not a regular file.**
 - Copying the file name or full path from the title menu no longer shows a
   success toast; the copy button's checkmark is the confirmation.
 - The discard-accepted-changes dialog now uses one count-free message for every

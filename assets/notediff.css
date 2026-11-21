@@ -11,6 +11,12 @@ textview.{{content_class}} border gutter {
     {{gutter_fallback}}
 }
 
+/* A path typed into the Open menu that cannot be read. Adwaita's entry
+   transition fades the ring back when the class is removed. */
+entry.notediff-open-location-error:focus-within {
+    outline-color: #e01b24;
+}
+
 /* The custom diff renderer supplies its own opaque markup colours. An opaque
    inherited colour stops the gutter's translucent fallback colour from dimming
    those colours a second time. */

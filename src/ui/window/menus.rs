@@ -1,7 +1,9 @@
 //! Menu models, shared menu actions and application-wide accelerators.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib::variant::ToVariant;
@@ -194,6 +196,31 @@ pub(super) struct OpenLocationRow {
     pub root: gtk::Box,
     pub entry: gtk::Entry,
     pub browse: gtk::Button,
+    error_generation: Rc<Cell<u64>>,
+}
+
+const OPEN_LOCATION_ERROR_CLASS: &str = "notediff-open-location-error";
+
+impl OpenLocationRow {
+    /// Flash the focus ring red for one second. The entry stays focused and
+    /// the menu stays open so the user can correct the path in place.
+    pub(super) fn flash_error(&self) {
+        self.entry.add_css_class(OPEN_LOCATION_ERROR_CLASS);
+        let generation = self.error_generation.get().wrapping_add(1);
+        self.error_generation.set(generation);
+        let entry = self.entry.clone();
+        let error_generation = self.error_generation.clone();
+        glib::timeout_add_local_once(Duration::from_secs(1), move || {
+            if error_generation.get() == generation {
+                entry.remove_css_class(OPEN_LOCATION_ERROR_CLASS);
+            }
+        });
+    }
+
+    /// Drop a stale error ring when the menu is reopened.
+    pub(super) fn clear_error(&self) {
+        self.entry.remove_css_class(OPEN_LOCATION_ERROR_CLASS);
+    }
 }
 
 pub(super) fn build_open_location_row() -> OpenLocationRow {
@@ -253,6 +280,7 @@ pub(super) fn build_open_location_row() -> OpenLocationRow {
         root,
         entry,
         browse,
+        error_generation: Rc::new(Cell::new(0)),
     }
 }
 

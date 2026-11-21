@@ -380,15 +380,56 @@ impl AppWindow {
         let Some(path) = resolve_open_location(text, self.doc.borrow().path()) else {
             return;
         };
-        self.open_popover.popdown();
-        // Report a bad target before a dirty document's save prompt. The path is
+
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                self.reject_open_location();
+                return;
+            }
+        };
+        match location_kind(&metadata) {
+            LocationKind::Folder => {
+                self.open_popover.popdown();
+                self.show_open_dialog_with(Some(&path), None);
+                return;
+            }
+            LocationKind::Device => {
+                self.open_popover.popdown();
+                self.show_open_dialog_with(None, Some(&path));
+                return;
+            }
+            LocationKind::Other => {
+                self.reject_open_location();
+                return;
+            }
+            LocationKind::Regular => {}
+        }
+
+        // Validate contents before a dirty document's save prompt. The path is
         // opened again after saving; a manually typed path is worth the second
         // read to keep the pending-action state simple.
         if let Err(err) = Document::open(&path) {
-            self.show_error("Could not open file", &err.open_message());
+            match err {
+                fsutil::ReadError::TooLarge { .. }
+                | fsutil::ReadError::NotUtf8
+                | fsutil::ReadError::NulByte => {
+                    self.show_error("Could not open file", &err.open_message());
+                }
+                _ => self.reject_open_location(),
+            }
             return;
         }
+        self.open_popover.popdown();
         self.request_open_path(path);
+    }
+
+    /// Leave the Open menu showing and flash the path field so the user can try
+    /// another path without reopening the menu.
+    fn reject_open_location(&self) {
+        if let Some(row) = self.open_location_row.borrow().as_ref() {
+            row.flash_error();
+        }
     }
 
     /// Handle an open request for a path that a window already owns. A
@@ -452,10 +493,21 @@ impl AppWindow {
     }
 
     fn show_open_dialog(self: &Rc<Self>) {
+        self.show_open_dialog_with(None, None);
+    }
+
+    /// Open the chooser, optionally starting at a typed folder or file.
+    fn show_open_dialog_with(self: &Rc<Self>, folder: Option<&Path>, file: Option<&Path>) {
         let dialog = gtk::FileDialog::builder()
             .title("Open File")
             .modal(true)
             .build();
+        if let Some(folder) = folder {
+            dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
+        }
+        if let Some(file) = file {
+            dialog.set_initial_file(Some(&gio::File::for_path(file)));
+        }
         let this = self.clone();
         dialog.open(
             Some(&self.window),
@@ -1165,6 +1217,38 @@ impl AppWindow {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum LocationKind {
+    Folder,
+    Device,
+    Other,
+    Regular,
+}
+
+fn location_kind(metadata: &std::fs::Metadata) -> LocationKind {
+    if metadata.is_dir() {
+        LocationKind::Folder
+    } else if is_device(metadata) {
+        LocationKind::Device
+    } else if metadata.is_file() {
+        LocationKind::Regular
+    } else {
+        LocationKind::Other
+    }
+}
+
+#[cfg(unix)]
+fn is_device(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    let kind = metadata.file_type();
+    kind.is_block_device() || kind.is_char_device()
+}
+
+#[cfg(not(unix))]
+fn is_device(_: &std::fs::Metadata) -> bool {
+    false
+}
+
 /// Resolve a path typed into the Open menu. Surrounding quotes and whitespace
 /// are ignored; `~` and `~/...` expand to the home folder, and relative paths
 /// resolve from the current document's folder (or home when untitled).
@@ -1203,7 +1287,7 @@ fn resolve_open_location(text: &str, current: Option<&Path>) -> Option<PathBuf> 
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_open_location;
+    use super::{LocationKind, location_kind, resolve_open_location};
     use gtk::glib;
     use std::path::{Path, PathBuf};
 
@@ -1239,5 +1323,35 @@ mod tests {
         for text in ["", "   ", "\"\"", "''"] {
             assert_eq!(resolve_open_location(text, None), None, "{text:?}");
         }
+    }
+
+    #[test]
+    fn typed_paths_are_classified_before_opening() {
+        let dir = std::env::temp_dir().join(format!("notediff-open-kind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("file.txt");
+        std::fs::write(&file, "text\n").unwrap();
+        assert_eq!(
+            location_kind(&std::fs::metadata(&file).unwrap()),
+            LocationKind::Regular
+        );
+        assert_eq!(
+            location_kind(&std::fs::metadata(&dir).unwrap()),
+            LocationKind::Folder
+        );
+        #[cfg(unix)]
+        {
+            if let Ok(device) = std::fs::metadata("/dev/null") {
+                assert_eq!(location_kind(&device), LocationKind::Device);
+            }
+            let socket = dir.join("socket");
+            let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+            assert_eq!(
+                location_kind(&std::fs::metadata(&socket).unwrap()),
+                LocationKind::Other
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -2379,8 +2379,10 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
 fn open_location_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     let current = dir.join("open-location-current.md");
     let target = dir.join("open-location-target.md");
+    let invalid = dir.join("open-location-invalid.md");
     std::fs::write(&current, "current\n").unwrap();
     std::fs::write(&target, "target\n").unwrap();
+    std::fs::write(&invalid, [0xff, 0xfe]).unwrap();
     let window = AppWindow::with_store(app, store.clone());
     window.window.present();
     AppWindow::open_path(&window, &current);
@@ -2449,13 +2451,29 @@ fn open_location_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSt
     assert_eq!(window.doc.borrow().path(), Some(target_canonical.as_path()));
     assert_eq!(window.current_text(), "target\n");
 
-    // An invalid typed path is reported before the dirty document's save prompt.
+    // A missing typed path flashes the field red, keeps the menu open, and
+    // still reports nothing before the dirty document's save prompt.
     window.editor_buffer.insert_at_cursor("dirty");
     assert!(window.flags.dirty.get());
     window.open_button.emit_clicked();
     assert!(window.open_popover.is_visible());
     let row = window.open_location_row.borrow().clone().unwrap();
     row.entry.set_text("open-location-missing.md");
+    row.entry.emit_by_name::<()>("activate", &[]);
+    assert!(window.open_popover.is_visible());
+    assert!(row.entry.has_css_class("notediff-open-location-error"));
+    assert!(window.window.visible_dialog().is_none());
+    assert_eq!(window.doc.borrow().path(), Some(target_canonical.as_path()));
+    assert_eq!(window.current_text(), "dirtytarget\n");
+    assert!(window.flags.dirty.get());
+    wait_for(|| !row.entry.has_css_class("notediff-open-location-error"));
+    window.open_popover.popdown();
+
+    // Content failures still explain themselves before the save prompt.
+    window.open_button.emit_clicked();
+    assert!(window.open_popover.is_visible());
+    let row = window.open_location_row.borrow().clone().unwrap();
+    row.entry.set_text("open-location-invalid.md");
     row.entry.emit_by_name::<()>("activate", &[]);
     wait_for(|| {
         window
@@ -2470,14 +2488,17 @@ fn open_location_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSt
         .downcast::<adw::AlertDialog>()
         .unwrap();
     assert_eq!(dialog.heading().as_deref(), Some("Could not open file"));
-    assert_eq!(dialog.body().as_str(), "No such file or directory.");
+    assert_eq!(
+        dialog.body().as_str(),
+        "The file is not valid UTF-8, so it cannot be opened in notediff."
+    );
     dialog.close();
     wait_for(|| window.window.visible_dialog().is_none());
     assert_eq!(window.doc.borrow().path(), Some(target_canonical.as_path()));
-    assert_eq!(window.current_text(), "dirtytarget\n");
     assert!(window.flags.dirty.get());
 
     // A valid typed path still asks before replacing the dirty document.
+    window.open_popover.popdown();
     window.open_button.emit_clicked();
     assert!(window.open_popover.is_visible());
     let row = window.open_location_row.borrow().clone().unwrap();

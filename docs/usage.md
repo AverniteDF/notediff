@@ -12,10 +12,12 @@ notes for details and workarounds.
   button always opens a menu: its first row has a path field and a **Browse…**
   button, followed by up to ten recently opened file paths, newest first. Type
   an absolute path or `~/...`, or a path relative to the current document's
-  folder, and press Enter to open it; **Browse…** opens the chooser. An invalid
-  path is reported before any unsaved-changes prompt, without an OS error
-  number. With the path field empty, Right moves focus to **Browse…**; Left
-  returns to the field. The
+  folder, and press Enter to open it; **Browse…** opens the chooser. A directory
+  or device opens the chooser at that location. A missing or unreadable path
+  flashes the field red for a second and keeps the menu open so you can try
+  again; content errors (invalid UTF-8, NUL byte, too large) show a dialog.
+  This happens before any unsaved-changes prompt. With the path field empty,
+  Right moves focus to **Browse…**; Left returns to the field. The
   button's **Open File (Ctrl+O)** tooltip is hidden while this menu is showing.
   Each recent entry shows the file name in bold on
   the first line and its directory path in smaller, dimmed text below, ending

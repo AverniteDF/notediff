@@ -486,6 +486,7 @@ impl AppWindow {
             this.fill_open_menu(&entries);
             if let Some(row) = this.open_location_row.borrow().as_ref() {
                 row.entry.set_text("");
+                row.clear_error();
             }
             this.open_popover.popup();
         });
