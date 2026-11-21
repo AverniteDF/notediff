@@ -520,6 +520,11 @@ impl DiffPage {
     }
 
     #[cfg(test)]
+    pub(crate) fn left_renderer_weak(&self) -> glib::WeakRef<sourceview5::GutterRendererText> {
+        self.left_line_numbers.renderer.downgrade()
+    }
+
+    #[cfg(test)]
     pub(crate) fn line_number_color_alpha(&self, right: bool) -> f32 {
         let line_numbers = if right {
             &self.right_line_numbers
@@ -1636,15 +1641,14 @@ impl LineNumberRenderer {
 
         let strong = Rc::new(Cell::new(None));
         let style = Rc::new(RefCell::new(style));
-        let query_renderer = renderer.clone();
         let query_strong = strong.clone();
         let query_style = style.clone();
-        renderer.connect_query_data(move |_, _object, line| {
+        renderer.connect_query_data(move |renderer, _object, line| {
             let line = line as usize;
             let is_strong = query_strong
                 .get()
                 .is_some_and(|(start, end)| line >= start && line < end);
-            query_renderer.set_markup(&line_number_markup(
+            renderer.set_markup(&line_number_markup(
                 line + 1,
                 is_strong,
                 &query_style.borrow(),

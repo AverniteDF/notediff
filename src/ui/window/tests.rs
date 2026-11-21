@@ -188,6 +188,7 @@ fn gtk_window_smoke() {
     // Baselines go to a temporary store, never the real one.
     let store = SnapshotStore::at(dir.join("store"));
     crate::ui::app_dialog::snapshots_tab::link_buttons_smoke(&store, &dir);
+    gobject_cycles_scenario();
     transient_focus_scenario(&app, &store);
     context_menu_focus_scenario(&app, &store);
     trim_whitespace_scenario(&app, &store);
@@ -946,6 +947,57 @@ fn find_response_button(widget: &gtk::Widget, label: &str) -> Option<gtk::Button
         child = widget.next_sibling();
     }
     None
+}
+
+fn find_widget_with_class(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    if root.has_css_class(class) {
+        return Some(root.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        if let Some(found) = find_widget_with_class(&widget, class) {
+            return Some(found);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
+fn gobject_cycles_scenario() {
+    // About: the version button must not keep its ancestor toast overlay alive.
+    let dialog = crate::ui::about_dialog::build_for_test();
+    let child = dialog.child().expect("About dialog child");
+    let version = find_widget_with_class(&child, "version-pill").expect("version button");
+    let weak = version.downgrade();
+    drop(version);
+    drop(child);
+    drop(dialog);
+    assert!(
+        weak.upgrade().is_none(),
+        "the About dialog tree must be released"
+    );
+
+    // Status dot: the click gesture must not keep its host label alive.
+    let bar = crate::ui::status_bar::StatusBar::editor();
+    bar.set_dot_actions(
+        "win.find-next-trailing-whitespace",
+        "win.find-next-non-empty-blank-line",
+    );
+    let dot = find_widget_with_class(bar.root.upcast_ref::<gtk::Widget>(), "trailing-dot")
+        .expect("status dot");
+    let weak = dot.downgrade();
+    drop(dot);
+    drop(bar);
+    assert!(weak.upgrade().is_none(), "the status dot must be released");
+
+    // Diff line numbers: the query handler must not keep its renderer alive.
+    let page = crate::ui::diff_page::DiffPage::new();
+    let weak = page.left_renderer_weak();
+    drop(page);
+    assert!(
+        weak.upgrade().is_none(),
+        "the line-number renderer must be released"
+    );
 }
 
 fn wait_for(condition: impl Fn() -> bool) {

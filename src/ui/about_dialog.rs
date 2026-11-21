@@ -16,6 +16,10 @@ const LICENSE_URL: &str = "https://opensource.org/licenses/MIT";
 /// Show the About dialog. Everything is visible immediately; there are no
 /// Details, Credits or Legal pages.
 pub fn present(parent: &adw::ApplicationWindow) {
+    build_dialog().present(Some(parent));
+}
+
+fn build_dialog() -> adw::Dialog {
     let name = gtk::Label::new(Some(APP_NAME));
     name.add_css_class("title-1");
 
@@ -28,9 +32,12 @@ pub fn present(parent: &adw::ApplicationWindow) {
     version.add_css_class("version-pill");
     version.set_halign(gtk::Align::Center);
     {
-        let toast_overlay = toast_overlay.clone();
+        let toast_overlay = toast_overlay.downgrade();
         version.connect_clicked(move |button| {
             button.clipboard().set_text(APP_VERSION);
+            let Some(toast_overlay) = toast_overlay.upgrade() else {
+                return;
+            };
             let toast = toast::new(ToastKind::Success, "Version copied to clipboard");
             toast.set_timeout(2);
             toast_overlay.add_toast(toast);
@@ -76,7 +83,12 @@ pub fn present(parent: &adw::ApplicationWindow) {
         .content_width(420)
         .build();
     dialog.set_child(Some(&toast_overlay));
-    dialog.present(Some(parent));
+    dialog
+}
+
+#[cfg(test)]
+pub(crate) fn build_for_test() -> adw::Dialog {
+    build_dialog()
 }
 
 fn centered_label(text: &str) -> gtk::Label {

@@ -183,11 +183,13 @@ impl StatusBar {
         };
         let trailing = trailing.to_string();
         let blank = blank.to_string();
-        let label = dot.clone();
         let state = self.dot_state.clone();
         let click = gtk::GestureClick::new();
         click.set_button(gdk::BUTTON_PRIMARY);
-        click.connect_released(move |_, _, _, _| {
+        click.connect_released(move |gesture, _, _, _| {
+            let Some(label) = gesture.widget() else {
+                return;
+            };
             let action = match state.get() {
                 DotState::Clean => return,
                 DotState::Trailing => &trailing,

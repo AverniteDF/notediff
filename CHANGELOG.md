@@ -55,6 +55,8 @@ versioning.
 - Focused Diff Mode line numbers now match the editor's cursor-line number:
   derived gutter opacity is no longer applied a second time, and they use the
   same bold default.
+- Fixed reference-cycle leaks in the About dialog, the status-bar whitespace dot
+  and the Diff Mode line-number renderer.
 
 ### Changed
 
