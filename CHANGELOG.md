@@ -52,6 +52,9 @@ versioning.
   blank-line pilcrow on the side whose final newline did not change.
 - Blank-line pilcrows in inspection now use the focused-hunk background instead
   of the editor background.
+- Focused Diff Mode line numbers now match the editor's cursor-line number:
+  derived gutter opacity is no longer applied a second time, and they use the
+  same bold default.
 
 ### Changed
 

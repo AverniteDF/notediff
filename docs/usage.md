@@ -360,7 +360,9 @@ insertion or deletion, the empty pane marks the exact boundary with the same
 3px strong-red bar used by inspection, so that pane still shows where the
 change belongs; the bar scrolls with the text on both axes. In the full diff,
 the focused hunk's line numbers use the stronger current-line colour (and bold
-when the theme specifies it); an empty side emphasises its boundary row.
+unless the theme explicitly sets `bold="false"`); the theme's `auto`/percentage
+gutter opacity applies only to normal line numbers, so focused rows are not
+dimmed twice. An empty side emphasises its boundary row.
 Both panes scroll independently in both directions. Mouse wheel, scrollbar,
 touchpad and Page Up/Page Down scrolling affect only the pane being used.
 Moving to a hunk scrolls each pane to its own anchor and resets horizontal
@@ -539,6 +541,11 @@ These sentinels are notediff extensions, not GtkSourceView colours; notediff
 sanitizes them before loading the scheme. An explicit `line-numbers` colour
 always wins, and a parent scheme's explicit colour counts as defined unless the
 theme uses a sentinel. Invalid percentages fall back to `auto`.
+
+`current-line-number` is bold by default, matching the editor's cursor line;
+set `bold="false"` to disable it. The `auto`/percentage `line-numbers` opacity
+affects normal line numbers only; focused Diff Mode numbers use the full
+`current-line-number` colour.
 
 The project includes four example bundles: **Cola & Cream**, **Forest Dusk**,
 **Grape Bubblegum** and **Slate Haze**. Install all of them, or replace the loop

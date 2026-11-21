@@ -11,6 +11,13 @@ textview.{{content_class}} border gutter {
     {{gutter_fallback}}
 }
 
+/* The custom diff renderer supplies its own opaque markup colours. An opaque
+   inherited colour stops the gutter's translucent fallback colour from dimming
+   those colours a second time. */
+.notediff-diff-line-number {
+    color: #ffffff;
+}
+
 .diff-toolbar {
     border-bottom: 1px solid alpha(currentColor, 0.12);
     background: alpha(currentColor, 0.03);

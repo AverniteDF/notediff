@@ -180,6 +180,12 @@ fn highlight(
     }
 }
 
+/// GtkSourceView makes the current-line number bold unless the scheme
+/// explicitly sets `bold="false"`. An absent style is also bold.
+fn current_line_number_bold(style: Option<&sourceview5::Style>) -> bool {
+    style.is_none_or(|style| !style.is_bold_set() || style.is_bold())
+}
+
 /// Review styles are exact XML colours or fixed dark/light-mode fallbacks.
 /// Preview colours and the dirty header still follow the editor scheme.
 /// `line_number_alpha` carries an explicit `auto`/percentage request from the
@@ -232,8 +238,7 @@ pub fn resolve(
     });
     let line_number_strong_style = scheme.and_then(|scheme| scheme.style("current-line-number"));
     let line_number_strong_color = color_any(scheme, "current-line-number", false).unwrap_or(fg);
-    let line_number_strong_bold =
-        line_number_strong_style.is_some_and(|style| style.is_bold_set() && style.is_bold());
+    let line_number_strong_bold = current_line_number_bold(line_number_strong_style.as_ref());
     let (review_fg, backgrounds) = if dark {
         (
             rgb(1.0, 1.0, 1.0),

@@ -363,6 +363,17 @@ pub(crate) fn smoke_at(root: &Path) {
 </style-scheme>"##,
         ),
     );
+    bundle(
+        "11-bold-off",
+        "bold-off",
+        Some(
+            r##"<style-scheme id="user-bold-off" name="No bold line numbers" version="1.0">
+<style name="text" foreground="#ffffff" background="#000000"/>
+<style name="current-line-number" foreground="#ffcc99" bold="false"/>
+<style name="line-numbers" foreground="#888888" background="#101010"/>
+</style-scheme>"##,
+        ),
+    );
     let catalog = Catalog::load(&users, &root.join("styles"));
     assert_eq!(
         catalog
@@ -377,7 +388,8 @@ pub(crate) fn smoke_at(root: &Path) {
             "inherited",
             "review",
             "auto",
-            "percent"
+            "percent",
+            "bold-off"
         ]
     );
     let user = catalog.by_id("cola-n-cream").unwrap();
@@ -406,6 +418,10 @@ pub(crate) fn smoke_at(root: &Path) {
         auto.palette.gutter_fallback.as_deref(),
         Some("rgba(255, 204, 153, 0.50)")
     );
+    assert!(
+        auto.palette.line_number_strong_bold,
+        "an unset current-line-number bold is bold, matching the editor"
+    );
     let percent = catalog.by_id("percent").unwrap();
     assert_eq!(
         percent.palette.preview.gutter_text,
@@ -414,6 +430,11 @@ pub(crate) fn smoke_at(root: &Path) {
     assert_eq!(
         percent.palette.gutter_fallback.as_deref(),
         Some("rgba(255, 204, 153, 0.70)")
+    );
+    let bold_off = catalog.by_id("bold-off").unwrap();
+    assert!(
+        !bold_off.palette.line_number_strong_bold,
+        "an explicit current-line-number bold=false must be respected"
     );
     let review = catalog.by_id("review").unwrap();
     // Effective use-style values are kept exactly, even over a white editor.

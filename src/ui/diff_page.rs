@@ -30,6 +30,8 @@ const TAG_INLINE_NORMAL: &str = "notediff-inline-normal";
 const TAG_FOCUS: &str = "notediff-focus";
 const TAG_WORD_FOCUS: &str = "notediff-word-focus";
 const TAG_INLINE_SELECTED: &str = "notediff-inline-selected";
+/// Opaque foreground anchor for the custom gutter renderer (assets/notediff.css).
+const LINE_NUMBER_CLASS: &str = "notediff-diff-line-number";
 /// A blank changed line has nothing to paint, so the panes show a marker
 /// character on it. The marker exists only in the display buffers; this
 /// unstyled tag identifies it so it can be left out of copied text.
@@ -515,6 +517,34 @@ impl DiffPage {
             &self.full_left_caret
         };
         caret.geometry.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn line_number_color_alpha(&self, right: bool) -> f32 {
+        let line_numbers = if right {
+            &self.right_line_numbers
+        } else {
+            &self.left_line_numbers
+        };
+        line_numbers.renderer.color().alpha()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn line_number_markup_for_test(&self, right: bool, line: u32) -> String {
+        let line_numbers = if right {
+            &self.right_line_numbers
+        } else {
+            &self.left_line_numbers
+        };
+        let object = self.left_buffer.clone().upcast::<glib::Object>();
+        line_numbers
+            .renderer
+            .emit_by_name::<()>("query-data", &[&object, &line]);
+        line_numbers
+            .renderer
+            .markup()
+            .map(|markup| markup.to_string())
+            .unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -1597,6 +1627,7 @@ impl LineNumberRenderer {
     fn install(view: &sourceview5::View, style: LineNumberStyle) -> Self {
         view.set_show_line_numbers(false);
         let renderer = sourceview5::GutterRendererText::new();
+        renderer.add_css_class(LINE_NUMBER_CLASS);
         renderer.set_alignment_mode(sourceview5::GutterRendererAlignmentMode::First);
         renderer.set_xalign(1.0);
         renderer.set_yalign(0.5);

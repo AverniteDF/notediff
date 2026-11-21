@@ -212,6 +212,7 @@ fn gtk_window_smoke() {
     new_file_scenario(&app, &dir, &store);
     diff_file_actions_disabled_scenario(&app, &dir, &store);
     theme_scenario(&app, &store);
+    focused_line_number_color_scenario(&app, &dir, &store);
     font_appearance_scenario(&app, &store);
     restore_appearance_scenario(&app, &store);
     external_change_in_diff_scenario(&app, &dir, &store);
@@ -2734,6 +2735,67 @@ fn theme_scenario(app: &adw::Application, store: &SnapshotStore) {
     release(Key::T);
     theme::apply(dark.clone());
     window.window.destroy();
+}
+
+fn focused_line_number_color_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let users = dir.join("grape-catalog");
+    let bundle = users.join("grape-bubblegum");
+    std::fs::create_dir_all(&bundle).unwrap();
+    std::fs::write(
+        bundle.join("theme.conf"),
+        include_str!("../../../examples/themes/grape-bubblegum/theme.conf"),
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.join("scheme.xml"),
+        include_str!("../../../examples/themes/grape-bubblegum/scheme.xml"),
+    )
+    .unwrap();
+    let catalog =
+        crate::ui::theme_catalog::Catalog::load(&users, &dir.join("grape-catalog-styles"));
+    let grape = catalog
+        .by_id("grape-bubblegum")
+        .expect("Grape Bubblegum theme");
+    theme::apply(grape.clone());
+    assert_eq!(grape.palette.line_number, "#a4a1ad");
+    assert_eq!(grape.palette.line_number_strong, "#f8f8f2");
+    assert!(
+        grape.palette.line_number_strong_bold,
+        "an unset current-line-number bold is bold, matching the editor"
+    );
+    assert_eq!(
+        grape.palette.gutter_fallback.as_deref(),
+        Some("rgba(248, 248, 242, 0.50)")
+    );
+
+    let path = dir.join("grape-line-numbers.txt");
+    std::fs::write(&path, "a\nB\nC\nD\nE\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text("a\nX\nC\nD\nE\n");
+    window.persist(None).unwrap();
+    window.window.present();
+    window.enter_diff();
+    window.focus_relative(1);
+    gtk::test_widget_wait_for_draw(&window.window);
+
+    assert_eq!(window.diff.full_line_number_strong(false), Some((1, 2)));
+    assert_eq!(window.diff.full_line_number_strong(true), Some((1, 2)));
+    // The gutter's derived 50% opacity must not dim the custom renderer's
+    // already-opaque markup colours a second time.
+    assert_eq!(window.diff.line_number_color_alpha(false), 1.0);
+    assert_eq!(window.diff.line_number_color_alpha(true), 1.0);
+
+    let strong = window.diff.line_number_markup_for_test(false, 1);
+    assert!(strong.contains(r##"foreground="#f8f8f2""##), "{strong}");
+    assert!(strong.contains(r##"weight="bold""##), "{strong}");
+    let normal = window.diff.line_number_markup_for_test(false, 0);
+    assert!(normal.contains(r##"foreground="#a4a1ad""##), "{normal}");
+    assert!(!normal.contains(r##"weight="bold""##), "{normal}");
+
+    window.window.destroy();
+    theme::apply(theme::by_id("dark").unwrap());
 }
 
 fn search_replace_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
