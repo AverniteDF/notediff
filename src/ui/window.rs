@@ -167,6 +167,9 @@ pub struct AppWindow {
     open_popover: gtk::PopoverMenu,
     /// Custom two-line rows currently installed in the Open menu.
     open_recent_rows: RefCell<Vec<menus::RecentRow>>,
+    /// The Open menu's path field and Browse button, installed while the
+    /// popover is built.
+    open_location_row: RefCell<Option<menus::OpenLocationRow>>,
     diff_button: gtk::Button,
     copy_button: gtk::Button,
     title_label: gtk::Label,
@@ -359,6 +362,7 @@ impl AppWindow {
             open_button: open_button.clone(),
             open_popover: open_popover.clone(),
             open_recent_rows: RefCell::new(Vec::new()),
+            open_location_row: RefCell::new(None),
             diff_button: diff_button.clone(),
             copy_button: copy_button.clone(),
             title_label: title_label.clone(),
@@ -448,6 +452,27 @@ impl AppWindow {
                 this.update_open_tooltip();
             }
         });
+
+        let row = menus::build_open_location_row();
+        {
+            let weak = Rc::downgrade(this);
+            row.entry.connect_activate(move |entry| {
+                if let Some(this) = weak.upgrade() {
+                    this.request_open_location(entry.text().as_str());
+                }
+            });
+        }
+        {
+            let weak = Rc::downgrade(this);
+            row.browse.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.open_popover.popdown();
+                    this.request_open_dialog();
+                }
+            });
+        }
+        *this.open_location_row.borrow_mut() = Some(row);
+
         let weak = Rc::downgrade(this);
         this.open_button.connect_clicked(move |_| {
             let Some(this) = weak.upgrade() else {
@@ -458,11 +483,10 @@ impl AppWindow {
                 return;
             }
             let entries = this.recent.pruned_entries();
-            if !menus::open_menu_has_entries(&entries) {
-                this.request_open_dialog();
-                return;
-            }
             this.fill_open_menu(&entries);
+            if let Some(row) = this.open_location_row.borrow().as_ref() {
+                row.entry.set_text("");
+            }
             this.open_popover.popup();
         });
     }
@@ -510,6 +534,15 @@ impl AppWindow {
         }
         self.open_popover
             .set_menu_model(Some(&menus::build_open_menu(entries)));
+
+        if let Some(row) = self.open_location_row.borrow().as_ref() {
+            if row.root.parent().is_some() {
+                row.root.unparent();
+            }
+            let _ = self
+                .open_popover
+                .add_child(&row.root, menus::OPEN_LOCATION_ID);
+        }
 
         let mut rows = Vec::with_capacity(entries.len());
         for (index, path) in entries.iter().enumerate() {

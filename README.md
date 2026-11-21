@@ -88,8 +88,9 @@ cargo run --release -- /path/to/notes.md
 - **Ctrl+N** starts a new file in the current window, prompting to save or
   discard unsaved changes first. **Ctrl+Shift+N** opens a new window, as does
   Shift-clicking the header New button. **Ctrl+O** shows the file chooser first;
-  the header Open button offers **Browse…** plus the recent files, each with its
-  own hide button, or opens the chooser when there are none. If the current document is dirty, choose
+  the header Open button opens a menu with a path field and a **Browse…** button
+  plus the recent files, each with its own hide button. Type a path and press
+  Enter to open it. If the current document is dirty, choose
   Open New Window, Discard Changes, or Save. A command-line path or a
   file-manager launch opens a new window. If a file is already open in another
   window, that window is raised instead of opening the same file twice;

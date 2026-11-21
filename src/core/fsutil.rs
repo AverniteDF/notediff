@@ -236,6 +236,21 @@ impl std::fmt::Display for ReadError {
     }
 }
 
+impl ReadError {
+    /// User-facing text for an open failure. OS error numbers are left out;
+    /// the common path failures get a plain-language message instead.
+    pub fn open_message(&self) -> String {
+        match self {
+            ReadError::Io(err) => match err.kind() {
+                io::ErrorKind::NotFound => "No such file or directory.".into(),
+                io::ErrorKind::PermissionDenied => "Permission denied.".into(),
+                _ => "The file could not be read.".into(),
+            },
+            other => other.to_string(),
+        }
+    }
+}
+
 impl std::error::Error for ReadError {}
 
 /// Resolve a path to the canonical target that will hold the document and its
@@ -427,6 +442,32 @@ mod tests {
         for kind in [io::ErrorKind::Other, io::ErrorKind::NotFound] {
             assert!(!may_fall_back_to_direct_write(&io::Error::from(kind)));
         }
+    }
+
+    #[test]
+    fn open_messages_are_friendly_and_hide_os_error_numbers() {
+        assert_eq!(
+            ReadError::Io(io::Error::from(io::ErrorKind::NotFound)).open_message(),
+            "No such file or directory."
+        );
+        assert_eq!(
+            ReadError::Io(io::Error::from(io::ErrorKind::PermissionDenied)).open_message(),
+            "Permission denied."
+        );
+        assert_eq!(
+            ReadError::Io(io::Error::from(io::ErrorKind::NotADirectory)).open_message(),
+            "The file could not be read."
+        );
+        for error in [ReadError::NotUtf8, ReadError::NotRegularFile] {
+            assert_eq!(error.open_message(), error.to_string());
+            assert!(!error.open_message().contains("os error"));
+        }
+        let too_large = ReadError::TooLarge {
+            bytes: 10,
+            limit: 5,
+        };
+        assert_eq!(too_large.open_message(), too_large.to_string());
+        assert!(!too_large.open_message().contains("os error"));
     }
 
     #[test]

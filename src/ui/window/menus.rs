@@ -146,9 +146,11 @@ pub(super) fn build_title_menu() -> gio::Menu {
     menu
 }
 
-/// With no recent paths the header Open button opens the chooser directly
-/// instead of showing a one-item menu.
-pub(super) fn open_menu_has_entries(recent: &[PathBuf]) -> bool {
+/// The id used for the Open menu's path-entry row.
+pub(super) const OPEN_LOCATION_ID: &str = "open-location";
+
+/// True when there are recent paths to show below the path row.
+pub(super) fn has_recent_entries(recent: &[PathBuf]) -> bool {
     !recent.is_empty()
 }
 
@@ -157,13 +159,15 @@ pub(super) fn recent_row_id(index: usize) -> String {
     format!("recent-{index}")
 }
 
-/// The header Open button's menu: Browse first, then recent paths (custom
-/// two-line rows, newest first).
+/// The header Open button's menu: a path-entry row first, then recent paths
+/// (custom two-line rows, newest first).
 pub(super) fn build_open_menu(recent: &[PathBuf]) -> gio::Menu {
     let menu = gio::Menu::new();
-    menu.append(Some("Browse…"), Some("win.open"));
+    let location = gio::MenuItem::new(Some("Open location"), None);
+    location.set_attribute_value("custom", Some(&OPEN_LOCATION_ID.to_variant()));
+    menu.append_item(&location);
 
-    if !open_menu_has_entries(recent) {
+    if !has_recent_entries(recent) {
         return menu;
     }
 
@@ -182,6 +186,74 @@ pub(super) fn build_open_menu(recent: &[PathBuf]) -> gio::Menu {
     menu.append_section(None, &files);
 
     menu
+}
+
+/// The Open menu's inline path field and Browse button.
+#[derive(Clone)]
+pub(super) struct OpenLocationRow {
+    pub root: gtk::Box,
+    pub entry: gtk::Entry,
+    pub browse: gtk::Button,
+}
+
+pub(super) fn build_open_location_row() -> OpenLocationRow {
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    root.set_margin_top(4);
+    root.set_margin_bottom(4);
+    root.set_margin_start(6);
+    root.set_margin_end(6);
+
+    let entry = gtk::Entry::new();
+    entry.set_placeholder_text(Some("Type a path"));
+    entry.set_width_chars(32);
+    entry.set_hexpand(true);
+
+    let browse = gtk::Button::with_label("Browse…");
+    browse.add_css_class("flat");
+
+    let entry_keys = gtk::EventControllerKey::new();
+    entry_keys.set_name(Some("notediff-open-location-entry-keys"));
+    entry_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let browse = browse.clone();
+        let entry = entry.clone();
+        entry_keys.connect_key_pressed(move |_, key, _, modifiers| {
+            if key == gtk::gdk::Key::Right
+                && !modifiers.intersects(gtk::accelerator_get_default_mod_mask())
+                && entry.text().is_empty()
+            {
+                browse.grab_focus();
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
+    entry.add_controller(entry_keys);
+
+    let browse_keys = gtk::EventControllerKey::new();
+    browse_keys.set_name(Some("notediff-open-location-browse-keys"));
+    browse_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let entry = entry.clone();
+        browse_keys.connect_key_pressed(move |_, key, _, modifiers| {
+            if key == gtk::gdk::Key::Left
+                && !modifiers.intersects(gtk::accelerator_get_default_mod_mask())
+            {
+                let _ = entry.child_focus(gtk::DirectionType::TabForward);
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
+    browse.add_controller(browse_keys);
+
+    root.append(&entry);
+    root.append(&browse);
+    OpenLocationRow {
+        root,
+        entry,
+        browse,
+    }
 }
 
 /// The widgets of one custom recent entry: the clickable two-line open area and
@@ -557,15 +629,39 @@ mod tests {
     }
 
     #[test]
-    fn open_menu_is_skipped_without_recents() {
-        assert!(!open_menu_has_entries(&[]));
-        assert!(open_menu_has_entries(&[PathBuf::from(
-            "/home/you/notes/one.md"
-        )]));
+    fn open_menu_always_offers_a_path_row() {
+        let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
+            menu.item_attribute_value(index, name, None)
+                .and_then(|value| value.get::<String>())
+        };
+        let empty = build_open_menu(&[]);
+        assert_eq!(empty.n_items(), 1);
+        assert_eq!(
+            attribute(
+                empty.upcast_ref::<gio::MenuModel>(),
+                0,
+                gio::MENU_ATTRIBUTE_LABEL
+            )
+            .as_deref(),
+            Some("Open location")
+        );
+        assert_eq!(
+            attribute(empty.upcast_ref::<gio::MenuModel>(), 0, "custom").as_deref(),
+            Some(OPEN_LOCATION_ID)
+        );
+        assert!(
+            attribute(
+                empty.upcast_ref::<gio::MenuModel>(),
+                0,
+                gio::MENU_ATTRIBUTE_ACTION
+            )
+            .is_none(),
+            "the path row is a custom child, not a plain action item"
+        );
     }
 
     #[test]
-    fn open_menu_offers_browse_and_recents() {
+    fn open_menu_offers_location_and_recents() {
         let attribute = |menu: &gio::MenuModel, index: i32, name: &str| {
             menu.item_attribute_value(index, name, None)
                 .and_then(|value| value.get::<String>())
@@ -582,16 +678,11 @@ mod tests {
                 gio::MENU_ATTRIBUTE_LABEL
             )
             .as_deref(),
-            Some("Browse…")
+            Some("Open location")
         );
         assert_eq!(
-            attribute(
-                menu.upcast_ref::<gio::MenuModel>(),
-                0,
-                gio::MENU_ATTRIBUTE_ACTION
-            )
-            .as_deref(),
-            Some("win.open")
+            attribute(menu.upcast_ref::<gio::MenuModel>(), 0, "custom").as_deref(),
+            Some(OPEN_LOCATION_ID)
         );
 
         let files = menu.item_link(1, gio::MENU_LINK_SECTION).unwrap();
@@ -618,18 +709,6 @@ mod tests {
         }
 
         assert_eq!(menu.n_items(), 2);
-
-        let empty = build_open_menu(&[]);
-        assert_eq!(empty.n_items(), 1);
-        assert_eq!(
-            attribute(
-                empty.upcast_ref::<gio::MenuModel>(),
-                0,
-                gio::MENU_ATTRIBUTE_ACTION
-            )
-            .as_deref(),
-            Some("win.open")
-        );
     }
 
     #[test]

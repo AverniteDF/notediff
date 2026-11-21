@@ -26,6 +26,12 @@ versioning.
   selected lines or the whole document. Each item is greyed out when it would do
   nothing, reports the affected count, and is one undo step. The submenu heading
   is greyed out when all four are unavailable.
+- The header Open button now opens a menu with a path field and a **Browse…**
+  button. Typing a path and pressing Enter opens it; relative paths resolve
+  from the current document's folder, and `~` expands to the home folder. An
+  invalid typed path is reported before a dirty document's save prompt, without
+  an OS error number. With an empty path field, Right moves to **Browse…**
+  and Left returns to the field.
 - Diff Mode pane headers show the live document's canonical path, shortened to
   `~/...` under the home directory with the full path in a tooltip, and
   right-aligned local timestamps for the last document edit (or save) and the

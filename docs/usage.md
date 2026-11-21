@@ -8,11 +8,16 @@ is a platform-wide issue; click the window to focus it. See the development
 notes for details and workarounds.
 
 - Open files with **Ctrl+O**, the header-bar button or **Open…** in the File
-  menu. **Ctrl+O** and **Open…** show the chooser directly. When there are no
-  recent files, the header-bar button opens the chooser directly too. Otherwise
-  it opens a menu with **Browse…** first, then up to ten recently opened file
-  paths, newest first. The button's **Open File (Ctrl+O)** tooltip is hidden
-  while this menu is showing. Each recent entry shows the file name in bold on
+  menu. **Ctrl+O** and **Open…** show the chooser directly. The header-bar
+  button always opens a menu: its first row has a path field and a **Browse…**
+  button, followed by up to ten recently opened file paths, newest first. Type
+  an absolute path or `~/...`, or a path relative to the current document's
+  folder, and press Enter to open it; **Browse…** opens the chooser. An invalid
+  path is reported before any unsaved-changes prompt, without an OS error
+  number. With the path field empty, Right moves focus to **Browse…**; Left
+  returns to the field. The
+  button's **Open File (Ctrl+O)** tooltip is hidden while this menu is showing.
+  Each recent entry shows the file name in bold on
   the first line and its directory path in smaller, dimmed text below, ending
   with a slash. Directories under your home folder are shortened to `~/...`; the
   stored paths stay absolute. Each entry has a right-aligned hide icon (an eye

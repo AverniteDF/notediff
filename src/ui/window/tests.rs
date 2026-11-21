@@ -212,6 +212,7 @@ fn gtk_window_smoke() {
     quit_review_scenario(&app, &dir, &store);
     open_file_save_prompt_scenario(&app, &dir, &store);
     recent_menu_scenario(&app, &dir, &store);
+    open_location_scenario(&app, &dir, &store);
     recent_trash_scenario(&app, &dir, &store);
     new_file_scenario(&app, &dir, &store);
     diff_file_actions_disabled_scenario(&app, &dir, &store);
@@ -954,6 +955,15 @@ fn find_response_button(widget: &gtk::Widget, label: &str) -> Option<gtk::Button
         child = widget.next_sibling();
     }
     None
+}
+
+fn named_key_controller(widget: &gtk::Widget, name: &str) -> gtk::EventControllerKey {
+    let controllers = widget.observe_controllers();
+    (0..controllers.n_items())
+        .filter_map(|index| controllers.item(index))
+        .filter_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .find(|controller| controller.name().as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("{name} key controller"))
 }
 
 fn find_spin_button(root: &gtk::Widget) -> Option<gtk::SpinButton> {
@@ -2366,6 +2376,149 @@ fn title_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore
     window.window.destroy();
 }
 
+fn open_location_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let current = dir.join("open-location-current.md");
+    let target = dir.join("open-location-target.md");
+    std::fs::write(&current, "current\n").unwrap();
+    std::fs::write(&target, "target\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    window.window.present();
+    AppWindow::open_path(&window, &current);
+    let target_canonical = target.canonicalize().unwrap();
+
+    window.open_button.emit_clicked();
+    assert!(window.open_popover.is_visible());
+    let row = window
+        .open_location_row
+        .borrow()
+        .clone()
+        .expect("open location row");
+    assert_eq!(row.browse.label().as_deref(), Some("Browse…"));
+    assert!(row.entry.text().is_empty());
+    wait_for(|| {
+        gtk::prelude::GtkWindowExt::focus(&window.window).is_some_and(|focus| {
+            focus == row.entry.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&row.entry)
+        })
+    });
+
+    let focused = |widget: &gtk::Widget| {
+        gtk::prelude::GtkWindowExt::focus(&window.window)
+            .is_some_and(|focus| &focus == widget || focus.is_ancestor(widget))
+    };
+    let entry_keys =
+        named_key_controller(row.entry.upcast_ref(), "notediff-open-location-entry-keys");
+    let browse_keys = named_key_controller(
+        row.browse.upcast_ref(),
+        "notediff-open-location-browse-keys",
+    );
+
+    // An empty field treats Right as focus navigation; Left returns from Browse.
+    assert!(entry_keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &gtk::gdk::Key::Right,
+            &0u32,
+            &gtk::gdk::ModifierType::empty()
+        ],
+    ));
+    assert!(focused(row.browse.upcast_ref()));
+    assert!(browse_keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &gtk::gdk::Key::Left,
+            &0u32,
+            &gtk::gdk::ModifierType::empty()
+        ],
+    ));
+    assert!(focused(row.entry.upcast_ref()));
+
+    // With text, Right is left to the entry so it moves the caret.
+    row.entry.set_text("open-location-target.md");
+    assert!(!entry_keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[
+            &gtk::gdk::Key::Right,
+            &0u32,
+            &gtk::gdk::ModifierType::empty()
+        ],
+    ));
+    assert!(focused(row.entry.upcast_ref()));
+
+    row.entry.emit_by_name::<()>("activate", &[]);
+    wait_for(|| !window.open_popover.is_visible());
+    assert_eq!(window.doc.borrow().path(), Some(target_canonical.as_path()));
+    assert_eq!(window.current_text(), "target\n");
+
+    // An invalid typed path is reported before the dirty document's save prompt.
+    window.editor_buffer.insert_at_cursor("dirty");
+    assert!(window.flags.dirty.get());
+    window.open_button.emit_clicked();
+    assert!(window.open_popover.is_visible());
+    let row = window.open_location_row.borrow().clone().unwrap();
+    row.entry.set_text("open-location-missing.md");
+    row.entry.emit_by_name::<()>("activate", &[]);
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert_eq!(dialog.heading().as_deref(), Some("Could not open file"));
+    assert_eq!(dialog.body().as_str(), "No such file or directory.");
+    dialog.close();
+    wait_for(|| window.window.visible_dialog().is_none());
+    assert_eq!(window.doc.borrow().path(), Some(target_canonical.as_path()));
+    assert_eq!(window.current_text(), "dirtytarget\n");
+    assert!(window.flags.dirty.get());
+
+    // A valid typed path still asks before replacing the dirty document.
+    window.open_button.emit_clicked();
+    assert!(window.open_popover.is_visible());
+    let row = window.open_location_row.borrow().clone().unwrap();
+    row.entry.set_text("open-location-current.md");
+    row.entry.emit_by_name::<()>("activate", &[]);
+    wait_for(|| {
+        window
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert_eq!(dialog.heading().as_deref(), Some("Save changes?"));
+    dialog.close();
+    wait_for(|| window.window.visible_dialog().is_none());
+    assert_eq!(window.doc.borrow().path(), Some(target_canonical.as_path()));
+    window.window.destroy();
+
+    // With no recent paths the button still shows the menu, whose only item is
+    // the path row.
+    let empty = AppWindow::with_parts(
+        app,
+        store.clone(),
+        false,
+        RecentDocuments::at(dir.join("open-location-empty-recent")),
+    );
+    empty.window.present();
+    empty.open_button.emit_clicked();
+    assert!(empty.open_popover.is_visible());
+    let model = empty.open_popover.menu_model().expect("open menu model");
+    assert_eq!(model.n_items(), 1);
+    assert!(empty.open_location_row.borrow().is_some());
+    empty.open_popover.popdown();
+    empty.window.destroy();
+}
+
 fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     let state = dir.join("recent-state");
     let first_file = dir.join("recent-first.txt");
@@ -2409,7 +2562,14 @@ fn recent_menu_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         menu.item_attribute_value(index, gio::MENU_ATTRIBUTE_LABEL, None)
             .and_then(|value| value.get::<String>())
     };
-    assert_eq!(label(&model, 0).as_deref(), Some("Browse…"));
+    assert_eq!(label(&model, 0).as_deref(), Some("Open location"));
+    assert_eq!(
+        model
+            .item_attribute_value(0, "custom", None)
+            .and_then(|value| value.get::<String>())
+            .as_deref(),
+        Some("open-location")
+    );
     let recents = model.item_link(1, gio::MENU_LINK_SECTION).unwrap();
     assert_eq!(recents.n_items(), 2);
     assert_eq!(label(&recents, 0).as_deref(), Some("recent-second.txt"));

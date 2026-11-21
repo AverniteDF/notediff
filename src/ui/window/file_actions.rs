@@ -249,7 +249,7 @@ impl AppWindow {
         let document = match Document::open(path) {
             Ok(document) => document,
             Err(err) => {
-                this.show_error("Could not open file", &err.to_string());
+                this.show_error("Could not open file", &err.open_message());
                 return;
             }
         };
@@ -368,6 +368,27 @@ impl AppWindow {
             return;
         }
         self.require_saved(PendingAction::OpenPath(path));
+    }
+
+    /// Open a path typed into the Open menu's path field. Relative paths
+    /// resolve from the current document's folder, or from home when the
+    /// document is untitled.
+    pub(super) fn request_open_location(self: &Rc<Self>, text: &str) {
+        if self.diff_active() {
+            return;
+        }
+        let Some(path) = resolve_open_location(text, self.doc.borrow().path()) else {
+            return;
+        };
+        self.open_popover.popdown();
+        // Report a bad target before a dirty document's save prompt. The path is
+        // opened again after saving; a manually typed path is worth the second
+        // read to keep the pending-action state simple.
+        if let Err(err) = Document::open(&path) {
+            self.show_error("Could not open file", &err.open_message());
+            return;
+        }
+        self.request_open_path(path);
     }
 
     /// Handle an open request for a path that a window already owns. A
@@ -1140,6 +1161,83 @@ impl AppWindow {
         self.run_after_check(after);
         if !self.diff_active() {
             self.editor_view.grab_focus();
+        }
+    }
+}
+
+/// Resolve a path typed into the Open menu. Surrounding quotes and whitespace
+/// are ignored; `~` and `~/...` expand to the home folder, and relative paths
+/// resolve from the current document's folder (or home when untitled).
+fn resolve_open_location(text: &str, current: Option<&Path>) -> Option<PathBuf> {
+    let text = text.trim();
+    let text = text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .or_else(|| {
+            text.strip_prefix('\'')
+                .and_then(|rest| rest.strip_suffix('\''))
+        })
+        .unwrap_or(text);
+    if text.is_empty() {
+        return None;
+    }
+
+    let home = glib::home_dir();
+    let path = if text == "~" {
+        home.clone()
+    } else if let Some(rest) = text.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        PathBuf::from(text)
+    };
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        let base = current
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .unwrap_or(home);
+        Some(base.join(path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_open_location;
+    use gtk::glib;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn open_location_paths_resolve_from_the_document_folder() {
+        let current = Path::new("/home/you/notes/todo.md");
+        assert_eq!(
+            resolve_open_location(" other.md ", Some(current)),
+            Some(PathBuf::from("/home/you/notes/other.md"))
+        );
+        assert_eq!(
+            resolve_open_location("\"/tmp/x.md\"", Some(current)),
+            Some(PathBuf::from("/tmp/x.md"))
+        );
+        assert_eq!(
+            resolve_open_location("'/tmp/y.md'", Some(current)),
+            Some(PathBuf::from("/tmp/y.md"))
+        );
+        let home = glib::home_dir();
+        assert_eq!(
+            resolve_open_location("~/notes/z.md", Some(current)),
+            Some(home.join("notes/z.md"))
+        );
+        assert_eq!(
+            resolve_open_location("~", Some(current)),
+            Some(home.clone())
+        );
+        assert_eq!(resolve_open_location("a.md", None), Some(home.join("a.md")));
+    }
+
+    #[test]
+    fn blank_open_locations_are_ignored() {
+        for text in ["", "   ", "\"\"", "''"] {
+            assert_eq!(resolve_open_location(text, None), None, "{text:?}");
         }
     }
 }
