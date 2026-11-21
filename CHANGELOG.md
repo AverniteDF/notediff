@@ -79,8 +79,8 @@ versioning.
   character at a time.
 - The baseline-move failure message now points to **Manage App… → Baseline
   Snapshots** instead of a menu that does not exist.
-- Opening a file now places the cursor and the scroll position at the beginning
-  of the document.
+- Opening or reloading a file now places the cursor and the scroll position at
+  the beginning of the document.
 - Pressing Enter in the **Appearance** font fields applies the font, like
   **Apply Font**.
 - Escape now closes the search bar from any focus target in the window,

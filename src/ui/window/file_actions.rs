@@ -209,6 +209,15 @@ impl AppWindow {
         self.set_read_only(mode == OpenMode::ReadOnly);
     }
 
+    /// Place the cursor and scroll position at the start of a freshly loaded
+    /// document.
+    fn reset_cursor_to_top(&self) {
+        let mut start = self.editor_buffer.start_iter();
+        self.editor_buffer.place_cursor(&start);
+        self.editor_view
+            .scroll_to_iter(&mut start, 0.0, true, 0.0, 0.0);
+    }
+
     fn load_document(&self, document: Document, mode: OpenMode) {
         let recent_path = document.path().map(Path::to_path_buf);
         *self.doc.borrow_mut() = document;
@@ -218,10 +227,7 @@ impl AppWindow {
         // The declined-reload marker belongs to the previous file.
         self.flags.declined_reload_mtime.set(None);
         self.show_document_text(mode);
-        let mut start = self.editor_buffer.start_iter();
-        self.editor_buffer.place_cursor(&start);
-        self.editor_view
-            .scroll_to_iter(&mut start, 0.0, true, 0.0, 0.0);
+        self.reset_cursor_to_top();
         self.stack.set_visible_child_name("editor");
         *self.diff_state.borrow_mut() = None;
         self.search_bar.set_search_mode(false);
@@ -1122,6 +1128,7 @@ impl AppWindow {
             self.stack.set_visible_child_name("editor");
         }
         self.show_document_text(mode);
+        self.reset_cursor_to_top();
         if self.doc.borrow().text().len() as u64 > LARGE_FILE_WARNING_BYTES {
             self.toast(
                 ToastKind::Warning,

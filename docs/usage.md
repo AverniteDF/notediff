@@ -32,8 +32,8 @@ notes for details and workarounds.
   before any save prompt, so redirecting never replaces or discards the current
   document. It applies to the chooser, recent entries, **Open New Window**, and
   command-line or file-manager launches. A command-line path or a file-manager
-  launch otherwise opens a new window for each file. A newly opened document
-  starts with the cursor and scroll position at the top.
+  launch otherwise opens a new window for each file. A newly opened or reloaded
+  document starts with the cursor and scroll position at the top.
   Opening the file already loaded in the current window reloads it from disk.
   A dirty document first asks **Reload from Disk?** with the body
   **The document has unsaved changes.** and offers **Cancel** or

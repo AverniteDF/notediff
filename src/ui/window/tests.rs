@@ -3879,6 +3879,11 @@ fn duplicate_open_scenario(app: &adw::Application, dir: &Path, store: &SnapshotS
     wait_for(|| owner.window.visible_dialog().is_none());
     assert_eq!(owner.current_text(), "changed on disk\n");
     assert!(!owner.flags.dirty.get());
+    assert_eq!(
+        owner.editor_buffer.cursor_position(),
+        0,
+        "a reload starts at the top"
+    );
 
     // A new-window request for the same path does not create a window.
     let before = super::WINDOWS.with_borrow(|windows| windows.len());
