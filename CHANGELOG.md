@@ -22,7 +22,7 @@ versioning.
   **Directory…**, plus a top-level **Add Text from File…** item, which insert a
   path or a file's text like a paste without reading path targets.
 - The editor context menu now has a **Trim Whitespace** submenu with **Leading**,
-  **Trailing**, **Blank Lines (remove)** and **Blank Lines (strip)** for the
+  **Trailing**, **Blank Lines (strip)** and **Blank Lines (remove)** for the
   selected lines or the whole document. Each item is greyed out when it would do
   nothing, reports the affected count, and is one undo step. The submenu heading
   is greyed out when all four are unavailable.

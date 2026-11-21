@@ -90,7 +90,7 @@ cargo run --release -- /path/to/notes.md
   Shift-clicking the header New button. **Ctrl+O** shows the file chooser first;
   the header Open button offers **Browse…** plus the recent files, each with its
   own hide button, or opens the chooser when there are none. If the current document is dirty, choose
-  Open in New Window, Discard Changes, or Save. A command-line path or a
+  Open New Window, Discard Changes, or Save. A command-line path or a
   file-manager launch opens a new window. If a file is already open in another
   window, that window is raised instead of opening the same file twice;
   reopening the current window's file reloads it from disk. New File and Open
@@ -98,7 +98,7 @@ cargo run --release -- /path/to/notes.md
   available.
 - **Ctrl+S** saves. **Ctrl+Shift+S** saves as, except while Review Changes is
   open.
-- Press **F5** or click **Review Changes** to compare with a baseline.
+- Click **Review Changes (F5)** to compare with a baseline.
 - Use **Ctrl+Q** to quit; dirty windows still show their save prompt, and
   accepted review changes are confirmed before being discarded.
 
@@ -114,12 +114,14 @@ cargo run --release -- /path/to/notes.md
 | `F5` | Review Changes (Diff Mode) |
 | `Ctrl+F` / `Ctrl+H` | Find / Replace |
 | `Ctrl+G` | Go to Line |
+| `Ctrl+]` / `Ctrl+[` | Increase / Decrease indentation |
+| `Ctrl+Shift+]` / `Ctrl+Shift+[` | Double / Halve indentation |
 | `Alt+Z` | Toggle word wrap |
 | `Ctrl+W` / `Ctrl+Q` | Close Window / Quit |
 | `Up` / `Down` | Previous / next hunk or change |
 | `Right` / `Left` | Accept / undo the focused change |
 | `Enter` | Inspect the focused hunk, or return to the full diff |
-| `Esc` | Leave inspection; in the full diff, leave Diff Mode, confirming first when changes have been accepted |
+| `Esc` | Close Find/Replace; leave inspection; in the full diff, leave Diff Mode, confirming first when changes have been accepted |
 
 New File, Open File, Save As and Rename or Move are disabled while Review Changes
 is open; the disabled New File and Open File header buttons also lose their

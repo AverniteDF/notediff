@@ -36,10 +36,13 @@ Update all of these together:
   without `--locked` once after editing `Cargo.toml` updates it; commit the
   result.
 - `CHANGELOG.md`:
-  - replace `[Unreleased]` with the release heading and date;
+  - keep `## [Unreleased]` at the top, empty for the next cycle;
+  - copy its entries under a new `## [X.Y.Z] - YYYY-MM-DD` heading beneath it;
   - keep the entries accurate and user-facing;
   - update the comparison links.
-- `src/ui/about_dialog.rs`: `RELEASE_DATE` and the **Released …** wording.
+- `src/ui/about_dialog.rs`: set `RELEASE_DATE` to the release date in
+  `Month D, YYYY` form. The dialog already renders `Released {RELEASE_DATE}.`,
+  so no other About wording changes are needed.
 - Any documentation that states the current version or release date.
 
 ## 3. Release notes

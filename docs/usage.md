@@ -32,7 +32,8 @@ notes for details and workarounds.
   before any save prompt, so redirecting never replaces or discards the current
   document. It applies to the chooser, recent entries, **Open New Window**, and
   command-line or file-manager launches. A command-line path or a file-manager
-  launch otherwise opens a new window for each file.
+  launch otherwise opens a new window for each file. A newly opened document
+  starts with the cursor and scroll position at the top.
   Opening the file already loaded in the current window reloads it from disk.
   A dirty document first asks **Reload from Disk?** with the body
   **The document has unsaved changes.** and offers **Cancel** or
@@ -114,7 +115,9 @@ notes for details and workarounds.
   that uses one style. Files over 1 MiB ask for confirmation. Files over 16 MiB,
   folders and non-UTF-8 files are refused. An empty file inserts nothing. This
   action is unavailable for read-only documents and in Diff Mode.
-- Find with **Ctrl+F**; press Enter to jump to the next match.
+- Find with **Ctrl+F**; press Enter to jump to the next match. **Esc** closes
+  the Find/Replace bar from anywhere in the window, unless a dialog or menu is
+  open, and returns focus to the editor.
   Ordinary typing never opens Find. Cancelling Open File restores editor focus.
   Focus also returns after the unsaved-changes prompt closes, after the main
   menu or the Open menu is dismissed, or after closing Manage App… → Baseline Snapshots. In Diff Mode it returns to a
@@ -266,9 +269,11 @@ notes for details and workarounds.
   file that changed on disk.
 - Quit with **Ctrl+Q** or **Quit** in the main menu. Every window closes through
   the normal close flow, so a dirty document still gets its save prompt and
-  accepted review changes are confirmed before being discarded. When several
-  windows need attention, their prompts appear one at a time; cancelling any
-  prompt aborts the quit.
+  accepted review changes are confirmed before being discarded. The window where
+  Quit was invoked is handled first — it closes when clean, or shows its prompt
+  when dirty or under review — and then each remaining window is handled the
+  same way, one at a time. Cancelling a prompt aborts the quit; windows already
+  handled stay closed.
 
 Files are read and written as UTF-8. CRLF, LF and mixed endings are preserved
 exactly. Files containing a NUL byte are refused. Files above 1 MiB show a
@@ -473,7 +478,8 @@ navigation and accept buttons disabled.
 
 Open **Manage App… → Appearance** to choose a theme and edit the content font.
 Theme changes apply immediately. Font fields are drafts until **Apply Font** is
-clicked; closing the dialog discards unapplied font edits. Applied settings affect
+clicked or Enter is pressed in either field; closing the dialog discards
+unapplied font edits. Applied settings affect
 all existing and future editor/diff views and their line numbers, leaving the
 interface font alone. Each newly opened dialog starts from the current settings;
 applying font fields replaces both font settings globally.
@@ -640,7 +646,8 @@ font_family = Fira Code, monospace
 font_size_pt = 14
 ```
 
-Missing or unreadable state uses defaults; malformed values are ignored per field.
+Missing, unreadable or oversized state uses defaults; malformed values are ignored
+per field.
 If saving fails, the font still applies for this session and a warning is shown.
 Theme selection remains in the separate `theme` state file. Per-window zoom is
 future work; the font size here is an application-wide preference.
