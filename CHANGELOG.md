@@ -65,6 +65,8 @@ versioning.
   width.
 - Changing the content font now resizes the Diff Mode caret on an empty hunk side
   to the new line height instead of keeping the previous height.
+- Diff Mode carets now follow their text when the window width changes and a
+  wrapped line reflows, instead of staying at the previous pixel position.
 
 ### Changed
 

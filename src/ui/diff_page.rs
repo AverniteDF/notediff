@@ -311,6 +311,16 @@ impl DiffPage {
                         page.reanchor_inspection_carets();
                     }
                 });
+                // A width change rewraps the text without changing the scroll
+                // value. Re-anchor on the next tick: moving overlays while the
+                // text view is still being allocated leaves them unallocated
+                // during a snapshot.
+                let weak = Rc::downgrade(&page);
+                adjustment.connect_page_size_notify(move |_| {
+                    if let Some(page) = weak.upgrade() {
+                        page.schedule_caret_reanchor();
+                    }
+                });
             }
         }
         for scroller in [&page.left_scroller, &page.right_scroller] {
@@ -319,6 +329,12 @@ impl DiffPage {
                 adjustment.connect_value_changed(move |_| {
                     if let Some(page) = weak.upgrade() {
                         page.reanchor_full_carets();
+                    }
+                });
+                let weak = Rc::downgrade(&page);
+                adjustment.connect_page_size_notify(move |_| {
+                    if let Some(page) = weak.upgrade() {
+                        page.schedule_caret_reanchor();
                     }
                 });
             }
@@ -413,6 +429,21 @@ impl DiffPage {
                 page.sync_line_number_widths();
                 page.update_inspection_carets();
                 page.update_full_carets();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// Re-anchor both caret pairs after the current allocation finishes. A
+    /// page-size change rewraps the text and invalidates the caret's cached
+    /// buffer geometry; moving the overlay during that allocation can leave it
+    /// unallocated for the frame that snapshots it.
+    fn schedule_caret_reanchor(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.left_view.add_tick_callback(move |_, _| {
+            if let Some(page) = weak.upgrade() {
+                page.reanchor_inspection_carets();
+                page.reanchor_full_carets();
             }
             glib::ControlFlow::Break
         });

@@ -217,6 +217,7 @@ fn gtk_window_smoke() {
     font_appearance_scenario(&app, &store);
     diff_line_number_width_scenario(&app, &dir, &store);
     caret_font_size_scenario(&app, &dir, &store);
+    inspection_caret_resize_scenario(&app, &dir, &store);
     restore_appearance_scenario(&app, &store);
     external_change_in_diff_scenario(&app, &dir, &store);
     diff_actions_scenario(&app, &dir, &store);
@@ -5320,8 +5321,70 @@ fn caret_font_size_scenario(app: &adw::Application, dir: &Path, store: &Snapshot
     window.window.destroy();
 }
 
+fn inspection_caret_resize_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    // Both panes keep content; only the wrapped position of the caret on the
+    // empty side changes when the window width changes.
+    let line = "word ".repeat(40);
+    let path = dir.join("inspection-caret-resize.txt");
+    std::fs::write(&path, format!("{line}\n")).unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text(&format!("{line}added\n"));
+    window.persist(None).unwrap();
+    window.window.present();
+    window.enter_diff();
+    window.focus_relative(1);
+    window.diff.inspect_button.emit_clicked();
+    wait_for(|| window.diff.inspection_caret_ready(true));
+
+    let offset = window
+        .diff
+        .inspection_caret(true)
+        .1
+        .expect("inspection caret offset");
+    let expected = |offset: i32| {
+        let view = window.diff.active_right_view();
+        let buffer = view.buffer();
+        let iter = buffer.iter_at_offset(offset);
+        let (strong, _) = view.cursor_locations(Some(&iter));
+        (strong.x(), strong.y(), strong.height())
+    };
+    let wide = window
+        .diff
+        .inspection_caret_geometry(true)
+        .expect("inspection caret geometry");
+    assert_eq!(Some(wide), Some(expected(offset)));
+
+    window.window.set_default_size(520, 780);
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| {
+        window
+            .diff
+            .inspection_caret_geometry(true)
+            .is_some_and(|geometry| geometry.1 > wide.1)
+    });
+    let narrow = window
+        .diff
+        .inspection_caret_geometry(true)
+        .expect("narrow caret geometry");
+    assert_eq!(
+        Some(narrow),
+        Some(expected(offset)),
+        "the caret must follow the rewrapped text"
+    );
+
+    window.window.set_default_size(1120, 780);
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| window.diff.inspection_caret_geometry(true) == Some(wide));
+    assert_eq!(Some(expected(offset)), Some(wide));
+
+    window.window.destroy();
+}
+
 fn restore_appearance_scenario(app: &adw::Application, store: &SnapshotStore) {
     use crate::core::appearance::Appearance;
+
     fn widgets(root: &gtk::Widget) -> Vec<gtk::Widget> {
         let mut result = vec![root.clone()];
         let mut index = 0;
