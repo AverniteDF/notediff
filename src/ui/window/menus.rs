@@ -48,9 +48,10 @@ impl AppWindow {
         add_action(window, this, "quit", |this| this.quit_application());
     }
 
-    /// Quit by closing every window through the normal close path. Dirty
-    /// documents are prompted one at a time; clean windows are not closed until
-    /// every prompt has been resolved.
+    /// Quit by handling one window at a time through the normal close path.
+    /// The initiating window goes first: a clean one closes immediately, and a
+    /// dirty or reviewed one shows its prompt there. Only then does the quit
+    /// move on to the other windows.
     fn quit_application(self: &Rc<Self>) {
         let Some(app) = self
             .window
@@ -59,42 +60,50 @@ impl AppWindow {
         else {
             return;
         };
-        finish_quit(&app);
+        finish_quit(&app, Some(self));
     }
 }
 
-/// Prompt the first dirty window, or close every remaining window and quit.
-/// Called again after each dirty window's save prompt has been resolved.
-pub(super) fn finish_quit(app: &adw::Application) {
-    let windows = super::WINDOWS.with_borrow(Clone::clone);
-    if let Some(window) = windows
-        .iter()
-        .find(|window| window.flags.dirty.get() && !window.flags.allow_close.get())
+/// Handle the first outstanding window: prompt it when it has unsaved edits or
+/// accepted review changes, close it when it is clean, and continue with the
+/// next window. Called again after each window is resolved. The initiating
+/// window is handled first so the quit starts where the user invoked it;
+/// `present()` cannot be relied on for windows that are not already in front.
+pub(super) fn finish_quit(app: &adw::Application, initiator: Option<&Rc<AppWindow>>) {
+    let mut windows = super::WINDOWS.with_borrow(Clone::clone);
+    if let Some(initiator) = initiator
+        && let Some(index) = windows
+            .iter()
+            .position(|window| Rc::ptr_eq(window, initiator))
     {
-        window.require_saved(PendingAction::QuitApplication);
-        return;
+        windows.rotate_left(index);
     }
-    if let Some(window) = windows
+    let Some(window) = windows
         .iter()
-        .find(|window| window.has_accepted_diff() && !window.flags.allow_close.get())
-    {
-        window.confirm_discard_review(AfterDiscardReview::Quit);
+        .find(|window| !window.flags.allow_close.get())
+    else {
+        app.quit();
         return;
-    }
-    for window in &windows {
-        if window.flags.allow_close.get() {
-            continue;
+    };
+    if window.flags.dirty.get() || window.has_accepted_diff() {
+        if !initiator.is_some_and(|initiator| Rc::ptr_eq(window, initiator)) {
+            window.window.present();
         }
-        window.flags.allow_close.set(true);
-        window.window.close();
+        if window.flags.dirty.get() {
+            window.require_saved(PendingAction::QuitApplication);
+        } else {
+            window.confirm_discard_review(AfterDiscardReview::Quit);
+        }
+        return;
     }
-    app.quit();
+    window.window.close();
+    schedule_quit(app.clone());
 }
 
 /// Resume a quit after the current window has finished closing. Waiting for
 /// idle lets GTK remove it from the window registry first.
 pub(super) fn schedule_quit(app: adw::Application) {
-    glib::idle_add_local_once(move || finish_quit(&app));
+    glib::idle_add_local_once(move || finish_quit(&app, None));
 }
 
 fn build_main_menu() -> gio::Menu {

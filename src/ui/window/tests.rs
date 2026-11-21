@@ -194,6 +194,7 @@ fn gtk_window_smoke() {
     trim_whitespace_scenario(&app, &store);
     gutter_selection_scenario(&app, store.clone());
     editing_scenario(&app, &dir, &store);
+    review_button_follows_text_scenario(&app, &dir, &store);
     indentation_scenario(&app, &dir, &store);
     trailing_whitespace_scenario(&app, &dir, &store);
     clipboard_scenario(&app, &dir, &store);
@@ -206,6 +207,8 @@ fn gtk_window_smoke() {
     document_state_scenario(&app, &dir, &store);
     save_external_scenario(&app, &dir, &store);
     quit_scenario(&app, store.clone());
+    quit_prompt_prefers_initiator_scenario(&app, &dir, &store);
+    quit_closes_clean_initiator_first_scenario(&app, &dir, &store);
     quit_review_scenario(&app, &dir, &store);
     open_file_save_prompt_scenario(&app, &dir, &store);
     recent_menu_scenario(&app, &dir, &store);
@@ -1764,6 +1767,78 @@ fn quit_scenario(app: &adw::Application, store: SnapshotStore) {
     wait_for(|| app.windows().is_empty());
 }
 
+fn quit_prompt_prefers_initiator_scenario(
+    app: &adw::Application,
+    dir: &Path,
+    store: &SnapshotStore,
+) {
+    let mut windows = Vec::new();
+    for name in ["first", "second", "third"] {
+        let path = dir.join(format!("quit-initiator-{name}.txt"));
+        std::fs::write(&path, "baseline\n").unwrap();
+        let window = AppWindow::with_store(app, store.clone());
+        AppWindow::open_path(&window, &path);
+        window.editor_buffer.insert_at_cursor("x");
+        window.window.present();
+        windows.push(window);
+    }
+    let (first, second, third) = (&windows[0], &windows[1], &windows[2]);
+    assert!(gtk::prelude::WidgetExt::activate_action(&third.window, "win.quit", None).is_ok());
+    wait_for(|| {
+        third
+            .window
+            .visible_dialog()
+            .is_some_and(|dialog| dialog.is_mapped())
+    });
+    assert!(
+        first.window.visible_dialog().is_none(),
+        "the first window must wait its turn"
+    );
+    assert!(
+        second.window.visible_dialog().is_none(),
+        "the second window must wait its turn"
+    );
+    third.window.visible_dialog().unwrap().close();
+    for window in windows {
+        window.window.destroy();
+    }
+}
+
+fn quit_closes_clean_initiator_first_scenario(
+    app: &adw::Application,
+    dir: &Path,
+    store: &SnapshotStore,
+) {
+    let path = dir.join("quit-clean-initiator.txt");
+    std::fs::write(&path, "baseline\n").unwrap();
+    let dirty = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&dirty, &path);
+    dirty.editor_buffer.insert_at_cursor("x");
+    dirty.window.present();
+
+    // The initiating window is clean, but a background window is not. The
+    // clean initiator must close before the other window is prompted.
+    let clean = AppWindow::with_store(app, store.clone());
+    clean.window.present();
+
+    clean.window.lookup_action("quit").unwrap().activate(None);
+    wait_for(|| {
+        !clean.window.is_visible()
+            && dirty
+                .window
+                .visible_dialog()
+                .is_some_and(|dialog| dialog.is_mapped())
+    });
+    assert!(
+        !app.windows()
+            .iter()
+            .any(|window| { window == clean.window.upcast_ref::<gtk::Window>() }),
+        "the initiating window must be handled before the next one"
+    );
+    dirty.window.visible_dialog().unwrap().close();
+    dirty.window.destroy();
+}
+
 fn quit_review_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     let path = dir.join("quit-review.txt");
     std::fs::write(&path, "one\ntwo\n").unwrap();
@@ -3015,6 +3090,28 @@ fn search_replace_scenario(app: &adw::Application, dir: &Path, store: &SnapshotS
     assert!(replace.is_enabled());
     assert!(all.is_enabled());
     editor.window.destroy();
+}
+
+fn review_button_follows_text_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let path = dir.join("review-revert.txt");
+    std::fs::write(&path, "baseline\n").unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    wait_for(|| !window.diff_button.is_sensitive());
+
+    // Edit and undo before the queued dirty check runs: Review must fall back
+    // to disabled once the text matches the baseline again.
+    let buffer = window.editor_buffer.clone();
+    let mut inserted = buffer.start_iter();
+    buffer.insert(&mut inserted, "x");
+    assert!(window.diff_button.is_sensitive(), "an edit enables Review");
+    let mut start = buffer.start_iter();
+    let mut end = buffer.iter_at_offset(1);
+    buffer.delete(&mut start, &mut end);
+    assert_eq!(window.current_text(), "baseline\n");
+    wait_for(|| !window.diff_button.is_sensitive());
+    window.window.destroy();
 }
 
 fn editing_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {

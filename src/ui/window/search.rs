@@ -304,9 +304,9 @@ impl AppWindow {
             if response != "go" {
                 return;
             }
-            match entry.text().trim().parse::<i32>() {
-                Ok(line) => this.go_to_line(line),
-                Err(_) => {
+            match parse_goto_line(&entry.text(), line_count) {
+                Some(line) => this.go_to_line(line),
+                None => {
                     this.toast(
                         ToastKind::Error,
                         &format!("Enter a line number from 1 to {line_count}"),
@@ -360,5 +360,35 @@ impl AppWindow {
             self.editor_view
                 .scroll_to_iter(&mut iter, 0.1, false, 0.0, 0.3);
         }
+    }
+}
+
+/// Parse the Go to Line entry. Non-digits and zero are rejected; values beyond
+/// the document, including numbers too large for `u64`, clamp to the last line.
+fn parse_goto_line(text: &str, line_count: i32) -> Option<i32> {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let line = text.parse::<u64>().unwrap_or(u64::MAX);
+    (line > 0).then(|| line.min(line_count.max(1) as u64) as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_goto_line;
+
+    #[test]
+    fn goto_line_parsing_clamps_and_rejects_invalid_input() {
+        assert_eq!(parse_goto_line("3", 10), Some(3));
+        assert_eq!(parse_goto_line(" 3 ", 10), Some(3));
+        assert_eq!(parse_goto_line("10", 10), Some(10));
+        assert_eq!(parse_goto_line("11", 10), Some(10));
+        assert_eq!(parse_goto_line("999999999999999999999999", 10), Some(10));
+        assert_eq!(parse_goto_line("0", 10), None);
+        assert_eq!(parse_goto_line("-1", 10), None);
+        assert_eq!(parse_goto_line("1.5", 10), None);
+        assert_eq!(parse_goto_line("abc", 10), None);
+        assert_eq!(parse_goto_line("", 10), None);
     }
 }

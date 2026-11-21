@@ -67,6 +67,18 @@ versioning.
   to the new line height instead of keeping the previous height.
 - Diff Mode carets now follow their text when the window width changes and a
   wrapped line reflows, instead of staying at the previous pixel position.
+- **Review Changes** no longer stays enabled after an edit is undone back to the
+  baseline before the pending text check runs.
+- **Quit** now handles the window it was invoked from first, closing it when
+  clean or prompting there, before moving on to other windows.
+- **Go to Line** accepts numbers beyond the document and clamps them to the last
+  line instead of reporting them as invalid.
+- Cancelling **Save As** or an **Insert** chooser now returns keyboard focus to
+  the editor.
+- Copying a large Diff Mode selection no longer walks the selection one
+  character at a time.
+- The baseline-move failure message now points to **Manage App… → Baseline
+  Snapshots** instead of a menu that does not exist.
 
 ### Changed
 

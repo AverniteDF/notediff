@@ -718,10 +718,14 @@ impl AppWindow {
             Some(&self.window),
             None::<&gio::Cancellable>,
             move |result| {
-                if let Ok(file) = result
-                    && let Some(path) = file.path()
-                {
+                let Ok(file) = result else {
+                    this.editor_view.grab_focus();
+                    return;
+                };
+                if let Some(path) = file.path() {
                     this.insert_path(&path);
+                } else {
+                    this.editor_view.grab_focus();
                 }
             },
         );
@@ -750,10 +754,14 @@ impl AppWindow {
             Some(&self.window),
             None::<&gio::Cancellable>,
             move |result| {
-                if let Ok(file) = result
-                    && let Some(path) = file.path()
-                {
+                let Ok(file) = result else {
+                    this.editor_view.grab_focus();
+                    return;
+                };
+                if let Some(path) = file.path() {
                     this.insert_path(&path);
+                } else {
+                    this.editor_view.grab_focus();
                 }
             },
         );
@@ -782,10 +790,14 @@ impl AppWindow {
             Some(&self.window),
             None::<&gio::Cancellable>,
             move |result| {
-                if let Ok(file) = result
-                    && let Some(path) = file.path()
-                {
+                let Ok(file) = result else {
+                    this.editor_view.grab_focus();
+                    return;
+                };
+                if let Some(path) = file.path() {
                     this.insert_file_checked(&path);
+                } else {
+                    this.editor_view.grab_focus();
                 }
             },
         );

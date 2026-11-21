@@ -573,10 +573,15 @@ impl AppWindow {
             Some(&self.window),
             None::<&gio::Cancellable>,
             move |result| {
-                let Ok(file) = result else {
-                    return;
+                let file = match result {
+                    Ok(file) => file,
+                    Err(_) => {
+                        this.editor_view.grab_focus();
+                        return;
+                    }
                 };
                 let Some(path) = file.path() else {
+                    this.editor_view.grab_focus();
                     return;
                 };
                 this.save_as_path(&path, then);
@@ -976,7 +981,8 @@ impl AppWindow {
                         &format!(
                             "The file is now at {}, but its baseline could not be moved: \
                              {err}\n\nThe old baseline is still in the snapshot store. \
-                             Manage Snapshots can link it to this document.",
+                             Manage App… → Baseline Snapshots can link it to this \
+                             document.",
                             new_path.display()
                         ),
                     ),

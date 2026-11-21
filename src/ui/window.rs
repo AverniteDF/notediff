@@ -630,6 +630,7 @@ impl AppWindow {
     /// The next settle disables it again if the text returns to the baseline.
     fn enable_review_on_edit(&self) {
         if !self.diff_active() && self.baseline.borrow().key.is_some() {
+            self.baseline_differs.set(true);
             self.diff_button.set_sensitive(true);
         }
     }
@@ -999,7 +1000,6 @@ pub(super) fn open_window_for_path_with(
     let window = AppWindow::with_parts(app, store, persist_settings, recent);
     window.window.present();
     AppWindow::open_path_after(&window, path, AfterOpen::CloseWindowOnCancel);
-    window.editor_view.grab_focus();
 }
 
 pub fn open_empty_window(app: &adw::Application) {

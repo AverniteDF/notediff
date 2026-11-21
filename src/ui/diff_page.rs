@@ -1531,17 +1531,41 @@ fn display_offset(raw: &str, byte: usize, include_trailing: bool) -> i32 {
 /// The selected text without display-only markers.
 pub(crate) fn selected_text(buffer: &gtk::TextBuffer) -> Option<String> {
     let (start, end) = buffer.selection_bounds()?;
-    let marker = buffer.tag_table().lookup(TAG_MARKER);
-    let mut out = String::new();
-    let mut iter = start;
-    while iter < end {
-        let ch = iter.char();
-        if !marker.as_ref().is_some_and(|tag| iter.has_tag(tag)) {
-            out.push(ch);
+    let text = buffer.text(&start, &end, true).to_string();
+    let Some(marker) = buffer.tag_table().lookup(TAG_MARKER) else {
+        return Some(text);
+    };
+    Some(strip_markers(&text, start.offset(), |offset| {
+        buffer.iter_at_offset(offset).has_tag(&marker)
+    }))
+}
+
+/// Drop the characters in `text` whose buffer offset satisfies `is_marker`.
+/// `start` is the buffer offset of the first character. The predicate is only
+/// called for pilcrows, so a large copy is one buffer read in the usual case
+/// instead of one GTK call per character.
+fn strip_markers(text: &str, start: i32, is_marker: impl Fn(i32) -> bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut kept = 0;
+    let mut scanned = 0;
+    let mut offset = start;
+    let mut changed = false;
+    for (byte, found) in text.match_indices(BLANK_MARKER) {
+        offset += text[scanned..byte].chars().count() as i32;
+        if is_marker(offset) {
+            out.push_str(&text[kept..byte]);
+            kept = byte + found.len();
+            changed = true;
         }
-        iter.forward_char();
+        offset += 1;
+        scanned = byte + found.len();
     }
-    Some(out)
+    if changed {
+        out.push_str(&text[kept..]);
+        out
+    } else {
+        text.to_string()
+    }
 }
 
 fn set_text(buffer: &sourceview5::Buffer, text: &str) {
@@ -2075,7 +2099,7 @@ mod tests {
     use super::{
         LineNumberStyle, display_offset, display_selection, hunk_changes_baseline_eof,
         hunk_changes_live_eof, hunk_text, line_number_markup, line_starts, marked_text,
-        replacement_span, selected_word_ranges, trailing_blank_change,
+        replacement_span, selected_word_ranges, strip_markers, trailing_blank_change,
     };
 
     #[test]
@@ -2131,6 +2155,27 @@ mod tests {
         let (text, markers) = marked_text("\n\nx", ranges, false);
         assert_eq!(text, "\u{b6}\n\u{b6}\nx");
         assert_eq!(markers, vec![0, 2]);
+    }
+
+    #[test]
+    fn selected_text_removes_only_tagged_markers() {
+        let text = "\u{b6}\n\u{b6}\nreal \u{b6}\n";
+        // Only the two display-only markers are tagged; the pilcrow in the
+        // document line must survive a copy.
+        assert_eq!(
+            strip_markers(text, 0, |offset| offset == 0 || offset == 2),
+            "\n\nreal \u{b6}\n"
+        );
+        assert_eq!(
+            strip_markers(text, 0, |_| false),
+            text,
+            "untagged pilcrows are document text"
+        );
+        // Offsets are buffer-relative when the selection starts mid-document.
+        assert_eq!(
+            strip_markers("abcd\u{b6}ef", 10, |offset| offset == 14),
+            "abcdef"
+        );
     }
 
     #[test]
