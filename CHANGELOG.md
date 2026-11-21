@@ -60,6 +60,9 @@ versioning.
 - **uninstall.sh** now succeeds when no applications directory was ever created,
   and the installed launcher stays valid when the cargo binary path contains a
   backtick or dollar sign.
+- Changing the content font now re-measures the Diff Mode line-number gutter, so
+  larger line numbers no longer clip and smaller fonts no longer leave excess
+  width.
 
 ### Changed
 

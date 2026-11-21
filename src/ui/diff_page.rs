@@ -351,6 +351,16 @@ impl DiffPage {
                 true
             });
         }
+        {
+            let weak = Rc::downgrade(&page);
+            theme::on_appearance(move || {
+                let Some(page) = weak.upgrade() else {
+                    return false;
+                };
+                page.remeasure_line_numbers_after_style();
+                true
+            });
+        }
         let weak = Rc::downgrade(&page);
         page.root.connect_unmap(move |_| {
             if let Some(page) = weak.upgrade() {
@@ -380,8 +390,30 @@ impl DiffPage {
         let style = LineNumberStyle::from_palette(&theme::current().palette);
         self.left_line_numbers.set_style(style.clone());
         self.right_line_numbers.set_style(style);
+        self.sync_line_number_widths();
+    }
+
+    /// Re-measure both full-diff gutters for the current font.
+    fn sync_line_number_widths(&self) {
         self.left_line_numbers.sync_width(&self.left_buffer);
         self.right_line_numbers.sync_width(&self.right_buffer);
+    }
+
+    /// A CSS font change refreshes the renderer's Pango context while the next
+    /// frame is laid out, after that frame's tick callbacks. Measure on the
+    /// following tick so the gutter uses the new font, not the previous one.
+    fn remeasure_line_numbers_after_style(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        let first = Cell::new(true);
+        self.left_view.add_tick_callback(move |_, _| {
+            if first.replace(false) {
+                return glib::ControlFlow::Continue;
+            }
+            if let Some(page) = weak.upgrade() {
+                page.sync_line_number_widths();
+            }
+            glib::ControlFlow::Break
+        });
     }
 
     fn clear_carets(&self) {
@@ -522,6 +554,15 @@ impl DiffPage {
     #[cfg(test)]
     pub(crate) fn left_renderer_weak(&self) -> glib::WeakRef<sourceview5::GutterRendererText> {
         self.left_line_numbers.renderer.downgrade()
+    }
+
+    /// Width requests set by the last gutter measurement, left then right.
+    #[cfg(test)]
+    pub(crate) fn full_line_number_widths(&self) -> [i32; 2] {
+        [
+            self.left_line_numbers.renderer.width_request(),
+            self.right_line_numbers.renderer.width_request(),
+        ]
     }
 
     #[cfg(test)]
@@ -689,8 +730,7 @@ impl DiffPage {
             );
             self.left_markers.replace(live_markers);
             self.right_markers.replace(baseline_markers);
-            self.left_line_numbers.sync_width(&self.left_buffer);
-            self.right_line_numbers.sync_width(&self.right_buffer);
+            self.sync_line_number_widths();
             self.full_stats
                 .set(Some([live_stats, text_stats(session.baseline())]));
             clear_tags(&self.left_buffer);

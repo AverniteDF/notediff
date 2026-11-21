@@ -1,4 +1,5 @@
-//! Apply the current theme to all live buffers, CSS and Diff Mode listeners.
+//! Apply the current theme to all live buffers, CSS, change listeners and
+//! font-dependent appearance listeners.
 //! The owned catalog is loaded once at startup; user theme edits require restart.
 
 use std::cell::RefCell;
@@ -29,6 +30,10 @@ thread_local! {
     static BUFFERS: RefCell<Vec<glib::WeakRef<sourceview5::Buffer>>> = const { RefCell::new(Vec::new()) };
     /// Returning false unregisters a listener.
     static LISTENERS: RefCell<Vec<Box<dyn Fn() -> bool>>> = const { RefCell::new(Vec::new()) };
+    /// Appearance changes only. Kept separate from `LISTENERS` so a font change
+    /// can re-measure font-dependent widgets without recolouring or repainting.
+    static APPEARANCE_LISTENERS: RefCell<Vec<Box<dyn Fn() -> bool>>> =
+        const { RefCell::new(Vec::new()) };
     static CSS: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static APPEARANCE: RefCell<Appearance> = RefCell::new(Appearance::default());
 }
@@ -137,6 +142,11 @@ pub fn on_change(listener: impl Fn() -> bool + 'static) {
     LISTENERS.with_borrow_mut(|listeners| listeners.push(Box::new(listener)));
 }
 
+/// Listen for content font changes only. Returning false unregisters.
+pub fn on_appearance(listener: impl Fn() -> bool + 'static) {
+    APPEARANCE_LISTENERS.with_borrow_mut(|listeners| listeners.push(Box::new(listener)));
+}
+
 fn apply_color_scheme(theme: &LoadedTheme) {
     adw::StyleManager::default().set_color_scheme(if theme.dark {
         adw::ColorScheme::ForceDark
@@ -226,6 +236,20 @@ pub fn appearance() -> Appearance {
 pub fn apply_appearance(value: Appearance) {
     APPEARANCE.with_borrow_mut(|current| *current = value);
     reload_css();
+    notify_appearance();
+}
+
+fn notify_appearance() {
+    // Move callbacks out before invoking them: they may register more.
+    let listeners = APPEARANCE_LISTENERS.with_borrow_mut(std::mem::take);
+    let mut live: Vec<_> = listeners
+        .into_iter()
+        .filter(|listener| listener())
+        .collect();
+    APPEARANCE_LISTENERS.with_borrow_mut(|listeners| {
+        live.append(listeners);
+        *listeners = live;
+    });
 }
 
 fn reload_css() {

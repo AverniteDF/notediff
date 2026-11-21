@@ -215,6 +215,7 @@ fn gtk_window_smoke() {
     theme_scenario(&app, &store);
     focused_line_number_color_scenario(&app, &dir, &store);
     font_appearance_scenario(&app, &store);
+    diff_line_number_width_scenario(&app, &dir, &store);
     restore_appearance_scenario(&app, &store);
     external_change_in_diff_scenario(&app, &dir, &store);
     diff_actions_scenario(&app, &dir, &store);
@@ -5185,6 +5186,52 @@ fn font_appearance_scenario(app: &adw::Application, store: &SnapshotStore) {
     for window in [&first, &second, &third] {
         window.window.destroy();
     }
+}
+
+fn diff_line_number_width_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    use crate::core::appearance::Appearance;
+
+    let previous_font = theme::appearance();
+    // The initial gutter measurement must use the font active when the pane is
+    // first shown, not the renderer's construction-time fallback.
+    theme::apply_appearance(Appearance::new("monospace", 20).unwrap());
+    let path = dir.join("line-number-width.txt");
+    let baseline: String = (1..=120).map(|line| format!("line {line}\n")).collect();
+    let live = baseline.replace("line 60\n", "line 60 changed\n");
+    std::fs::write(&path, &baseline).unwrap();
+    let window = AppWindow::with_store(app, store.clone());
+    AppWindow::open_path(&window, &path);
+    window.create_baseline();
+    window.set_editor_text(&live);
+    window.persist(None).unwrap();
+    window.enter_diff();
+    window.window.present();
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| true);
+    let medium = window.diff.full_line_number_widths();
+    assert!(medium[0] > 0 && medium[1] > 0);
+
+    theme::apply_appearance(Appearance::new("monospace", 12).unwrap());
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| window.diff.full_line_number_widths()[0] < medium[0]);
+    let small = window.diff.full_line_number_widths();
+
+    theme::apply_appearance(Appearance::new("monospace", 32).unwrap());
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| window.diff.full_line_number_widths()[0] > small[0]);
+    let large = window.diff.full_line_number_widths();
+    assert!(
+        large[1] > small[1],
+        "a larger font must widen the baseline gutter too"
+    );
+
+    theme::apply_appearance(Appearance::new("monospace", 12).unwrap());
+    gtk::test_widget_wait_for_draw(&window.window);
+    wait_for(|| window.diff.full_line_number_widths() == small);
+    assert_eq!(window.diff.full_line_number_widths(), small);
+
+    theme::apply_appearance(previous_font);
+    window.window.destroy();
 }
 
 fn restore_appearance_scenario(app: &adw::Application, store: &SnapshotStore) {

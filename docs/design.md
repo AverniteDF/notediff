@@ -88,9 +88,10 @@ notediff/
     theme_catalog     startup-only owned catalog, isolated scheme managers and load diagnostics
     theme_palette     fixed/XML review colours, effective-style dirty tint and previews
     theme             applies the current theme at runtime: forced light or dark appearance, style
-                      schemes of all live buffers, change listeners, content font size, and the
-                      stylesheet (`assets/notediff.css`, loaded with `include_str!`; `stylesheet`
-                      fills its placeholders, `install_css` installs it and a theme change reloads it)
+                      schemes of all live buffers, change listeners, content font size and
+                      appearance listeners, and the stylesheet (`assets/notediff.css`, loaded
+                      with `include_str!`; `stylesheet` fills its placeholders, `install_css`
+                      installs it and a theme change reloads it)
   core/
     document          canonical path, saved text and character count, last-known mtime, preferred
                       line ending, size/NUL-refusing reads, save/reload, rename and exact text
