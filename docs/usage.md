@@ -274,13 +274,13 @@ notes for details and workarounds.
   the disk change, so the warning can return on the next check. Saving with
   **Ctrl+S** also checks the modification time and asks before overwriting a
   file that changed on disk.
-- Quit with **Ctrl+Q** or **Quit** in the main menu. Every window closes through
-  the normal close flow, so a dirty document still gets its save prompt and
-  accepted review changes are confirmed before being discarded. The window where
-  Quit was invoked is handled first — it closes when clean, or shows its prompt
-  when dirty or under review — and then each remaining window is handled the
-  same way, one at a time. Cancelling a prompt aborts the quit; windows already
-  handled stay closed.
+- Quit with **Ctrl+Q** or **Quit** in the main menu. Every window is handled at
+  once through the normal close flow: a clean window with no accepted review
+  changes closes immediately, while a dirty document gets its save prompt and a
+  window with accepted review changes is asked before they are discarded. Each
+  affected window shows its own prompt without waiting for the others.
+  Cancelling a prompt leaves that window open; windows that already closed stay
+  closed, and the application keeps running until every window closes.
 
 Files are read and written as UTF-8. CRLF, LF and mixed endings are preserved
 exactly. Files containing a NUL byte are refused. Files above 1 MiB show a
@@ -348,10 +348,10 @@ writing anything; **Back** returns from inspection to the full diff. In the full
 editor; with nothing accepted it returns immediately. **Left** is the undo key.
 Closing the window asks the same before discarding uncommitted in-memory hunks,
 without touching the last confirmed baseline; a dirty live document still gets
-the usual save prompt first. Quit asks once per window. New File and Open File
-are disabled while Diff Mode is showing, so accepted changes cannot be discarded
-by opening another file; their header buttons also lose their shortcut
-tooltips. Use **New Window** or finish the review first.
+the usual save prompt first. Quit prompts every affected window at once.
+New File and Open File are disabled while Diff Mode is showing, so accepted
+changes cannot be discarded by opening another file; their header buttons also
+lose their shortcut tooltips. Use **New Window** or finish the review first.
 
 Line-level changes are highlighted as background tags and word-level changes
 within changed lines get an additional highlight. Adjacent word differences

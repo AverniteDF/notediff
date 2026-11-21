@@ -207,8 +207,8 @@ fn gtk_window_smoke() {
     document_state_scenario(&app, &dir, &store);
     save_external_scenario(&app, &dir, &store);
     quit_scenario(&app, store.clone());
-    quit_prompt_prefers_initiator_scenario(&app, &dir, &store);
-    quit_closes_clean_initiator_first_scenario(&app, &dir, &store);
+    quit_prompts_all_windows_at_once_scenario(&app, &dir, &store);
+    quit_closes_clean_initiator_while_prompting_background_scenario(&app, &dir, &store);
     quit_review_scenario(&app, &dir, &store);
     open_file_save_prompt_scenario(&app, &dir, &store);
     recent_menu_scenario(&app, &dir, &store);
@@ -1751,14 +1751,15 @@ fn quit_scenario(app: &adw::Application, store: SnapshotStore) {
     window.editor_buffer.insert_at_cursor("dirty");
     assert!(window.flags.dirty.get());
 
-    // Quit must route a dirty window through its normal close prompt instead
-    // of calling application quit directly.
+    // Quit handles all windows at once: the clean window closes while the
+    // dirty window shows its normal close prompt.
     assert!(gtk::prelude::WidgetExt::activate_action(&window.window, "win.quit", None).is_ok());
     wait_for(|| {
         window
             .window
             .visible_dialog()
             .is_some_and(|dialog| dialog.is_mapped())
+            && !clean.window.is_visible()
     });
     let dialog = window
         .window
@@ -1771,14 +1772,14 @@ fn quit_scenario(app: &adw::Application, store: SnapshotStore) {
         .emit_clicked();
     wait_for(|| window.window.visible_dialog().is_none());
     assert!(window.window.is_visible());
-    assert!(clean.window.is_visible());
+    assert!(!clean.window.is_visible());
     assert!(
         app.windows()
             .iter()
             .any(|candidate| { candidate == window.window.upcast_ref::<gtk::Window>() })
     );
 
-    // Discarding the dirty window continues the quit and closes the clean one.
+    // Discarding the dirty window completes the quit.
     assert!(gtk::prelude::WidgetExt::activate_action(&window.window, "win.quit", None).is_ok());
     wait_for(|| {
         window
@@ -1798,14 +1799,14 @@ fn quit_scenario(app: &adw::Application, store: SnapshotStore) {
     wait_for(|| app.windows().is_empty());
 }
 
-fn quit_prompt_prefers_initiator_scenario(
+fn quit_prompts_all_windows_at_once_scenario(
     app: &adw::Application,
     dir: &Path,
     store: &SnapshotStore,
 ) {
     let mut windows = Vec::new();
     for name in ["first", "second", "third"] {
-        let path = dir.join(format!("quit-initiator-{name}.txt"));
+        let path = dir.join(format!("quit-at-once-{name}.txt"));
         std::fs::write(&path, "baseline\n").unwrap();
         let window = AppWindow::with_store(app, store.clone());
         AppWindow::open_path(&window, &path);
@@ -1813,29 +1814,34 @@ fn quit_prompt_prefers_initiator_scenario(
         window.window.present();
         windows.push(window);
     }
-    let (first, second, third) = (&windows[0], &windows[1], &windows[2]);
+    let third = &windows[2];
     assert!(gtk::prelude::WidgetExt::activate_action(&third.window, "win.quit", None).is_ok());
     wait_for(|| {
-        third
-            .window
-            .visible_dialog()
-            .is_some_and(|dialog| dialog.is_mapped())
+        windows.iter().all(|window| {
+            window
+                .window
+                .visible_dialog()
+                .is_some_and(|dialog| dialog.is_mapped())
+        })
     });
     assert!(
-        first.window.visible_dialog().is_none(),
-        "the first window must wait its turn"
+        windows.iter().all(|window| window.window.is_visible()),
+        "every prompted window must remain open"
     );
-    assert!(
-        second.window.visible_dialog().is_none(),
-        "the second window must wait its turn"
-    );
-    third.window.visible_dialog().unwrap().close();
+    for window in &windows {
+        window.window.visible_dialog().unwrap().close();
+    }
+    wait_for(|| {
+        windows
+            .iter()
+            .all(|window| window.window.visible_dialog().is_none())
+    });
     for window in windows {
         window.window.destroy();
     }
 }
 
-fn quit_closes_clean_initiator_first_scenario(
+fn quit_closes_clean_initiator_while_prompting_background_scenario(
     app: &adw::Application,
     dir: &Path,
     store: &SnapshotStore,
@@ -1848,7 +1854,7 @@ fn quit_closes_clean_initiator_first_scenario(
     dirty.window.present();
 
     // The initiating window is clean, but a background window is not. The
-    // clean initiator must close before the other window is prompted.
+    // clean initiator closes immediately while the background prompt opens.
     let clean = AppWindow::with_store(app, store.clone());
     clean.window.present();
 
@@ -1864,7 +1870,7 @@ fn quit_closes_clean_initiator_first_scenario(
         !app.windows()
             .iter()
             .any(|window| { window == clean.window.upcast_ref::<gtk::Window>() }),
-        "the initiating window must be handled before the next one"
+        "the clean initiating window must close without waiting for the prompt"
     );
     dirty.window.visible_dialog().unwrap().close();
     dirty.window.destroy();
@@ -1894,6 +1900,7 @@ fn quit_review_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
             .window
             .visible_dialog()
             .is_some_and(|d| d.is_mapped())
+            && !clean.window.is_visible()
     });
     let dialog = window
         .window
@@ -1912,7 +1919,7 @@ fn quit_review_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStor
         .emit_clicked();
     wait_for(|| window.window.visible_dialog().is_none());
     assert!(window.window.is_visible());
-    assert!(clean.window.is_visible());
+    assert!(!clean.window.is_visible());
     assert!(window.diff_active());
 
     assert!(gtk::prelude::WidgetExt::activate_action(&window.window, "win.quit", None).is_ok());

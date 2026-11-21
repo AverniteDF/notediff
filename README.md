@@ -100,8 +100,9 @@ cargo run --release -- /path/to/notes.md
 - **Ctrl+S** saves. **Ctrl+Shift+S** saves as, except while Review Changes is
   open.
 - Click **Review Changes (F5)** to compare with a baseline.
-- Use **Ctrl+Q** to quit; dirty windows still show their save prompt, and
-  accepted review changes are confirmed before being discarded.
+- Use **Ctrl+Q** to quit. Every window is handled at once: clean windows close
+  immediately, while each dirty window or window with accepted review changes
+  shows its own prompt.
 
 ## Keyboard shortcuts
 

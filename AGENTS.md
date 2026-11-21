@@ -29,6 +29,13 @@ GDK_BACKEND=x11 NO_AT_BRIDGE=1 dbus-run-session -- \
   cargo test --locked gtk_window_smoke -- --ignored
 ```
 
+After completing a set of changes, run `./install.sh` so the user can test the
+installed binary and desktop icon before approving a commit.
+
+Day-to-day builds use the default release profile with thin LTO. Apply the
+fat-LTO, stripped production overrides in `docs/development.md` only for an
+explicit distribution or release build.
+
 ## Invariants
 
 - The live file is the source of truth. A baseline is disposable and never the

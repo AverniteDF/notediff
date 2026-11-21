@@ -72,8 +72,8 @@ src/
                         open (chooser or recent path first, post-chooser save
                         prompt), save (with external-change overwrite guard),
                         save as, rename or move, Convert Tabs prompt,
-                        external-change handling, save-then-continue and
-                        multi-window quit continuation
+                        external-change handling, save-then-continue and the
+                        Quit continuation after a save prompt
       diff_actions.rs   Diff Mode wiring: applies session results to the
                         snapshot store and the UI, Diff Mode keys, Create
                         Baseline and Confirm
@@ -141,9 +141,10 @@ Mode accept, undo and confirm flow. It exercises inline inspection keys, selecti
 highlights, partial-line review, line endings, wrapped selection scrolling, pure
 insertions and deletions, and long-document scroll placement after repeated
 and rapid Accept/Undo operations. It also covers the external-change overwrite
-prompt on save, multi-window Quit across dirty, accepted-review and clean
-windows, Esc and window-close review-discard confirmations, the Open File save
-prompt after the chooser (including Open New Window and no Cancel button),
+prompt on save, simultaneous multi-window Quit across dirty, accepted-review
+and clean windows, Esc and window-close review-discard confirmations, the Open
+File save prompt after the chooser (including Open New Window and no Cancel
+button),
 recent-menu ordering, lazy pruning, open-recent and per-entry removal, the
 document title tooltip and copy menu (including tooltip suppression while the
 menu is open and focus restoration after dismissing it or choosing either copy
@@ -233,8 +234,10 @@ so a launch does not fsync them again.
   app cannot create a file it would refuse to reopen.
 - Change notification relies on modification times, which is the portable
   approach for ChromeOS shared folders.
-- Quit prompts each dirty window and each window with accepted review changes in
-  turn, then closes the remaining windows. Cancelling any prompt aborts the quit.
+- Quit handles every window at once: clean windows close immediately, while
+  dirty windows and windows with accepted review changes each show their prompt.
+  Cancelling a prompt leaves that window open; windows already closed stay
+  closed, and the application keeps running until every window closes.
 - Diff Mode disables New File, Open File, Save As and Rename or Move. New Window
   remains available; finish or close the review to replace the current document.
 - Sanitized copies of user theme XML are cached under

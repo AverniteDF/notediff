@@ -6,6 +6,10 @@ versioning.
 
 ## [Unreleased]
 
+- **Quit** now handles every window at once: clean windows close immediately
+  and each dirty window or window with accepted review changes shows its own
+  prompt, instead of waiting for the previous window.
+
 ## [1.2.0] - 2026-11-21
 
 ### Added

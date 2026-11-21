@@ -50,10 +50,9 @@ impl AppWindow {
         add_action(window, this, "quit", |this| this.quit_application());
     }
 
-    /// Quit by handling one window at a time through the normal close path.
-    /// The initiating window goes first: a clean one closes immediately, and a
-    /// dirty or reviewed one shows its prompt there. Only then does the quit
-    /// move on to the other windows.
+    /// Quit by handling every window at once through the normal close path:
+    /// clean windows close immediately, while each dirty window and each
+    /// window with accepted review changes shows its own prompt.
     fn quit_application(self: &Rc<Self>) {
         let Some(app) = self
             .window
@@ -62,50 +61,40 @@ impl AppWindow {
         else {
             return;
         };
-        finish_quit(&app, Some(self));
+        finish_quit(&app);
     }
 }
 
-/// Handle the first outstanding window: prompt it when it has unsaved edits or
-/// accepted review changes, close it when it is clean, and continue with the
-/// next window. Called again after each window is resolved. The initiating
-/// window is handled first so the quit starts where the user invoked it;
-/// `present()` cannot be relied on for windows that are not already in front.
-pub(super) fn finish_quit(app: &adw::Application, initiator: Option<&Rc<AppWindow>>) {
-    let mut windows = super::WINDOWS.with_borrow(Clone::clone);
-    if let Some(initiator) = initiator
-        && let Some(index) = windows
-            .iter()
-            .position(|window| Rc::ptr_eq(window, initiator))
-    {
-        windows.rotate_left(index);
-    }
-    let Some(window) = windows
-        .iter()
-        .find(|window| !window.flags.allow_close.get())
-    else {
-        app.quit();
-        return;
-    };
-    if window.flags.dirty.get() || window.has_accepted_diff() {
-        if !initiator.is_some_and(|initiator| Rc::ptr_eq(window, initiator)) {
-            window.window.present();
+/// Start a quit pass over all open windows. Windows that are clean and have no
+/// accepted review changes close immediately; the others show their prompts
+/// without waiting for each other. Cancelling a prompt leaves that window open,
+/// so the quit only completes once every window has closed.
+pub(super) fn finish_quit(app: &adw::Application) {
+    for window in super::WINDOWS.with_borrow(Clone::clone) {
+        if window.flags.allow_close.get() {
+            continue;
         }
         if window.flags.dirty.get() {
             window.require_saved(PendingAction::QuitApplication);
-        } else {
+        } else if window.has_accepted_diff() {
             window.confirm_discard_review(AfterDiscardReview::Quit);
+        } else {
+            window.window.close();
         }
-        return;
     }
-    window.window.close();
     schedule_quit(app.clone());
 }
 
-/// Resume a quit after the current window has finished closing. Waiting for
-/// idle lets GTK remove it from the window registry first.
+/// Finish the quit once every window has been removed from the registry.
+/// Prompted windows keep the application alive until they are resolved, so a
+/// cancelled prompt leaves the remaining windows open. Waiting for idle lets
+/// GTK remove closed windows from the registry first.
 pub(super) fn schedule_quit(app: adw::Application) {
-    glib::idle_add_local_once(move || finish_quit(&app, None));
+    glib::idle_add_local_once(move || {
+        if super::WINDOWS.with_borrow(Vec::is_empty) {
+            app.quit();
+        }
+    });
 }
 
 fn build_main_menu() -> gio::Menu {
