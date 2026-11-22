@@ -25,7 +25,7 @@ git ls-remote --tags origin 'v*'
 ```
 
 - Confirm whether the release is source-only or should include built assets.
-  The `v1.0.0`, `v1.1.0` and `v1.2.0` releases are source-only.
+  The `v1.0.0`, `v1.1.0`, `v1.2.0` and `v1.3.0` releases are source-only.
 - Confirm the GitHub CLI is installed and authenticated before starting
   (section 6). The token needs the `repo` scope, and HTTPS pushes need
   `gh auth setup-git` when no credential helper is configured.

@@ -6,6 +6,8 @@ versioning.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-22
+
 - **Find and Replace** now pre-populates from a short single-line selection,
   highlights all matches live with a match counter (`3 of 12` / `No matches`),
   anchors incremental search at the cursor instead of jumping to line 1, adds
@@ -217,7 +219,8 @@ The first public release.
 - An installer and uninstaller, desktop entry, application icon and GitHub
   Actions CI.
 
-[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/AverniteDF/notediff/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/AverniteDF/notediff/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/AverniteDF/notediff/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AverniteDF/notediff/releases/tag/v1.0.0
