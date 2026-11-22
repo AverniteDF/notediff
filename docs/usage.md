@@ -841,11 +841,13 @@ If `bwrap` is not installed, the dialog falls back to **No Sandbox**.
 ### Output and errors
 
 - Scripts run asynchronously; click **Cancel** while running to stop the script.
-- On exit status 0, `stdout` opens in a new read-only (`RO`) window with a
-  timestamped unsaved title (`<script>-YYYY-MM-DD-HHMMSS.<ext>`), pre-filled in
-  **Save As**. Closing a non-empty output window without saving prompts
-  **Save changes?** like any other unsaved document. Any `stderr` summary is
-  shown as a toast in the new window.
+- On exit status 0, `stdout` opens in the current window if it is empty and
+  untitled, or in a new editor window otherwise, with a timestamped unsaved
+  title (`<script>-YYYY-MM-DD-HHMMSS.<ext>`) pre-filled in **Save As**. Closing
+  a non-empty output window without saving prompts **Save changes?** like any
+  other unsaved document. If `stdout` contains tab characters, the window opens
+  read-only under notediff's no-tab policy. Any `stderr` summary is shown as a
+  toast in the output window.
 - Output must be valid UTF-8, contain no NUL bytes, and stay within notediff's
   16 MiB document limit (output over 1 MiB shows a warning toast).
 - On a non-zero exit status or validation error, the Run Script dialog stays

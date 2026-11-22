@@ -25,7 +25,7 @@ never the document.
 - Light and dark themes plus user theme bundles.
 - **Run Script… (`F6`)**: run local scripts with a dynamic parameter form
   defined in a script comment header, optional bubblewrap (`bwrap`) sandboxing,
-  and stdout opened in a new read-only window.
+  and stdout opened in a new editor window.
 - Explicit protection against external file changes and oversized or binary
   files. The 16 MiB limit applies to opening, reloading, saving and baselines,
   so the app cannot create a file it would refuse to reopen.

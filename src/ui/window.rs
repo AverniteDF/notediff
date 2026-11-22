@@ -73,6 +73,7 @@ use crate::core::recent::RecentDocuments;
 use crate::core::scripts::{self, ScriptOutput};
 use crate::core::session::DiffSession;
 use crate::core::snapshot_store::SnapshotStore;
+use crate::core::tabs;
 use crate::core::textstats::detect_line_ending;
 use crate::ui::app_dialog::snapshots_tab::LinkTarget;
 use crate::ui::dialogs::{self, Response};
@@ -1074,10 +1075,58 @@ impl AppWindow {
         }
     }
 
-    /// Open a new read-only window populated with a script's stdout and a
-    /// timestamped untitled name. Non-empty output starts dirty so closing
+    /// True when this window holds an empty, untitled document outside Diff Mode
+    /// and can be reused directly for script output without losing anything.
+    fn is_empty_untitled(&self) -> bool {
+        self.doc.borrow().path().is_none()
+            && self.editor_buffer.char_count() == 0
+            && !self.diff_active()
+    }
+
+    /// Populate this window with a script's stdout and timestamped untitled
+    /// name. Opens editable unless `stdout` contains tab characters, in which
+    /// case it opens read-only under the no-tab policy.
+    fn load_script_output(&self, title: String, output: ScriptOutput) {
+        let large = output.stdout.len() as u64 > LARGE_FILE_WARNING_BYTES;
+        let has_tabs = tabs::contains_tab(&output.stdout);
+        self.doc
+            .borrow_mut()
+            .set_line_ending(detect_line_ending(&output.stdout));
+        *self.untitled_name.borrow_mut() = Some(title);
+        self.clear_edit();
+        self.set_editor_text(&output.stdout);
+        self.flags.dirty.set(!output.stdout.is_empty());
+        self.set_read_only(has_tabs);
+        self.reset_cursor_to_top();
+        self.search_bar.set_search_mode(false);
+        self.update_title();
+        self.update_diff_button();
+        self.update_status();
+        self.editor_view.grab_focus();
+        if large {
+            self.toast(
+                ToastKind::Warning,
+                "Large output (>1 MiB): Diff Mode may be slow",
+            );
+        } else if has_tabs {
+            self.toast(
+                ToastKind::Warning,
+                "Script output contains tab characters, so it was opened read-only",
+            );
+        } else if let Some(summary) = scripts::stderr_toast_summary(&output.stderr) {
+            self.toast(ToastKind::Info, &summary);
+        }
+    }
+
+    /// Show a script's stdout: reuse this window if it is empty and untitled,
+    /// otherwise open a new window. Non-empty output starts dirty so closing
     /// prompts Save As, matching ordinary untitled documents.
     pub(super) fn open_script_output_window(&self, title: String, output: ScriptOutput) {
+        if self.is_empty_untitled() {
+            self.load_script_output(title, output);
+            self.window.present();
+            return;
+        }
         if let Some(app) = self
             .window
             .application()
@@ -1238,7 +1287,7 @@ fn open_empty_window_with(
     window.editor_view.grab_focus();
 }
 
-/// Open a new read-only window containing a script's stdout.
+/// Open a new window containing a script's stdout.
 fn open_script_output_window_with(
     app: &adw::Application,
     store: SnapshotStore,
@@ -1248,29 +1297,7 @@ fn open_script_output_window_with(
     output: ScriptOutput,
 ) -> Rc<AppWindow> {
     let window = AppWindow::with_parts(app, store, persist_settings, recent);
-    let large = output.stdout.len() as u64 > LARGE_FILE_WARNING_BYTES;
-    window
-        .doc
-        .borrow_mut()
-        .set_line_ending(detect_line_ending(&output.stdout));
-    *window.untitled_name.borrow_mut() = Some(title);
-    window.clear_edit();
-    window.set_editor_text(&output.stdout);
-    window.flags.dirty.set(!output.stdout.is_empty());
-    window.set_read_only(true);
-    window.reset_cursor_to_top();
-    window.update_title();
-    window.update_diff_button();
-    window.update_status();
+    window.load_script_output(title, output);
     window.window.present();
-    window.editor_view.grab_focus();
-    if large {
-        window.toast(
-            ToastKind::Warning,
-            "Large output (>1 MiB): Diff Mode may be slow",
-        );
-    } else if let Some(summary) = scripts::stderr_toast_summary(&output.stderr) {
-        window.toast(ToastKind::Info, &summary);
-    }
     window
 }

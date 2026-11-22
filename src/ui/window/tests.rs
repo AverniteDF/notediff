@@ -6660,26 +6660,23 @@ fn caret_navigation_scenario(app: &adw::Application, dir: &Path, store: &Snapsho
 }
 
 fn script_output_window_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    // An empty, untitled window is reused in place for script output.
+    let window = AppWindow::with_store(app, store.clone());
+    let before = super::WINDOWS.with_borrow(Vec::len);
     let output = crate::core::scripts::ScriptOutput {
-        stdout: "col1\tcol2\nline2\n".to_string(),
+        stdout: "hello world\nline2\n".to_string(),
         stderr: "Processed 2 items\n".to_string(),
     };
-    let window = super::open_script_output_window_with(
-        app,
-        store.clone(),
-        false,
-        RecentDocuments::disabled(),
-        "prompt-packer-2026-11-22-090000.md".to_string(),
-        output,
-    );
+    window.open_script_output_window("prompt-packer-2026-11-22-090000.md".to_string(), output);
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before);
 
     assert_eq!(
         window.window.title().as_deref(),
-        Some("●  prompt-packer-2026-11-22-090000.md (Read-Only)")
+        Some("●  prompt-packer-2026-11-22-090000.md")
     );
-    assert!(window.flags.read_only.get());
+    assert!(!window.flags.read_only.get());
     assert!(window.flags.dirty.get());
-    assert_eq!(window.current_text(), "col1\tcol2\nline2\n");
+    assert_eq!(window.current_text(), "hello world\nline2\n");
     assert_eq!(
         window
             .last_toast
@@ -6691,15 +6688,27 @@ fn script_output_window_scenario(app: &adw::Application, dir: &Path, store: &Sna
         Some("ℹ️  Processed 2 items")
     );
 
+    // Running again from a non-empty window opens a new window instead.
+    let tabbed = crate::core::scripts::ScriptOutput {
+        stdout: "col1\tcol2\n".to_string(),
+        stderr: String::new(),
+    };
+    window.open_script_output_window("tabbed-2026-11-22-090000.txt".to_string(), tabbed);
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before + 1);
+    let ro_window = super::WINDOWS.with_borrow(|windows| windows.last().unwrap().clone());
+    assert!(ro_window.flags.read_only.get());
+    assert_eq!(
+        ro_window.window.title().as_deref(),
+        Some("●  tabbed-2026-11-22-090000.txt (Read-Only)")
+    );
+    assert_eq!(ro_window.current_text(), "col1\tcol2\n");
+    ro_window.window.destroy();
+
     // Save As clears the untitled timestamped name and saves the file.
     let saved = dir.join("script-saved.md");
     window.save_as_path(&saved, None);
     assert!(window.untitled_name.borrow().is_none());
-    assert_eq!(
-        window.window.title().as_deref(),
-        Some("script-saved.md (Read-Only)")
-    );
+    assert_eq!(window.window.title().as_deref(), Some("script-saved.md"));
     assert!(!window.flags.dirty.get());
-
     window.window.destroy();
 }

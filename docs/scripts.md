@@ -2,7 +2,7 @@
 
 `notediff`'s **Run Script…** (`F6`) feature lets you run local executable
 scripts from a dynamically generated GUI form and open their `stdout` directly
-in a new read-only editor window.
+in a new editor window.
 
 This document specifies everything needed to write, install, and debug your own
 scripts.
@@ -210,18 +210,21 @@ to **No Sandbox** automatically.
 
 - **Asynchronous & cancellable:** Scripts run on a background thread. Clicking
   **Cancel** (or closing the dialog) terminates the running process.
-- **`stdout` → new Read-Only window (on exit status `0`):**
+- **`stdout` → editor window (on exit status `0`):**
   - Must be valid UTF-8, contain no NUL bytes, and not exceed **16 MiB**
     (matching `notediff`'s document limit). Exceeding 16 MiB stops the script
     and reports an error.
   - Output above **1 MiB** opens with a warning toast that Diff Mode may be
     slow.
-  - The new window opens in **Read-Only (`RO`)** mode with a timestamped
-    unsaved title (`<stem>-YYYY-MM-DD-HHMMSS.<ext>`), pre-filled in
-    **Save As**. Closing a non-empty output window without saving prompts
-    **Save changes?** like any other unsaved document.
-  - Tabs in `stdout` are preserved while read-only; unlocking **Read Only**
-    triggers the normal **Convert Tabs** prompt.
+  - If the invoking window is empty and untitled (outside Diff Mode), it is
+    reused in place; otherwise a new editor window is opened. The output opens
+    editable with a timestamped unsaved title
+    (`<stem>-YYYY-MM-DD-HHMMSS.<ext>`), pre-filled in **Save As**. Closing a
+    non-empty output window without saving prompts **Save changes?** like any
+    other unsaved document.
+  - If `stdout` contains tab characters, the window opens **Read-Only (`RO`)**
+    to uphold `notediff`'s no-tab policy without mutating output; unlocking
+    **Read Only** triggers the normal **Convert Tabs** prompt.
 - **`stderr`:**
   - Captured up to **256 KiB** (further bytes are drained and truncated with
     `… (stderr truncated)` so the child never blocks on a full pipe).
