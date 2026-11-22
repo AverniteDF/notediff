@@ -8,6 +8,8 @@ versioning.
 
 ## [1.3.0] - 2026-11-22
 
+### Added
+
 - **Find and Replace** now pre-populates from a short single-line selection,
   highlights all matches live with a match counter (`3 of 12` / `No matches`),
   anchors incremental search at the cursor instead of jumping to line 1, adds
@@ -18,9 +20,15 @@ versioning.
   icon beside each recent file name; **Shift-clicking** a recent entry or
   **Browse…**, or pressing **Shift+Enter** in the path field, opens the file in
   a new window without disturbing the current document.
+
+### Changed
+
 - **Quit** now handles every window at once: clean windows close immediately
   and each dirty window or window with accepted review changes shows its own
   prompt, instead of waiting for the previous window.
+
+### Fixed
+
 - Undoing (**Ctrl+Z**) after **EOL Conversion** now restores the original line
   endings and preferred line-ending style instead of re-converting them back.
 - Hiding the last recent file in the **Open** menu now keeps the menu open with

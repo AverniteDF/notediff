@@ -57,9 +57,9 @@ explicit distribution or release build.
 - User-visible labels and messages are documented in `docs/usage.md`. Update the
   docs in the same change as behavioural code.
 - User-visible behaviour also gets one bullet under `## [Unreleased]` in
-  `CHANGELOG.md`, in the same change. The release procedure only renames, dates
-  and verifies those entries; internal refactors, tests and doc reshuffles need
-  no entry.
+  `CHANGELOG.md`, in the same change, filed under `### Added`, `### Changed` or
+  `### Fixed`. The release procedure only renames, dates and verifies those
+  entries; internal refactors, tests and doc reshuffles need no entry.
 - Compatibility/migration code is out of scope: this is a greenfield 1.x
   project. Prefer removing obsolete code to keeping compatibility paths.
 

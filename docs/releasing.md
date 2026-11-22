@@ -52,15 +52,17 @@ Update all of these together:
 
 ## 3. Release notes
 
-Use the new changelog section as the GitHub release body. Keep the release title
-in the form:
+Begin the release body with a one-sentence synopsis of the release, then include
+the new changelog section. The section must group its entries under
+`### Added`, `### Changed` and `### Fixed` (Keep a Changelog order; omit empty
+groups). Keep the release title in the form:
 
 ```text
 notediff X.Y.Z
 ```
 
-Do not invent features that are not in the changelog. A leading summary
-sentence is optional, but it must match the actual release.
+Do not invent features that are not in the changelog. The synopsis must match
+the actual release.
 
 ## 4. Verification
 
@@ -184,8 +186,8 @@ Check that:
 - the release is public, latest, and not a draft or prerelease;
 - the tag points at the release commit;
 - `main` and the tag are present on `origin`;
-- the release body matches the changelog. GitHub may add a trailing newline;
-  compare the content, not the byte count.
+- the release body matches the synopsis plus the changelog section. GitHub may
+  add a trailing newline; compare the content, not the byte count.
 
 Optionally redeploy locally with `./install.sh`.
 
@@ -222,6 +224,8 @@ Optionally redeploy locally with `./install.sh`.
 - [ ] `Cargo.toml` and `Cargo.lock` show `X.Y.Z`.
 - [ ] `## [Unreleased]` is empty above `## [X.Y.Z] - YYYY-MM-DD`, and the
       comparison links point at the new tag.
+- [ ] The changelog section groups entries under `### Added`, `### Changed`
+      and `### Fixed`, and the release body opens with a matching synopsis.
 - [ ] `RELEASE_DATE` is updated.
 - [ ] fmt, clippy, unit tests, the GTK smoke test and the 1.92 check pass.
 - [ ] The installed build's **About** shows the new version and date.
