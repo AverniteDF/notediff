@@ -23,6 +23,9 @@ never the document.
 - Atomic saves and baseline writes, including a direct-write fallback for shared
   folders that reject sibling renames.
 - Light and dark themes plus user theme bundles.
+- **Run Script… (`F6`)**: run local scripts with a dynamic parameter form
+  defined in a script comment header, optional bubblewrap (`bwrap`) sandboxing,
+  and stdout opened in a new read-only window.
 - Explicit protection against external file changes and oversized or binary
   files. The 16 MiB limit applies to opening, reloading, saving and baselines,
   so the app cannot create a file it would refuse to reopen.
@@ -65,8 +68,9 @@ From a checkout:
 ```
 
 The installer builds with `cargo install --locked`, installs the binary with
-Cargo (normally under `~/.cargo/bin`), places the desktop entry and icons under
-`$XDG_DATA_HOME`, and checks the Rust and GTK versions first. To remove it:
+Cargo (normally under `~/.cargo/bin`), places the desktop entry, icons and
+example scripts under `$XDG_DATA_HOME`, and checks the Rust and GTK versions
+first. To remove it:
 
 ```sh
 ./uninstall.sh
@@ -114,6 +118,7 @@ cargo run --release -- /path/to/notes.md
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / Save As |
 | `F2` | Rename or Move |
 | `F5` | Review Changes (Diff Mode) |
+| `F6` | Run Script… |
 | `Ctrl+F` / `Ctrl+H` | Find / Replace |
 | `F3` / `Shift+F3` | Next / Previous match |
 | `Ctrl+G` | Go to Line |

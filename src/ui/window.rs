@@ -66,11 +66,14 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use sourceview5::prelude::*;
 
+use crate::core::LARGE_FILE_WARNING_BYTES;
 use crate::core::document::Document;
 use crate::core::pending::AfterOpen;
 use crate::core::recent::RecentDocuments;
+use crate::core::scripts::{self, ScriptOutput};
 use crate::core::session::DiffSession;
 use crate::core::snapshot_store::SnapshotStore;
+use crate::core::textstats::detect_line_ending;
 use crate::ui::app_dialog::snapshots_tab::LinkTarget;
 use crate::ui::dialogs::{self, Response};
 use crate::ui::diff_page::DiffPage;
@@ -190,6 +193,9 @@ pub struct AppWindow {
     /// The checkmark flash on the copy button (see `flash`).
     copy_flash: flash::FlashState,
     doc: RefCell<Document>,
+    /// Optional display/suggested name for an untitled document (e.g., timestamped
+    /// script output). Cleared when a real file is loaded or saved.
+    untitled_name: RefCell<Option<String>>,
     /// Canonical path reserved while the asynchronous Convert Tabs prompt is
     /// open, before the document itself is loaded into `doc`.
     pending_open: RefCell<Option<PathBuf>>,
@@ -382,6 +388,7 @@ impl AppWindow {
             flash: flash::FlashState::default(),
             copy_flash: flash::FlashState::default(),
             doc: RefCell::new(Document::new()),
+            untitled_name: RefCell::new(None),
             pending_open: RefCell::new(None),
             baseline: RefCell::new(BaselineCache::default()),
             baseline_differs: Cell::new(false),
@@ -878,6 +885,7 @@ impl AppWindow {
             .as_deref()
             .and_then(|path| path.file_name())
             .map(|name| name.to_string_lossy().into_owned())
+            .or_else(|| self.untitled_name.borrow().clone())
             .unwrap_or_else(|| "Untitled".to_string());
         let is_dirty = self.flags.dirty.get();
         // Besides the dot, gently tint the header bar (`install_css`).
@@ -1065,6 +1073,26 @@ impl AppWindow {
             );
         }
     }
+
+    /// Open a new read-only window populated with a script's stdout and a
+    /// timestamped untitled name. Non-empty output starts dirty so closing
+    /// prompts Save As, matching ordinary untitled documents.
+    pub(super) fn open_script_output_window(&self, title: String, output: ScriptOutput) {
+        if let Some(app) = self
+            .window
+            .application()
+            .and_then(|app| app.downcast::<adw::Application>().ok())
+        {
+            open_script_output_window_with(
+                &app,
+                self.store.clone(),
+                self.persist_settings,
+                self.recent.clone(),
+                title,
+                output,
+            );
+        }
+    }
 }
 
 fn make_editor_buffer() -> sourceview5::Buffer {
@@ -1208,4 +1236,41 @@ fn open_empty_window_with(
     let window = AppWindow::with_parts(app, store, persist_settings, recent);
     window.window.present();
     window.editor_view.grab_focus();
+}
+
+/// Open a new read-only window containing a script's stdout.
+fn open_script_output_window_with(
+    app: &adw::Application,
+    store: SnapshotStore,
+    persist_settings: bool,
+    recent: RecentDocuments,
+    title: String,
+    output: ScriptOutput,
+) -> Rc<AppWindow> {
+    let window = AppWindow::with_parts(app, store, persist_settings, recent);
+    let large = output.stdout.len() as u64 > LARGE_FILE_WARNING_BYTES;
+    window
+        .doc
+        .borrow_mut()
+        .set_line_ending(detect_line_ending(&output.stdout));
+    *window.untitled_name.borrow_mut() = Some(title);
+    window.clear_edit();
+    window.set_editor_text(&output.stdout);
+    window.flags.dirty.set(!output.stdout.is_empty());
+    window.set_read_only(true);
+    window.reset_cursor_to_top();
+    window.update_title();
+    window.update_diff_button();
+    window.update_status();
+    window.window.present();
+    window.editor_view.grab_focus();
+    if large {
+        window.toast(
+            ToastKind::Warning,
+            "Large output (>1 MiB): Diff Mode may be slow",
+        );
+    } else if let Some(summary) = scripts::stderr_toast_summary(&output.stderr) {
+        window.toast(ToastKind::Info, &summary);
+    }
+    window
 }

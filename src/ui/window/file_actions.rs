@@ -208,7 +208,7 @@ impl AppWindow {
 
     /// Place the cursor and scroll position at the start of a freshly loaded
     /// document.
-    fn reset_cursor_to_top(&self) {
+    pub(super) fn reset_cursor_to_top(&self) {
         let mut start = self.editor_buffer.start_iter();
         self.editor_buffer.place_cursor(&start);
         self.editor_view
@@ -218,6 +218,7 @@ impl AppWindow {
     fn load_document(&self, document: Document, mode: OpenMode) {
         let recent_path = document.path().map(Path::to_path_buf);
         *self.doc.borrow_mut() = document;
+        *self.untitled_name.borrow_mut() = None;
         if let Some(path) = recent_path {
             self.recent.record(&path);
         }
@@ -682,8 +683,9 @@ impl AppWindow {
             .path()
             .and_then(|path| path.file_name())
             .and_then(|name| name.to_str())
-            .unwrap_or("untitled.md")
-            .to_string();
+            .map(ToOwned::to_owned)
+            .or_else(|| self.untitled_name.borrow().clone())
+            .unwrap_or_else(|| "untitled.md".to_string());
 
         let dialog = gtk::FileDialog::builder()
             .title("Save As")
@@ -743,6 +745,7 @@ impl AppWindow {
         let previous = self.path_for_snapshot();
         match self.persist(Some(path)) {
             Ok(()) => {
+                *self.untitled_name.borrow_mut() = None;
                 self.toast(ToastKind::Success, "Saved");
                 self.finish_save_as(previous, then);
             }

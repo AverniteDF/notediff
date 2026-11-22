@@ -9,7 +9,7 @@ use gtk::glib::variant::ToVariant;
 use gtk::{gio, glib};
 
 use crate::core::pending::PendingAction;
-use crate::ui::{about_dialog, app_dialog, display_path};
+use crate::ui::{about_dialog, app_dialog, display_path, run_script_dialog};
 
 use super::diff_actions::AfterDiscardReview;
 use super::{AppWindow, add_action};
@@ -39,6 +39,15 @@ impl AppWindow {
                     }
                 },
             );
+        });
+        add_action(window, this, "run-script", |this| {
+            let current_file = this.doc.borrow().path().map(Path::to_path_buf);
+            let weak = Rc::downgrade(this);
+            run_script_dialog::present(&this.window, current_file, move |title, output| {
+                if let Some(this) = weak.upgrade() {
+                    this.open_script_output_window(title, output);
+                }
+            });
         });
         add_action(window, this, "about", |this| {
             about_dialog::present(&this.window)
@@ -118,6 +127,10 @@ fn build_main_menu() -> gio::Menu {
     tools.append(Some("Go to Line…"), Some("win.goto-line"));
     tools.append(Some("Word Wrap"), Some("win.word-wrap"));
     menu.append_section(None, &tools);
+
+    let scripts = gio::Menu::new();
+    scripts.append(Some("Run Script…"), Some("win.run-script"));
+    menu.append_section(None, &scripts);
 
     let app = gio::Menu::new();
     app.append(Some("About notediff"), Some("win.about"));
@@ -420,6 +433,7 @@ pub(super) fn install_accels(app: &adw::Application) {
     app.set_accels_for_action("win.save-as", &["<Ctrl><Shift>s"]);
     app.set_accels_for_action("win.rename", &["F2"]);
     app.set_accels_for_action("win.enter-diff", &["F5"]);
+    app.set_accels_for_action("win.run-script", &["F6"]);
     app.set_accels_for_action("win.find", &["<Ctrl>f"]);
     app.set_accels_for_action("win.find-next", &["F3"]);
     app.set_accels_for_action("win.find-previous", &["<Shift>F3"]);
@@ -596,7 +610,11 @@ mod tests {
             action(mode.upcast_ref::<gio::MenuModel>(), 0).as_deref(),
             Some("win.read-only")
         );
-        let app = menu.item_link(3, gio::MENU_LINK_SECTION).unwrap();
+        let scripts = menu.item_link(3, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(scripts.n_items(), 1);
+        assert_eq!(action(&scripts, 0).as_deref(), Some("win.run-script"));
+
+        let app = menu.item_link(4, gio::MENU_LINK_SECTION).unwrap();
         assert!(app.n_items() >= 3);
         assert_eq!(action(&app, app.n_items() - 1).as_deref(), Some("win.quit"));
     }

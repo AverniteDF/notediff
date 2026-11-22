@@ -17,6 +17,7 @@ pub mod pending;
 pub mod recent;
 pub mod relink;
 pub mod rename;
+pub mod scripts;
 pub mod session;
 pub mod snapshot_store;
 pub mod tabs;

@@ -82,6 +82,8 @@ notediff/
     app_dialog/appearance_tab  Appearance tab (live theme picker and staged font controls)
     app_dialog/font_controls   font family and size fields, Apply Font and persistence
     about_dialog      About dialog (name, version, description, copyright and license notice)
+    run_script_dialog Run Script dialog (F6): script discovery, dynamic metadata form,
+                      bwrap sandbox controls and asynchronous execution
     dialogs           shared AlertDialog builder and response helpers (heading, body, responses, default, close)
     status_bar        status bar widget shared by the editor and the diff panes, including the
                       green/yellow/red whitespace dot (presentation only)
@@ -124,6 +126,8 @@ notediff/
                       content similarity, modification time (no GTK)
     rename            planning a rename or move (name or path) and moving the open file together
                       with its baseline (no GTK)
+    scripts           script metadata comment parser, discovery, CLI/env invocation builder and
+                      bounded, cancellable bwrap-sandboxed runner (no GTK)
     textstats         status-bar numbers: byte and character counts, GTK line count, line-ending style,
                       trailing-whitespace and non-empty blank-line flags, cursor position,
                       selection size, thousands-separator formatting (no GTK)

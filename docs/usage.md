@@ -736,3 +736,111 @@ modified, and unsaved edits do not need to be
 saved first. Renaming or moving with **Rename or Move** needs none of this,
 because the baseline moves with the file, and Save As can copy the baseline
 for you.
+
+## Run Script
+
+Press **F6** or choose **Run Script…** in the main menu to run an
+executable script and open its output in a new notediff window. Because output
+opens in a new window without modifying the current document, **Run Script…**
+remains available while Diff Mode is open.
+
+### Discovering and choosing scripts
+
+notediff scans `$XDG_DATA_HOME/notediff/scripts/` (normally
+`~/.local/share/notediff/scripts/`) each time the dialog opens, so newly added
+or edited scripts appear immediately without restarting. Click **Browse…** in
+the dialog header to pick any executable script elsewhere on disk.
+
+The repository includes two example scripts under `examples/scripts/`:
+
+- `bundle-prompt.py` — bundles selected files and project folders (plus optional
+  prompt text and exclude globs) into a single Markdown LLM prompt.
+- `file-stats.py` — summarizes line, word, character and byte counts plus the
+  top words of a text file; useful as a compact template for your own scripts.
+
+`./install.sh` copies any missing example scripts into
+`$XDG_DATA_HOME/notediff/scripts/` automatically (without overwriting existing
+files). To copy or restore them manually from the project root:
+
+```bash
+scripts="${XDG_DATA_HOME:-$HOME/.local/share}/notediff/scripts"
+mkdir -p "$scripts"
+cp examples/scripts/bundle-prompt.py examples/scripts/file-stats.py "$scripts/"
+chmod +x "$scripts/bundle-prompt.py" "$scripts/file-stats.py"
+```
+
+### Script metadata comment block
+
+A script may include a metadata block near the top (within the first 64 KiB)
+delimited by `--- notediff-script ---` and `--- end-notediff-script ---` inside
+`#`, `//` or `--` comments. Scripts without a block still run with no input
+fields.
+
+```python
+#!/usr/bin/env python3
+# --- notediff-script ---
+# name = Bundle LLM Prompt
+# description = Build a Markdown LLM prompt from files and project folders
+# sandbox = read-only
+# output_ext = md
+#
+# [field.paths]
+# label = Files and Folders
+# type = paths
+# required = true
+# positional = true
+# help = Select one or more files or folders to include
+#
+# [field.verbose]
+# label = Verbose details on stderr
+# type = bool
+# arg = --verbose
+# default = false
+# --- end-notediff-script ---
+```
+
+Top-level header keys: `name`, `description`, `sandbox` (`read-only`,
+`writable-dir` or `none`; default `read-only`) and `output_ext` (default `txt`).
+
+Each `[field.<id>]` section defines one input widget in declaration order:
+
+- `type` (required): `text`, `multiline`, `int`, `bool`, `choice`, `file`,
+  `dir`, `paths` (multi-path picker with **+ File…**, **+ Folder…**, and
+  quick **+ Current File** / **+ Current Folder** buttons when a file is open),
+  or `list` (newline- or comma-separated values).
+- `label`, `default`, `placeholder`, `help`, `required` (`true`/`false`).
+- `arg` (CLI flag such as `--prompt`, `-x`, `--verbose`, or `--key=`) or
+  `positional = true` (mutually exclusive). Flags are passed first, followed by
+  positional values; empty optional values are omitted.
+- `options` (required for `choice`, separated by `|` or `,`), and `min` / `max`
+  (integer bounds for `int`).
+
+Every field value is also passed via `NOTEDIFF_INPUT_<UPPER_ID>` (with `-`
+replaced by `_`; `1`/`0` for `bool`, newline-joined for `list`/`paths`),
+alongside `NOTEDIFF_CURRENT_FILE`, `NOTEDIFF_CURRENT_DIR`, `NOTEDIFF_SANDBOX`,
+and `NOTEDIFF_WRITABLE_DIR` (when applicable).
+
+### Sandboxing
+
+When `bwrap` (bubblewrap) is installed, the footer offers three modes:
+
+- **Read-Only Sandbox** (default): mounts the host filesystem read-only with a
+  private ephemeral `/tmp`, preventing scripts from modifying user files.
+- **Allow Writing to Folder…**: keeps the rest of the filesystem read-only and
+  grants write access only to the chosen folder.
+- **No Sandbox**: runs the script directly with normal user permissions.
+
+If `bwrap` is not installed, the dialog falls back to **No Sandbox**.
+
+### Output and errors
+
+- Scripts run asynchronously; click **Cancel** while running to stop the script.
+- On exit status 0, `stdout` opens in a new read-only (`RO`) window with a
+  timestamped unsaved title (`<script>-YYYY-MM-DD-HHMMSS.<ext>`), pre-filled in
+  **Save As**. Closing a non-empty output window without saving prompts
+  **Save changes?** like any other unsaved document. Any `stderr` summary is
+  shown as a toast in the new window.
+- Output must be valid UTF-8, contain no NUL bytes, and stay within notediff's
+  16 MiB document limit (output over 1 MiB shows a warning toast).
+- On a non-zero exit status or validation error, the Run Script dialog stays
+  open and displays an error dialog with the exit status and `stderr` output.

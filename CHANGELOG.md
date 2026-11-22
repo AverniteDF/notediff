@@ -6,6 +6,17 @@ versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Run Script…** (**F6**, also in its own section of the main menu) discovers
+  executable scripts in `$XDG_DATA_HOME/notediff/scripts/` (or any script
+  chosen with **Browse…**), renders a parameter form from an embedded
+  `--- notediff-script ---` comment block, optionally runs scripts inside a
+  `bwrap` read-only or single-writable-folder sandbox, and opens `stdout` in a
+  new read-only window with a timestamped unsaved name. Shipped with
+  `examples/scripts/bundle-prompt.py` and `examples/scripts/file-stats.py`
+  (installed automatically by `install.sh` when not already present).
+
 ## [1.3.0] - 2026-11-22
 
 ### Added

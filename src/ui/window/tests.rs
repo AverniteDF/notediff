@@ -233,6 +233,7 @@ fn gtk_window_smoke() {
     inline_inspection_scenario(&app, &dir, &store);
     whitespace_highlight_scenario(&app, &dir, &store);
     caret_navigation_scenario(&app, &dir, &store);
+    script_output_window_scenario(&app, &dir, &store);
     blank_marker_scenario(&app, &dir, &store);
     inspection_blank_marker_layer_scenario(&app, &dir, &store);
     full_boundary_marker_scenario(&app, &dir, &store);
@@ -6654,6 +6655,51 @@ fn caret_navigation_scenario(app: &adw::Application, dir: &Path, store: &Snapsho
     assert_carets("next diff via button", None, Some(0));
     window.diff.next_button.emit_clicked();
     assert_carets("next diff via button again", Some(0), None);
+
+    window.window.destroy();
+}
+
+fn script_output_window_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let output = crate::core::scripts::ScriptOutput {
+        stdout: "col1\tcol2\nline2\n".to_string(),
+        stderr: "Processed 2 items\n".to_string(),
+    };
+    let window = super::open_script_output_window_with(
+        app,
+        store.clone(),
+        false,
+        RecentDocuments::disabled(),
+        "bundle-prompt-2026-11-22-090000.md".to_string(),
+        output,
+    );
+
+    assert_eq!(
+        window.window.title().as_deref(),
+        Some("●  bundle-prompt-2026-11-22-090000.md (Read-Only)")
+    );
+    assert!(window.flags.read_only.get());
+    assert!(window.flags.dirty.get());
+    assert_eq!(window.current_text(), "col1\tcol2\nline2\n");
+    assert_eq!(
+        window
+            .last_toast
+            .borrow()
+            .as_ref()
+            .and_then(|toast| toast.title())
+            .map(|title| title.to_string())
+            .as_deref(),
+        Some("ℹ️  Processed 2 items")
+    );
+
+    // Save As clears the untitled timestamped name and saves the file.
+    let saved = dir.join("script-saved.md");
+    window.save_as_path(&saved, None);
+    assert!(window.untitled_name.borrow().is_none());
+    assert_eq!(
+        window.window.title().as_deref(),
+        Some("script-saved.md (Read-Only)")
+    );
+    assert!(!window.flags.dirty.get());
 
     window.window.destroy();
 }

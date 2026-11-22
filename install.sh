@@ -9,6 +9,7 @@ else
 fi
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+SCRIPTS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/notediff/scripts"
 DESKTOP_NAME="io.github.AverniteDF.Notediff.desktop"
 DESKTOP_FILE="$APPLICATIONS_DIR/$DESKTOP_NAME"
 ICON_NAME="io.github.AverniteDF.Notediff"
@@ -64,6 +65,17 @@ NOTEDIFF_EXEC="$exec_escaped" awk '
   { print }
 ' "$PROJECT_DIR/data/$DESKTOP_NAME" > "$DESKTOP_FILE"
 
+if [[ -d "$PROJECT_DIR/examples/scripts" ]]; then
+  mkdir -p "$SCRIPTS_DIR"
+  for script in "$PROJECT_DIR/examples/scripts"/*; do
+    [[ -f "$script" ]] || continue
+    dest="$SCRIPTS_DIR/$(basename "$script")"
+    if [[ ! -e "$dest" ]]; then
+      install -m 755 "$script" "$dest"
+    fi
+  done
+fi
+
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -f -t "$ICONS_DIR" || true
 fi
@@ -76,3 +88,4 @@ echo "Installed notediff:"
 echo "  binary:  $CARGO_BIN"
 echo "  desktop: $DESKTOP_FILE"
 echo "  icon:    $ICON_FILE"
+echo "  scripts: $SCRIPTS_DIR"

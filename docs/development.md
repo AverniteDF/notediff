@@ -57,6 +57,8 @@ src/
     relink.rs           ranking of baselines that could be linked
     rename.rs           plan a rename or move (name or path); move a file
                         with its baseline
+    scripts.rs          script metadata header parsing, discovery, CLI/env
+                        invocation building and sandboxed execution
     session.rs          Diff Mode session: focus, inspection, accept, accept all,
                         bounded undo (100 entries or 64 MiB)
     fsutil.rs           atomic replace with a rename-only fallback, bounded
@@ -101,6 +103,7 @@ src/
       appearance_tab.rs theme picker and content font controls
       font_controls.rs  staged font editing, global apply and persistence
     about_dialog.rs     About dialog
+    run_script_dialog.rs Run Script dialog (F6) and dynamic parameter form
     dialogs.rs          shared AlertDialog builder and response helpers
     status_bar.rs       status bar widget for the editor and the diff panes
     toast.rs            shared toast construction
