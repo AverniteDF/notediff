@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # --- notediff-script ---
-# name = Bundle LLM Prompt
-# description = Build a Markdown LLM prompt from files and project folders
+# name = LLM Prompt Packer
+# description = Pack files and project folders into a single Markdown prompt.
 # sandbox = read-only
 # output_ext = md
 #
@@ -39,18 +39,11 @@
 # default = 1500
 # min = 1
 # max = 100000
-#
-# [field.verbose]
-# label = Verbose details on stderr
-# type = bool
-# arg = --verbose
-# default = false
 # --- end-notediff-script ---
 """
-bundle-prompt.py - build an LLM prompt from files and folders.
+prompt-packer.py - pack files and project folders into a single Markdown prompt.
 
-Command-line adaptation of the "LLM Prompt Builder" web app. Point it at
-files and/or project folders and it produces a single Markdown prompt:
+Point it at files and/or project folders and it produces a single Markdown prompt:
 
     (Insert your prompt here)
 
@@ -64,26 +57,23 @@ files and/or project folders and it produces a single Markdown prompt:
     ...
     ```
 
-The prompt goes to stdout (status information goes to stderr, so pipes are
-clean), or to a file (-o) and/or the clipboard (-c).
+The prompt goes to stdout; status information goes to stderr so pipes stay clean.
 
 Requires only Python 3.8+ (standard library).
 """
 
 import argparse
-import base64
 import fnmatch
 import os
 import re
 import stat
-import subprocess
 import sys
 import unicodedata
 
 __version__ = "1.0.0"
 
 # ---------------------------------------------------------------------------
-# Limits (identical to the web app; overridable on the command line)
+# Limits (overridable on the command line)
 # ---------------------------------------------------------------------------
 MAX_FILE_SIZE = 1 * 1024 * 1024    # per file
 MAX_TOTAL_SIZE = 8 * 1024 * 1024   # sum of all inlined file content
@@ -226,11 +216,6 @@ def placeholder(message):
     return '```\n(%s)\n```' % message
 
 
-def utf16_len(s):
-    """Length in UTF-16 code units, matching JavaScript's String.length."""
-    return len(s.encode('utf-16-le', errors='surrogatepass')) // 2
-
-
 def parse_size(text):
     """Parse sizes like 500000, 512K, 2M, 1.5M."""
     m = re.fullmatch(r'\s*([0-9]*\.?[0-9]+)\s*([kKmMgG]?)[bB]?\s*', text)
@@ -271,10 +256,9 @@ class Entry(object):
 
 
 class Collector(object):
-    def __init__(self, max_files, excludes, skip_real_paths):
+    def __init__(self, max_files, excludes):
         self.max_files = max_files
         self.excludes = excludes
-        self.skip_real_paths = skip_real_paths  # e.g. the -o output file
         self.files = []
         self.skipped = []   # (path, reason)
         self.notes = []     # (path, reason)
@@ -296,8 +280,6 @@ def add_file(col, fs_path, rel, rel_in_root, size):
     reason = file_skip_reason(name)
     if not reason and col.is_excluded(name, rel_in_root):
         reason = 'excluded by --exclude'
-    if not reason and col.skip_real_paths and os.path.realpath(fs_path) in col.skip_real_paths:
-        reason = 'this is the output file'
     if reason:
         col.skipped.append((rel, reason))
     else:
@@ -509,16 +491,14 @@ def _fold(s):
     return ''.join(c for c in s if not unicodedata.combining(c)).casefold()
 
 
-# Order of ASCII punctuation/symbols in the Unicode root collation (the order
-# the browser's Intl.Collator uses): all of these sort before digits, which
-# sort before letters.
+# Order of ASCII punctuation/symbols in the Unicode root collation:
+# punctuation sorts before digits, which sort before letters.
 _PUNCT_RANK = {c: i for i, c in enumerate("_-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$")}
 
 
 def _natural_key(segment):
-    """Collation key approximating Intl.Collator(sensitivity='base', numeric=true):
-    case- and accent-insensitive, digit runs compared by value,
-    punctuation < digits < letters."""
+    """Natural, case- and accent-insensitive collation key:
+    digit runs compared by value, punctuation < digits < letters."""
     s = _fold(segment)
     key = []
     i, n = 0, len(s)
@@ -546,7 +526,7 @@ def _natural_key(segment):
 def path_sort_key(rel):
     """Files before sub-directories at each level, then natural,
     case/accent-insensitive order. Names that compare equal keep their scan
-    order (Python's sort is stable), as in the web app."""
+    order (Python's sort is stable)."""
     segs = rel.split('/')
     last = len(segs) - 1
     return [(0 if i == last else 1, _natural_key(seg)) for i, seg in enumerate(segs)]
@@ -638,51 +618,6 @@ class Console(object):
             print('  - %s - %s' % (path, reason) if path else '  - %s' % reason, file=sys.stderr)
 
 
-def _which(cmd):
-    for d in os.environ.get('PATH', '').split(os.pathsep):
-        p = os.path.join(d, cmd)
-        if os.path.isfile(p) and os.access(p, os.X_OK):
-            return p
-    return None
-
-
-def copy_to_clipboard(text):
-    """Try the usual Linux clipboard tools, then the OSC 52 terminal escape.
-    Returns a short description of the method used, or None on failure."""
-    data = text.encode('utf-8')
-
-    candidates = []
-    if os.environ.get('WAYLAND_DISPLAY'):
-        candidates.append(('wl-copy', ['wl-copy']))
-    if os.environ.get('DISPLAY'):
-        candidates.append(('xclip', ['xclip', '-selection', 'clipboard']))
-        candidates.append(('xsel', ['xsel', '--clipboard', '--input']))
-    # Environments with only one of the two variables set still get a fair try
-    if not os.environ.get('WAYLAND_DISPLAY'):
-        candidates.append(('wl-copy', ['wl-copy']))
-
-    for label, cmd in candidates:
-        if _which(cmd[0]) is None:
-            continue
-        try:
-            # DEVNULL for stdout/stderr: these tools fork into the background to
-            # serve the selection and would otherwise keep our pipes open.
-            res = subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, timeout=10)
-            if res.returncode == 0:
-                return label
-        except (OSError, subprocess.SubprocessError):
-            continue
-
-    # Fallback: OSC 52 - asks the terminal emulator itself to set the clipboard.
-    try:
-        with open('/dev/tty', 'wb', buffering=0) as tty:
-            tty.write(b'\033]52;c;' + base64.b64encode(data) + b'\a')
-        return 'terminal escape sequence (OSC 52)'
-    except OSError:
-        return None
-
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -694,27 +629,22 @@ How it works:
   and binaries are listed but their contents are omitted.
 
 Examples:
-  bundle-prompt.py -c ~/projects/myapp          # copy prompt to the clipboard
-  bundle-prompt.py -o out.md src/ README.md     # write to a file
-  bundle-prompt.py . | wc -c                    # stdout is clean for piping
-  bundle-prompt.py -x '*.test.js' -x docs .     # skip extra files/folders
+  prompt-packer.py src/ README.md              # print prompt to stdout
+  prompt-packer.py . | wc -c                   # stdout is clean for piping
+  prompt-packer.py -x '*.test.js' -x docs .    # skip extra files/folders
 """
 
 
 def build_parser():
     p = argparse.ArgumentParser(
-        prog='bundle-prompt.py',
-        description='Build an LLM prompt from files and project folders.',
+        prog='prompt-packer.py',
+        description='Pack files and project folders into a single Markdown prompt.',
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument('paths', nargs='*', metavar='PATH', help='files and/or folders to include')
 
     out = p.add_argument_group('output')
-    out.add_argument('-o', '--output', metavar='FILE',
-                     help="write the prompt to FILE ('-' means stdout). "
-                          "Without -o or -c the prompt goes to stdout")
-    out.add_argument('-c', '--copy', action='store_true', help='copy the prompt to the clipboard')
     out.add_argument('-q', '--quiet', action='store_true', help='suppress the status summary on stderr')
     out.add_argument('-v', '--verbose', action='store_true',
                      help='list every skipped/omitted file and note on stderr')
@@ -736,13 +666,8 @@ def build_parser():
 
 
 def run(args, console):
-    # Don't ingest our own output file if it lives inside a scanned folder
-    skip_real = set()
-    if args.output and args.output != '-':
-        skip_real.add(os.path.realpath(args.output))
-
     excludes = [e.rstrip('/') for e in args.exclude if e.rstrip('/')]
-    col = Collector(args.max_files, excludes, skip_real)
+    col = Collector(args.max_files, excludes)
 
     collect(args.paths, col)
 
@@ -753,7 +678,7 @@ def run(args, console):
     budget = Budget(args.max_file_size, args.max_total_size)
     output, n = build_prompt(col, budget)
 
-    chars = utf16_len(output)
+    chars = len(output)
     tokens = (chars + 2) // 4   # round(chars / 4), halves rounded up
     summary = 'Processed %d attachment%s · %s characters (~%s tokens)' % (
         n, '' if n == 1 else 's', format(chars, ','), format_count(tokens))
@@ -790,41 +715,17 @@ def main(argv=None):
         return 130
 
     # Deliver the result ------------------------------------------------------
-    to_stdout = args.output == '-' or (not args.output and not args.copy)
-    status_ok = True
-
-    if args.output and args.output != '-':
+    try:
+        sys.stdout.buffer.write((output + '\n').encode('utf-8'))
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        # Downstream (e.g. `| head`) closed early; exit quietly.
         try:
-            with open(args.output, 'w', encoding='utf-8', newline='\n') as fh:
-                fh.write(output + '\n')
-        except OSError as err:
-            console.error('cannot write %s (%s)' % (args.output, err.strerror or type(err).__name__))
-            return 1
-
-    if args.copy:
-        method = copy_to_clipboard(output)
-        if method is None:
-            console.error('failed to copy to clipboard. Install wl-clipboard '
-                          '(sudo apt install wl-clipboard) or use -o FILE.')
-            status_ok = False
-        else:
-            console.status('✓ Copied to clipboard via %s' % method, 'ok')
-            if method.startswith('terminal') and len(output) > 100000:
-                console.status('Note: terminals often ignore very large OSC 52 payloads; '
-                               'paste to check, or install wl-clipboard.', 'warn')
-
-    if to_stdout:
-        try:
-            sys.stdout.buffer.write((output + '\n').encode('utf-8'))
-            sys.stdout.buffer.flush()
-        except BrokenPipeError:
-            # Downstream (e.g. `| head`) closed early; exit quietly.
-            try:
-                sys.stdout.close()
-            except Exception:
-                pass
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
+            sys.stdout.close()
+        except Exception:
+            pass
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
 
     # Status (stderr) ----------------------------------------------------------
     console.status(summary, kind)
@@ -837,7 +738,7 @@ def main(argv=None):
             console.status('Warning: ' + reason, 'warn')
         console.status('(%d detail%s - run with -v to list)' % (len(rows), '' if len(rows) == 1 else 's'))
 
-    return 0 if status_ok else 1
+    return 0
 
 
 if __name__ == '__main__':

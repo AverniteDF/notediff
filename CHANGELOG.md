@@ -14,7 +14,7 @@ versioning.
   `--- notediff-script ---` comment block, optionally runs scripts inside a
   `bwrap` read-only or single-writable-folder sandbox, and opens `stdout` in a
   new read-only window with a timestamped unsaved name. Shipped with
-  `examples/scripts/bundle-prompt.py` and `examples/scripts/file-stats.py`
+  `examples/scripts/prompt-packer.py` and `examples/scripts/file-stats.py`
   (installed automatically by `install.sh` when not already present).
 
 ## [1.3.0] - 2026-11-22

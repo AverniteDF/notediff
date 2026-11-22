@@ -6669,13 +6669,13 @@ fn script_output_window_scenario(app: &adw::Application, dir: &Path, store: &Sna
         store.clone(),
         false,
         RecentDocuments::disabled(),
-        "bundle-prompt-2026-11-22-090000.md".to_string(),
+        "prompt-packer-2026-11-22-090000.md".to_string(),
         output,
     );
 
     assert_eq!(
         window.window.title().as_deref(),
-        Some("●  bundle-prompt-2026-11-22-090000.md (Read-Only)")
+        Some("●  prompt-packer-2026-11-22-090000.md (Read-Only)")
     );
     assert!(window.flags.read_only.get());
     assert!(window.flags.dirty.get());

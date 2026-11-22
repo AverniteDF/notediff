@@ -753,8 +753,8 @@ the dialog header to pick any executable script elsewhere on disk.
 
 The repository includes two example scripts under `examples/scripts/`:
 
-- `bundle-prompt.py` — bundles selected files and project folders (with
-  optional exclude globs and size limits) into a single Markdown LLM prompt.
+- `prompt-packer.py` — packs selected files and project folders (with
+  optional exclude globs and size limits) into a single Markdown prompt.
 - `file-stats.py` — summarizes line, word, character and byte counts plus the
   top words of a text file; useful as a compact template for your own scripts.
 
@@ -765,8 +765,8 @@ files). To copy or restore them manually from the project root:
 ```bash
 scripts="${XDG_DATA_HOME:-$HOME/.local/share}/notediff/scripts"
 mkdir -p "$scripts"
-cp examples/scripts/bundle-prompt.py examples/scripts/file-stats.py "$scripts/"
-chmod +x "$scripts/bundle-prompt.py" "$scripts/file-stats.py"
+cp examples/scripts/prompt-packer.py examples/scripts/file-stats.py "$scripts/"
+chmod +x "$scripts/prompt-packer.py" "$scripts/file-stats.py"
 ```
 
 ### Script metadata comment block
@@ -779,8 +779,8 @@ fields.
 ```python
 #!/usr/bin/env python3
 # --- notediff-script ---
-# name = Bundle LLM Prompt
-# description = Build a Markdown LLM prompt from files and project folders
+# name = LLM Prompt Packer
+# description = Pack files and project folders into a single Markdown prompt.
 # sandbox = read-only
 # output_ext = md
 #
