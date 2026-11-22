@@ -1141,24 +1141,33 @@ impl AppWindow {
     pub(super) fn jump_to_match(&self, line: usize, col_char: usize, match_chars: usize) {
         let line_count = self.editor_buffer.line_count().max(1);
         let line_idx = (line.saturating_sub(1) as i32).clamp(0, line_count - 1);
-        let Some(mut line_start) = self.editor_buffer.iter_at_line(line_idx) else {
+        let Some(line_start) = self.editor_buffer.iter_at_line(line_idx) else {
             return;
         };
         let line_chars = line_start.chars_in_line().max(0) as usize;
         let start_col = col_char.min(line_chars) as i32;
         let end_col = (col_char + match_chars).min(line_chars) as i32;
-        if let (Some(mut start), Some(end)) = (
+        if let (Some(start), Some(end)) = (
             self.editor_buffer.iter_at_line_offset(line_idx, start_col),
             self.editor_buffer.iter_at_line_offset(line_idx, end_col),
         ) {
             self.editor_buffer.select_range(&end, &start);
-            self.editor_view
-                .scroll_to_iter(&mut start, 0.2, true, 0.0, 0.35);
         } else {
             self.editor_buffer.place_cursor(&line_start);
-            self.editor_view
-                .scroll_to_iter(&mut line_start, 0.2, true, 0.0, 0.35);
         }
+        let mark = self.editor_buffer.get_insert();
+        self.editor_view.scroll_to_mark(&mark, 0.2, true, 0.0, 0.35);
+        // For a freshly opened window whose TextView has not yet completed its
+        // first layout/line-height pass, re-scroll on idle so the match is
+        // centered once heights are known.
+        let view = self.editor_view.downgrade();
+        let buffer = self.editor_buffer.downgrade();
+        glib::idle_add_local_once(move || {
+            if let (Some(view), Some(buffer)) = (view.upgrade(), buffer.upgrade()) {
+                let mark = buffer.get_insert();
+                view.scroll_to_mark(&mark, 0.2, true, 0.0, 0.35);
+            }
+        });
     }
 
     /// Open a Find in Files match: raise the owning window if already open,
