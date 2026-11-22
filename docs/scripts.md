@@ -312,6 +312,10 @@ See the ready-to-use scripts in `examples/scripts/`:
 - [`examples/scripts/file-stats.py`](../examples/scripts/file-stats.py) — a
   compact Python template demonstrating `file`, `int`, `bool`, and `choice`
   fields with `argparse`.
+- [`examples/scripts/folder-search.py`](../examples/scripts/folder-search.py) —
+  a recursive folder search report demonstrating `NOTEDIFF_INPUT_*` and
+  `NOTEDIFF_CURRENT_DIR` environment variables with `text`, `dir`, `bool`,
+  `slider`, `int`, `list`, and `choice` fields.
 - [`examples/scripts/prompt-packer.py`](../examples/scripts/prompt-packer.py) —
   a full-featured script demonstrating `paths`, `list`, `slider`, and `int`
   fields.

@@ -16,8 +16,9 @@ versioning.
   the current window when empty and untitled or in a new editor window
   otherwise, with a timestamped unsaved name (read-only if the output contains
   tab characters). Shipped with
-  `examples/scripts/prompt-packer.py` and `examples/scripts/file-stats.py`
-  (installed automatically by `install.sh` when not already present).
+  `examples/scripts/prompt-packer.py`, `examples/scripts/folder-search.py`, and
+  `examples/scripts/file-stats.py` (installed automatically by `install.sh` when
+  not already present).
 
 ## [1.3.0] - 2026-11-22
 
