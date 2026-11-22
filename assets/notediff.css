@@ -99,3 +99,7 @@ window.{{dirty_class}} headerbar.{{main_header_class}} {
     border: 1px solid alpha(currentColor, 0.18);
     border-radius: 6px;
 }
+
+.script-slider-value {
+    font-variant-numeric: tabular-nums;
+}

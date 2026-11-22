@@ -804,16 +804,17 @@ Top-level header keys: `name`, `description`, `sandbox` (`read-only`,
 
 Each `[field.<id>]` section defines one input widget in declaration order:
 
-- `type` (required): `text`, `multiline`, `int`, `bool`, `choice`, `file`,
-  `dir`, `paths` (multi-path picker with **+ File…**, **+ Folder…**, and
-  quick **+ Current File** / **+ Current Folder** buttons when a file is open),
-  or `list` (newline- or comma-separated values).
+- `type` (required): `text`, `multiline`, `int`, `bool`, `choice`, `slider`
+  (stepped scale over discrete `options`), `file`, `dir`, `paths` (multi-path
+  picker with **+ File…**, **+ Folder…**, and quick **+ Current File** /
+  **+ Current Folder** buttons when a file is open), or `list` (newline- or
+  comma-separated values).
 - `label`, `default`, `placeholder`, `help`, `required` (`true`/`false`).
 - `arg` (CLI flag such as `--prompt`, `-x`, `--verbose`, or `--key=`) or
   `positional = true` (mutually exclusive). Flags are passed first, followed by
   positional values; empty optional values are omitted.
-- `options` (required for `choice`, separated by `|` or `,`), and `min` / `max`
-  (integer bounds for `int`).
+- `options` (required for `choice` and `slider`, separated by `|` or `,`), and
+  `min` / `max` (integer bounds for `int`).
 
 Every field value is also passed via `NOTEDIFF_INPUT_<UPPER_ID>` (with `-`
 replaced by `_`; `1`/`0` for `bool`, newline-joined for `list`/`paths`),

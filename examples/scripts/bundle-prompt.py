@@ -16,7 +16,7 @@
 # label = Prompt Text
 # type = multiline
 # arg = --prompt
-# placeholder = Optional inline instructions (otherwise uses a top-level prompt.txt)
+# placeholder = Optional inline instructions (otherwise uses a placeholder)
 #
 # [field.prompt_file]
 # label = Prompt File
@@ -32,14 +32,16 @@
 #
 # [field.max_file_size]
 # label = Max File Size
-# type = text
+# type = slider
 # arg = --max-file-size
+# options = 1K | 4K | 16K | 64K | 256K | 1M
 # default = 1M
 #
 # [field.max_total_size]
 # label = Max Total Size
-# type = text
+# type = slider
 # arg = --max-total-size
+# options = 8K | 32K | 128K | 512K | 2M | 8M
 # default = 8M
 #
 # [field.max_files]
@@ -62,7 +64,7 @@ bundle-prompt.py - build an LLM prompt from files and folders.
 Command-line adaptation of the "LLM Prompt Builder" web app. Point it at
 files and/or project folders and it produces a single Markdown prompt:
 
-    <contents of prompt.txt, if present>
+    <prompt text from --prompt / --prompt-file, or a placeholder>
 
     ### Attachments
     **The user has attached N files:**
@@ -579,21 +581,10 @@ def read_text_file(path):
 
 
 def build_prompt(col, budget, explicit_prompt):
-    entries = col.files
-
-    # prompt.txt only counts if it sits at the top level of what was given
-    # (either passed directly, or directly inside a given folder).
-    prompt_entry = None
-    if explicit_prompt is None:
-        candidates = [e for e in entries
-                      if e.name.lower() == 'prompt.txt' and len(e.rel.split('/')) <= 2]
-        if len(candidates) > 1:
-            raise ToolError("More than one top-level 'prompt.txt' was found.")
-        prompt_entry = candidates[0] if candidates else None
-    attachments = [e for e in entries if e is not prompt_entry]
+    attachments = list(col.files)
 
     if not attachments:
-        raise ToolError('No attachments found. Give files or folders (optionally alongside a prompt.txt).')
+        raise ToolError('No attachments found. Give one or more files or folders.')
 
     strip_common_folder_prefix(attachments)
     attachments.sort(key=lambda e: path_sort_key(e.rel))
@@ -601,12 +592,6 @@ def build_prompt(col, budget, explicit_prompt):
     prompt_text = '(Insert your prompt here)'
     if explicit_prompt is not None:
         prompt_text = normalize_newlines(explicit_prompt).strip() or prompt_text
-    elif prompt_entry is not None:
-        try:
-            text = read_text_file(prompt_entry.fs_path)
-        except OSError as err:
-            raise ToolError("Could not read prompt.txt (%s)." % type(err).__name__)
-        prompt_text = normalize_newlines(text).strip() or prompt_text
 
     n = len(attachments)
     lines = [
@@ -725,9 +710,7 @@ How it works:
   Files and folders are scanned recursively. Dependency/build/cache folders
   (node_modules, .git, dist, build, venv, ...) are skipped, as are files that
   look like they hold credentials (.env*, *.pem, *.key, id_rsa, ...). Lockfiles
-  and binaries are listed but their contents are omitted. A top-level
-  prompt.txt (passed directly, or directly inside a given folder) becomes the
-  prompt text at the top of the output instead of being attached.
+  and binaries are listed but their contents are omitted.
 
 Examples:
   bundle-prompt.py -c ~/projects/myapp          # copy prompt to the clipboard
@@ -757,10 +740,10 @@ def build_parser():
                      help='list every skipped/omitted file and note on stderr')
     out.add_argument('--no-color', action='store_true', help='disable colored status output')
 
-    pr = p.add_argument_group('prompt text (default: top-level prompt.txt, else a placeholder)')
+    pr = p.add_argument_group('prompt text (default: a placeholder)')
     g = pr.add_mutually_exclusive_group()
     g.add_argument('-p', '--prompt', metavar='TEXT',
-                   help='prompt text; a prompt.txt in the input is then attached like any other file')
+                   help='prompt text to place above the attachments')
     g.add_argument('-P', '--prompt-file', metavar='FILE',
                    help="read the prompt text from FILE ('-' means stdin)")
 

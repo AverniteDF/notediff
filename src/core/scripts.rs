@@ -62,6 +62,7 @@ pub enum FieldType {
     Int,
     Bool,
     Choice,
+    Slider,
     File,
     Dir,
     Paths,
@@ -76,6 +77,7 @@ impl FieldType {
             "int" => Ok(Self::Int),
             "bool" => Ok(Self::Bool),
             "choice" => Ok(Self::Choice),
+            "slider" => Ok(Self::Slider),
             "file" => Ok(Self::File),
             "dir" => Ok(Self::Dir),
             "paths" => Ok(Self::Paths),
@@ -622,9 +624,14 @@ pub fn parse_metadata(text: &str, script_path: &Path) -> Result<ScriptMetadata, 
             Some(raw) => parse_options(raw),
             None => Vec::new(),
         };
-        if field_type == FieldType::Choice && options.is_empty() {
+        if matches!(field_type, FieldType::Choice | FieldType::Slider) && options.is_empty() {
             return Err(format!(
-                "line {section_line} ([field.{id}]): `choice` field requires non-empty `options`"
+                "line {section_line} ([field.{id}]): `{}` field requires non-empty `options`",
+                if field_type == FieldType::Choice {
+                    "choice"
+                } else {
+                    "slider"
+                }
             ));
         }
         let default = map.get("default").cloned();
@@ -1102,6 +1109,13 @@ mod tests {
 # options = markdown | json | plain
 # default = markdown
 #
+# [field.limit]
+# label = Limit
+# type = slider
+# arg = --limit
+# options = 1K | 4K | 16K
+# default = 4K
+#
 # [field.config]
 # label = Config File
 # type = file
@@ -1130,12 +1144,14 @@ print("ok")
         assert_eq!(meta.description, "Demonstrates all field types");
         assert_eq!(meta.sandbox, SandboxDefault::WritableDir);
         assert_eq!(meta.output_ext, "md");
-        assert_eq!(meta.fields.len(), 9);
+        assert_eq!(meta.fields.len(), 10);
         assert_eq!(meta.fields[4].options, vec!["markdown", "json", "plain"]);
+        assert_eq!(meta.fields[5].field_type, FieldType::Slider);
+        assert_eq!(meta.fields[5].options, vec!["1K", "4K", "16K"]);
         assert_eq!(meta.fields[2].min, Some(1));
         assert_eq!(meta.fields[2].max, Some(50));
-        assert!(meta.fields[8].positional);
-        assert!(meta.fields[8].required);
+        assert!(meta.fields[9].positional);
+        assert!(meta.fields[9].required);
 
         // Also supports `//` and `--` prefixes.
         let js = "// --- notediff-script ---\n// name = JS Tool\n// --- end-notediff-script ---\n";
@@ -1174,6 +1190,13 @@ print("ok")
         assert!(
             parse_metadata(
                 "# --- notediff-script ---\n# [field.a]\n# type = choice\n# --- end-notediff-script ---\n",
+                p
+            )
+            .is_err()
+        );
+        assert!(
+            parse_metadata(
+                "# --- notediff-script ---\n# [field.a]\n# type = slider\n# --- end-notediff-script ---\n",
                 p
             )
             .is_err()

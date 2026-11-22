@@ -33,8 +33,8 @@ pub fn present(
     on_output: impl Fn(String, ScriptOutput) + 'static,
 ) {
     let state = Rc::new(DialogState::new(parent, current_file, Box::new(on_output)));
-    state.load_initial_scripts();
     state.wire_signals();
+    state.load_initial_scripts();
     state.dialog.present(Some(parent));
 }
 
@@ -45,6 +45,10 @@ enum FieldWidget {
     Bool(gtk::CheckButton),
     Choice {
         dropdown: gtk::DropDown,
+        options: Vec<String>,
+    },
+    Slider {
+        scale: gtk::Scale,
         options: Vec<String>,
     },
     PathEntry(gtk::Entry),
@@ -71,6 +75,12 @@ impl FieldControl {
             FieldWidget::Bool(check) => FieldValue::Bool(check.is_active()),
             FieldWidget::Choice { dropdown, options } => {
                 let idx = dropdown.selected() as usize;
+                let chosen = options.get(idx).cloned().unwrap_or_default();
+                FieldValue::Text(chosen)
+            }
+            FieldWidget::Slider { scale, options } => {
+                let max_idx = options.len().saturating_sub(1);
+                let idx = (scale.value().round().max(0.0) as usize).min(max_idx);
                 let chosen = options.get(idx).cloned().unwrap_or_default();
                 FieldValue::Text(chosen)
             }
@@ -612,6 +622,57 @@ impl DialogState {
                 container.append(&dropdown);
                 FieldWidget::Choice {
                     dropdown,
+                    options: spec.options.clone(),
+                }
+            }
+            FieldType::Slider => {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+                let max_idx = spec.options.len().saturating_sub(1);
+                let initial = spec
+                    .default
+                    .as_deref()
+                    .and_then(|def| spec.options.iter().position(|o| o == def))
+                    .unwrap_or(0)
+                    .min(max_idx);
+                let scale = gtk::Scale::with_range(
+                    gtk::Orientation::Horizontal,
+                    0.0,
+                    max_idx.max(1) as f64,
+                    1.0,
+                );
+                scale.set_hexpand(true);
+                scale.set_draw_value(false);
+                scale.set_digits(0);
+                scale.set_round_digits(0);
+                if max_idx == 0 {
+                    scale.set_sensitive(false);
+                } else {
+                    for i in 0..=max_idx {
+                        scale.add_mark(i as f64, gtk::PositionType::Bottom, None);
+                    }
+                }
+                scale.set_value(initial as f64);
+
+                let value_label = gtk::Label::new(spec.options.get(initial).map(String::as_str));
+                value_label.set_width_chars(6);
+                value_label.set_xalign(1.0);
+                value_label.add_css_class("script-slider-value");
+
+                let options_for_label = spec.options.clone();
+                let label_ref = value_label.clone();
+                scale.connect_value_changed(move |scale| {
+                    let idx = (scale.value().round().max(0.0) as usize)
+                        .min(options_for_label.len().saturating_sub(1));
+                    if let Some(text) = options_for_label.get(idx) {
+                        label_ref.set_text(text);
+                    }
+                });
+
+                row.append(&scale);
+                row.append(&value_label);
+                container.append(&row);
+                FieldWidget::Slider {
+                    scale,
                     options: spec.options.clone(),
                 }
             }
