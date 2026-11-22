@@ -193,7 +193,7 @@ impl DialogState {
         footer.set_margin_start(12);
         footer.set_margin_end(12);
 
-        let sandbox_label = gtk::Label::new(Some("Sandbox:"));
+        let sandbox_label = gtk::Label::new(Some("Safety:"));
         sandbox_label.add_css_class("dim-label");
 
         let sandbox_dropdown = gtk::DropDown::from_strings(&[

@@ -12,18 +12,6 @@
 # positional = true
 # help = Select one or more files or folders to include
 #
-# [field.prompt]
-# label = Prompt Text
-# type = multiline
-# arg = --prompt
-# placeholder = Optional inline instructions (otherwise uses a placeholder)
-#
-# [field.prompt_file]
-# label = Prompt File
-# type = file
-# arg = --prompt-file
-# placeholder = Optional path to a prompt text file (mutually exclusive with Prompt Text)
-#
 # [field.exclude]
 # label = Exclude Patterns
 # type = list
@@ -64,7 +52,7 @@ bundle-prompt.py - build an LLM prompt from files and folders.
 Command-line adaptation of the "LLM Prompt Builder" web app. Point it at
 files and/or project folders and it produces a single Markdown prompt:
 
-    <prompt text from --prompt / --prompt-file, or a placeholder>
+    (Insert your prompt here)
 
     ### Attachments
     **The user has attached N files:**
@@ -575,12 +563,7 @@ class ToolError(Exception):
     pass
 
 
-def read_text_file(path):
-    with open(path, 'rb') as fh:
-        return decode_bytes(fh.read())[0]
-
-
-def build_prompt(col, budget, explicit_prompt):
+def build_prompt(col, budget):
     attachments = list(col.files)
 
     if not attachments:
@@ -590,8 +573,6 @@ def build_prompt(col, budget, explicit_prompt):
     attachments.sort(key=lambda e: path_sort_key(e.rel))
 
     prompt_text = '(Insert your prompt here)'
-    if explicit_prompt is not None:
-        prompt_text = normalize_newlines(explicit_prompt).strip() or prompt_text
 
     n = len(attachments)
     lines = [
@@ -715,7 +696,6 @@ How it works:
 Examples:
   bundle-prompt.py -c ~/projects/myapp          # copy prompt to the clipboard
   bundle-prompt.py -o out.md src/ README.md     # write to a file
-  bundle-prompt.py -p "Find the bug" main.py    # supply the prompt inline
   bundle-prompt.py . | wc -c                    # stdout is clean for piping
   bundle-prompt.py -x '*.test.js' -x docs .     # skip extra files/folders
 """
@@ -740,13 +720,6 @@ def build_parser():
                      help='list every skipped/omitted file and note on stderr')
     out.add_argument('--no-color', action='store_true', help='disable colored status output')
 
-    pr = p.add_argument_group('prompt text (default: a placeholder)')
-    g = pr.add_mutually_exclusive_group()
-    g.add_argument('-p', '--prompt', metavar='TEXT',
-                   help='prompt text to place above the attachments')
-    g.add_argument('-P', '--prompt-file', metavar='FILE',
-                   help="read the prompt text from FILE ('-' means stdin)")
-
     flt = p.add_argument_group('filtering and limits')
     flt.add_argument('-x', '--exclude', action='append', default=[], metavar='GLOB',
                      help='skip files/folders whose name or path (relative to its PATH argument) '
@@ -763,19 +736,6 @@ def build_parser():
 
 
 def run(args, console):
-    # Explicit prompt text, if any
-    explicit_prompt = None
-    if args.prompt is not None:
-        explicit_prompt = args.prompt
-    elif args.prompt_file is not None:
-        try:
-            if args.prompt_file == '-':
-                explicit_prompt = decode_bytes(sys.stdin.buffer.read())[0]
-            else:
-                explicit_prompt = read_text_file(args.prompt_file)
-        except OSError as err:
-            raise UsageError("cannot read prompt file %s (%s)" % (args.prompt_file, err.strerror or type(err).__name__))
-
     # Don't ingest our own output file if it lives inside a scanned folder
     skip_real = set()
     if args.output and args.output != '-':
@@ -791,7 +751,7 @@ def run(args, console):
                         if col.skipped else 'No readable files found in the selection.')
 
     budget = Budget(args.max_file_size, args.max_total_size)
-    output, n = build_prompt(col, budget, explicit_prompt)
+    output, n = build_prompt(col, budget)
 
     chars = utf16_len(output)
     tokens = (chars + 2) // 4   # round(chars / 4), halves rounded up

@@ -753,8 +753,8 @@ the dialog header to pick any executable script elsewhere on disk.
 
 The repository includes two example scripts under `examples/scripts/`:
 
-- `bundle-prompt.py` — bundles selected files and project folders (plus optional
-  prompt text and exclude globs) into a single Markdown LLM prompt.
+- `bundle-prompt.py` — bundles selected files and project folders (with
+  optional exclude globs and size limits) into a single Markdown LLM prompt.
 - `file-stats.py` — summarizes line, word, character and byte counts plus the
   top words of a text file; useful as a compact template for your own scripts.
 
@@ -823,7 +823,8 @@ and `NOTEDIFF_WRITABLE_DIR` (when applicable).
 
 ### Sandboxing
 
-When `bwrap` (bubblewrap) is installed, the footer offers three modes:
+When `bwrap` (bubblewrap) is installed, the **Safety** selector in the footer
+offers three modes:
 
 - **Read-Only Sandbox** (default): mounts the host filesystem read-only with a
   private ephemeral `/tmp`, preventing scripts from modifying user files.
