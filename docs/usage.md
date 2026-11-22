@@ -744,6 +744,10 @@ executable script and open its output in a new notediff window. Because output
 opens in a new window without modifying the current document, **Run Script…**
 remains available while Diff Mode is open.
 
+For the complete authoring specification (all field types, CLI/environment
+parameter passing, sandboxing details and language examples), see
+[Writing Scripts](scripts.md).
+
 ### Discovering and choosing scripts
 
 notediff scans `$XDG_DATA_HOME/notediff/scripts/` (normally

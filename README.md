@@ -139,6 +139,8 @@ tooltips. New Window remains available.
 
 - [Using notediff](docs/usage.md) — the full editor, Diff Mode and appearance
   behaviour.
+- [Writing Scripts](docs/scripts.md) — full specification for authoring Run
+  Script (`F6`) scripts.
 - [Design](docs/design.md) — architecture, invariants and product decisions.
 - [Development](docs/development.md) — module layout, tests and CI.
 - [Releasing](docs/releasing.md) — versioning, release checks and publishing.
