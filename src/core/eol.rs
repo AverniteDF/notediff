@@ -16,17 +16,13 @@ pub fn convert_line_endings(text: &str, target: LineEnding) -> String {
     };
 
     let mut out = String::with_capacity(text.len() + text.len() / 16);
-    let mut index = 0;
-    while index < text.len() {
-        if let Some(len) = textlines::break_len(text, index) {
-            out.push_str(newline);
-            index += len;
-        } else {
-            let ch = text[index..].chars().next().unwrap();
-            out.push(ch);
-            index += ch.len_utf8();
-        }
+    let mut chunk_start = 0;
+    while let Some((pos, len)) = textlines::next_break(text, chunk_start) {
+        out.push_str(&text[chunk_start..pos]);
+        out.push_str(newline);
+        chunk_start = pos + len;
     }
+    out.push_str(&text[chunk_start..]);
     out
 }
 

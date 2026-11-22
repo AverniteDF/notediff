@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, glib};
 use sourceview5::prelude::*;
 
 use crate::core::tabs;
@@ -458,13 +458,7 @@ impl AppWindow {
             ("replace-all", editable && has_matches),
             ("goto-line", in_editor),
         ] {
-            if let Some(action) = self
-                .window
-                .lookup_action(name)
-                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-            {
-                action.set_enabled(enabled);
-            }
+            self.set_action_enabled(name, enabled);
         }
         self.search_controls.replace_toggle.set_sensitive(editable);
         if !editable && self.search_controls.replace_toggle.is_active() {

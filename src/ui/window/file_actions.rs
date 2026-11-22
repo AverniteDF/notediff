@@ -63,13 +63,7 @@ impl AppWindow {
     pub(super) fn update_file_actions(&self) {
         let enabled = !self.diff_active();
         for name in ["new", "open", "open-recent", "save-as", "rename"] {
-            if let Some(action) = self
-                .window
-                .lookup_action(name)
-                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-            {
-                action.set_enabled(enabled);
-            }
+            self.set_action_enabled(name, enabled);
         }
         self.new_button
             .set_tooltip_text(enabled.then_some("New File (Ctrl+N)"));

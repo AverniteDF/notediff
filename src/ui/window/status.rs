@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::{Instant, SystemTime};
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, glib};
 
 use crate::core::elapsed;
 use crate::core::textstats::{self, TextStats};
@@ -229,27 +229,15 @@ impl AppWindow {
         self.status.set_stats(&stats);
         self.status.set_cursor(&cursor, selection.as_ref());
         self.status.set_mode(self.edit_mode());
-        self.set_find_action_enabled(
+        self.set_action_enabled(
             "find-next-trailing-whitespace",
             stats.has_trailing_whitespace,
         );
-        self.set_find_action_enabled(
+        self.set_action_enabled(
             "find-next-non-empty-blank-line",
             stats.has_non_empty_blank_line,
         );
         self.update_last_edit();
-    }
-
-    /// A find action is available while its condition exists in the document.
-    /// It stays enabled for read-only documents.
-    fn set_find_action_enabled(&self, name: &str, enabled: bool) {
-        if let Some(action) = self
-            .window
-            .lookup_action(name)
-            .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-        {
-            action.set_enabled(enabled);
-        }
     }
 
     /// Refresh the "Last edit" field from the monotonic elapsed time.

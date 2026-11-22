@@ -4,7 +4,9 @@
 //! headlessly. Line breaks use the same definition as GtkTextBuffer: `\n`,
 //! `\r\n`, a lone `\r`, and U+2029 PARAGRAPH SEPARATOR.
 
-use super::{textlines, whitespace};
+use super::textlines;
+#[cfg(test)]
+use super::whitespace;
 
 /// The line-ending style of a text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -215,29 +217,25 @@ fn plural(count: usize, one: &'static str, many: &'static str) -> &'static str {
 }
 
 pub fn detect_line_ending(text: &str) -> LineEnding {
+    let bytes = text.as_bytes();
     let mut lf = 0usize;
     let mut crlf = 0usize;
     let mut other = 0usize;
     let mut index = 0;
-    while index < text.len() {
-        match textlines::break_len(text, index) {
-            Some(2) => {
-                crlf += 1;
-                index += 2;
-            }
-            Some(_) if text[index..].starts_with('\n') => {
-                lf += 1;
-                index += 1;
-            }
-            Some(len) => {
-                other += 1;
-                index += len;
-            }
-            None => {
-                index += text[index..].chars().next().map_or(1, char::len_utf8);
-            }
+    while let Some((pos, len)) = textlines::next_break(text, index) {
+        if len == 2 {
+            crlf += 1;
+        } else if bytes[pos] == b'\n' {
+            lf += 1;
+        } else {
+            other += 1;
         }
+        index = pos + len;
     }
+    classify_line_ending(lf, crlf, other)
+}
+
+fn classify_line_ending(lf: usize, crlf: usize, other: usize) -> LineEnding {
     match (lf, crlf, other) {
         (_, _, other) if other > 0 => LineEnding::Mixed,
         (lf, crlf, _) if lf > 0 && crlf > 0 => LineEnding::Mixed,
@@ -247,13 +245,65 @@ pub fn detect_line_ending(text: &str) -> LineEnding {
 }
 
 pub fn text_stats(text: &str) -> TextStats {
+    let bytes = text.as_bytes();
+    let mut chars = 0usize;
+    let mut lines = 1usize;
+    let mut lf = 0usize;
+    let mut crlf = 0usize;
+    let mut other = 0usize;
+    let mut has_trailing_whitespace = false;
+    let mut has_non_empty_blank_line = false;
+
+    let mut line_start = 0usize;
+    while line_start < bytes.len() {
+        let next = textlines::next_break(text, line_start);
+        let content_end = next.map_or(bytes.len(), |(pos, _)| pos);
+        let content = &bytes[line_start..content_end];
+
+        if !content.is_empty() {
+            let mut all_blank = true;
+            for &byte in content {
+                if (byte & 0xC0) != 0x80 {
+                    chars += 1;
+                }
+                if byte != b' ' && byte != b'\t' {
+                    all_blank = false;
+                }
+            }
+            if matches!(content.last(), Some(b' ' | b'\t')) {
+                has_trailing_whitespace = true;
+            }
+            if all_blank {
+                has_non_empty_blank_line = true;
+            }
+        }
+
+        match next {
+            Some((pos, len)) => {
+                lines += 1;
+                if len == 2 {
+                    crlf += 1;
+                    chars += 2;
+                } else if bytes[pos] == b'\n' {
+                    lf += 1;
+                    chars += 1;
+                } else {
+                    other += 1;
+                    chars += 1;
+                }
+                line_start = pos + len;
+            }
+            None => break,
+        }
+    }
+
     TextStats {
-        bytes: text.len(),
-        chars: text.chars().count(),
-        lines: textlines::break_count(text) + 1,
-        line_ending: detect_line_ending(text),
-        has_trailing_whitespace: whitespace::has_trailing(text),
-        has_non_empty_blank_line: whitespace::has_non_empty_blank_line(text),
+        bytes: bytes.len(),
+        chars,
+        lines,
+        line_ending: classify_line_ending(lf, crlf, other),
+        has_trailing_whitespace,
+        has_non_empty_blank_line,
     }
 }
 
@@ -530,5 +580,39 @@ mod tests {
         let sel = selection_stats(text, 2, 4).unwrap();
         assert_eq!(sel.first_line, 0);
         assert_eq!(sel.line_range(), 0..=1);
+    }
+
+    #[test]
+    fn single_pass_text_stats_matches_individual_helpers() {
+        for sample in [
+            "",
+            "plain",
+            "   ",
+            "a \n",
+            "a\r\nb\t\r\n",
+            "é🦀\u{2029}  \nlast",
+            "a\rb\n\t \n",
+            "\n\n",
+        ] {
+            let stats = text_stats(sample);
+            assert_eq!(stats.bytes, sample.len(), "{sample:?}");
+            assert_eq!(stats.chars, sample.chars().count(), "{sample:?}");
+            assert_eq!(
+                stats.lines,
+                textlines::break_count(sample) + 1,
+                "{sample:?}"
+            );
+            assert_eq!(stats.line_ending, detect_line_ending(sample), "{sample:?}");
+            assert_eq!(
+                stats.has_trailing_whitespace,
+                whitespace::has_trailing(sample),
+                "{sample:?}"
+            );
+            assert_eq!(
+                stats.has_non_empty_blank_line,
+                whitespace::has_non_empty_blank_line(sample),
+                "{sample:?}"
+            );
+        }
     }
 }

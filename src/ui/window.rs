@@ -897,13 +897,19 @@ impl AppWindow {
 
         let has_path = path.is_some();
         for name in ["copy-file-name", "copy-full-path"] {
-            if let Some(action) = self
-                .window
-                .lookup_action(name)
-                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-            {
-                action.set_enabled(has_path);
-            }
+            self.set_action_enabled(name, has_path);
+        }
+    }
+
+    pub(super) fn lookup_simple_action(&self, name: &str) -> Option<gio::SimpleAction> {
+        self.window
+            .lookup_action(name)
+            .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
+    }
+
+    pub(super) fn set_action_enabled(&self, name: &str, enabled: bool) {
+        if let Some(action) = self.lookup_simple_action(name) {
+            action.set_enabled(enabled);
         }
     }
 

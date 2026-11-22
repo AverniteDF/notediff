@@ -20,6 +20,17 @@ fn display_path(path: &std::path::Path, home: &std::path::Path) -> String {
     }
 }
 
+/// Format a local timestamp as `YYYY-MM-DD HH:MM`, returning `None` for
+/// pre-epoch or unrepresentable times.
+pub(crate) fn format_local_time(at: std::time::SystemTime) -> Option<String> {
+    let secs = at.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let secs = i64::try_from(secs).ok()?;
+    let date = gtk::glib::DateTime::from_unix_local(secs).ok()?;
+    date.format("%Y-%m-%d %H:%M")
+        .ok()
+        .map(|text| text.to_string())
+}
+
 pub fn initialize(app: &adw::Application) {
     theme::install();
     window::initialize(app);

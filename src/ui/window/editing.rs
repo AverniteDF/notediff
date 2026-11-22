@@ -229,11 +229,7 @@ impl AppWindow {
     pub(super) fn set_read_only(&self, read_only: bool) {
         self.flags.read_only.set(read_only);
         self.editor_view.set_editable(!read_only);
-        if let Some(action) = self
-            .window
-            .lookup_action("read-only")
-            .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-        {
+        if let Some(action) = self.lookup_simple_action("read-only") {
             action.set_state(&read_only.to_variant());
         }
         self.set_edit_actions_enabled(!read_only);
@@ -259,13 +255,7 @@ impl AppWindow {
             "insert-folder-path",
             "insert-file",
         ] {
-            if let Some(action) = self
-                .window
-                .lookup_action(name)
-                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-            {
-                action.set_enabled(enabled);
-            }
+            self.set_action_enabled(name, enabled);
         }
     }
 
@@ -643,13 +633,7 @@ impl AppWindow {
                 leading || trailing || blank_remove || blank_strip,
             ),
         ] {
-            if let Some(action) = self
-                .window
-                .lookup_action(name)
-                .and_then(|action| action.downcast::<gio::SimpleAction>().ok())
-            {
-                action.set_enabled(enabled);
-            }
+            self.set_action_enabled(name, enabled);
         }
     }
 
@@ -659,32 +643,17 @@ impl AppWindow {
     /// left at the end of the run, so repeated finds advance. Works for
     /// read-only documents and does nothing in Diff Mode.
     pub(super) fn find_next_trailing_whitespace(&self) {
-        if self.diff_active() {
-            return;
-        }
-
-        let text = self.current_text();
-        let from = self.selection_offsets().map_or_else(
-            || self.editor_buffer.cursor_position().max(0) as usize,
-            |(_, end)| end,
-        );
-        let Some(range) = whitespace::next_trailing(&text, from) else {
-            return;
-        };
-
-        let buffer = &self.editor_buffer;
-        let start = buffer.iter_at_offset(range.start as i32);
-        let end = buffer.iter_at_offset(range.end as i32);
-        // The insert mark goes at the end so the next search starts after it.
-        buffer.select_range(&end, &start);
-        self.editor_view.scroll_mark_onscreen(&buffer.get_insert());
-        self.editor_view.grab_focus();
+        self.select_next_whitespace(whitespace::next_trailing);
     }
 
     /// Select the next non-empty blank line's whitespace, scroll it onscreen
     /// and wrap at the end. Works for read-only documents and does nothing in
     /// Diff Mode.
     pub(super) fn find_next_non_empty_blank_line(&self) {
+        self.select_next_whitespace(whitespace::next_non_empty_blank);
+    }
+
+    fn select_next_whitespace(&self, find: fn(&str, usize) -> Option<std::ops::Range<usize>>) {
         if self.diff_active() {
             return;
         }
@@ -694,7 +663,7 @@ impl AppWindow {
             || self.editor_buffer.cursor_position().max(0) as usize,
             |(_, end)| end,
         );
-        let Some(range) = whitespace::next_non_empty_blank(&text, from) else {
+        let Some(range) = find(&text, from) else {
             return;
         };
 
@@ -723,110 +692,74 @@ impl AppWindow {
         true
     }
 
-    /// File Path: let the user pick a file, then insert its absolute path at
-    /// the cursor (see `insert_path`).
-    pub(super) fn request_insert_path(self: &Rc<Self>) {
+    fn build_insert_dialog(&self, title: &str) -> Option<gtk::FileDialog> {
         if !self.can_insert_text() {
-            return;
+            return None;
         }
-
-        let dialog = gtk::FileDialog::builder()
-            .title("Insert File Path")
-            .modal(true)
-            .build();
+        let dialog = gtk::FileDialog::builder().title(title).modal(true).build();
         if let Some(folder) = self
             .path_for_snapshot()
             .and_then(|path| path.parent().map(Path::to_path_buf))
         {
             dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
         }
+        Some(dialog)
+    }
 
+    fn finish_insert_dialog(
+        this: &Rc<Self>,
+        result: Result<gio::File, glib::Error>,
+        apply: impl FnOnce(&Rc<Self>, &Path),
+    ) {
+        if let Ok(file) = result
+            && let Some(path) = file.path()
+        {
+            apply(this, &path);
+        } else {
+            this.editor_view.grab_focus();
+        }
+    }
+
+    /// File Path: let the user pick a file, then insert its absolute path at
+    /// the cursor (see `insert_path`).
+    pub(super) fn request_insert_path(self: &Rc<Self>) {
+        let Some(dialog) = self.build_insert_dialog("Insert File Path") else {
+            return;
+        };
         let this = self.clone();
         dialog.open(
             Some(&self.window),
             None::<&gio::Cancellable>,
-            move |result| {
-                let Ok(file) = result else {
-                    this.editor_view.grab_focus();
-                    return;
-                };
-                if let Some(path) = file.path() {
-                    this.insert_path(&path);
-                } else {
-                    this.editor_view.grab_focus();
-                }
-            },
+            move |result| Self::finish_insert_dialog(&this, result, |this, p| this.insert_path(p)),
         );
     }
 
     /// Directory Path: let the user pick a folder, then insert its absolute
     /// path at the cursor (see `insert_path`).
     pub(super) fn request_insert_folder_path(self: &Rc<Self>) {
-        if !self.can_insert_text() {
+        let Some(dialog) = self.build_insert_dialog("Insert Directory Path") else {
             return;
-        }
-
-        let dialog = gtk::FileDialog::builder()
-            .title("Insert Directory Path")
-            .modal(true)
-            .build();
-        if let Some(folder) = self
-            .path_for_snapshot()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-        {
-            dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
-        }
-
+        };
         let this = self.clone();
         dialog.select_folder(
             Some(&self.window),
             None::<&gio::Cancellable>,
-            move |result| {
-                let Ok(file) = result else {
-                    this.editor_view.grab_focus();
-                    return;
-                };
-                if let Some(path) = file.path() {
-                    this.insert_path(&path);
-                } else {
-                    this.editor_view.grab_focus();
-                }
-            },
+            move |result| Self::finish_insert_dialog(&this, result, |this, p| this.insert_path(p)),
         );
     }
 
     /// Add Text from File: let the user pick a file, then insert its whole
     /// contents at the cursor (see `insert_file`).
     pub(super) fn request_insert_file(self: &Rc<Self>) {
-        if !self.can_insert_text() {
+        let Some(dialog) = self.build_insert_dialog("Add Text from File") else {
             return;
-        }
-
-        let dialog = gtk::FileDialog::builder()
-            .title("Add Text from File")
-            .modal(true)
-            .build();
-        if let Some(folder) = self
-            .path_for_snapshot()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-        {
-            dialog.set_initial_folder(Some(&gio::File::for_path(folder)));
-        }
-
+        };
         let this = self.clone();
         dialog.open(
             Some(&self.window),
             None::<&gio::Cancellable>,
             move |result| {
-                let Ok(file) = result else {
-                    this.editor_view.grab_focus();
-                    return;
-                };
-                if let Some(path) = file.path() {
-                    this.insert_file_checked(&path);
-                } else {
-                    this.editor_view.grab_focus();
-                }
+                Self::finish_insert_dialog(&this, result, |this, p| this.insert_file_checked(p))
             },
         );
     }

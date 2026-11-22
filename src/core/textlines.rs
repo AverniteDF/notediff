@@ -7,6 +7,7 @@
 /// Byte length of the line break starting at `index`, if there is one.
 ///
 /// `\r\n` is one two-byte break; a lone `\r` and U+2029 are one break each.
+#[cfg(test)]
 pub fn break_len(text: &str, index: usize) -> Option<usize> {
     let rest = text.get(index..)?;
     if rest.starts_with("\r\n") {
@@ -20,16 +21,38 @@ pub fn break_len(text: &str, index: usize) -> Option<usize> {
     }
 }
 
+/// Find the next GTK line break (`\r\n`, `\n`, lone `\r`, or U+2029) at or
+/// after `start`, returning `(break_start, break_len)`.
+///
+/// All break markers are self-synchronizing in UTF-8 (`0x0A`, `0x0D`, and
+/// `0xE2 0x80 0xA9`), so scanning bytes directly is safe and avoids decoding
+/// every character.
+pub fn next_break(text: &str, start: usize) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut index = start;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\n' => return Some((index, 1)),
+            b'\r' => {
+                let len = if bytes.get(index + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                return Some((index, len));
+            }
+            0xE2 if bytes.get(index + 1) == Some(&0x80) && bytes.get(index + 2) == Some(&0xA9) => {
+                return Some((index, 3));
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
 /// True when the text contains at least one line break.
 pub fn has_break(text: &str) -> bool {
-    let mut index = 0;
-    while index < text.len() {
-        if break_len(text, index).is_some() {
-            return true;
-        }
-        index += next_char_len(text, index);
-    }
-    false
+    next_break(text, 0).is_some()
 }
 
 /// True when the text ends with a line break.
@@ -41,15 +64,69 @@ pub fn ends_with_break(text: &str) -> bool {
 pub fn break_count(text: &str) -> usize {
     let mut count = 0;
     let mut index = 0;
-    while index < text.len() {
-        if let Some(len) = break_len(text, index) {
-            count += 1;
-            index += len;
-        } else {
-            index += next_char_len(text, index);
-        }
+    while let Some((pos, len)) = next_break(text, index) {
+        count += 1;
+        index = pos + len;
     }
     count
+}
+
+/// Zero-allocation iterator matching [`split_inclusive`].
+pub struct LinesInclusive<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+impl<'a> Iterator for LinesInclusive<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.text.len() {
+            return None;
+        }
+        let start = self.pos;
+        let end = match next_break(self.text, start) {
+            Some((pos, len)) => pos + len,
+            None => self.text.len(),
+        };
+        self.pos = end;
+        Some(&self.text[start..end])
+    }
+}
+
+/// Iterate over lines retaining their terminators without allocating a `Vec`.
+pub fn iter_inclusive(text: &str) -> LinesInclusive<'_> {
+    LinesInclusive { text, pos: 0 }
+}
+
+/// Zero-allocation iterator matching [`split_all`].
+pub struct LinesAll<'a> {
+    inner: LinesInclusive<'a>,
+    trailing_empty: bool,
+}
+
+impl<'a> Iterator for LinesAll<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(line) = self.inner.next() {
+            return Some(line);
+        }
+        if self.trailing_empty {
+            self.trailing_empty = false;
+            return Some("");
+        }
+        None
+    }
+}
+
+/// Iterate over every GTK line, including the empty line after a trailing
+/// terminator, without allocating a `Vec`.
+pub fn iter_all(text: &str) -> LinesAll<'_> {
+    LinesAll {
+        inner: iter_inclusive(text),
+        trailing_empty: text.is_empty() || ends_with_break(text),
+    }
 }
 
 /// Split into lines that retain their terminators. A trailing terminator does
@@ -57,46 +134,14 @@ pub fn break_count(text: &str) -> usize {
 /// produces one line. Used by the diff engine, where a final newline is part
 /// of the preceding line rather than a separate empty line.
 pub fn split_inclusive(text: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut index = 0;
-    while index < text.len() {
-        if let Some(len) = break_len(text, index) {
-            index += len;
-            lines.push(&text[start..index]);
-            start = index;
-        } else {
-            index += next_char_len(text, index);
-        }
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    }
-    lines
+    iter_inclusive(text).collect()
 }
 
 /// Split into every GTK line, including the empty line after a trailing
 /// terminator. Used where line numbers must match `GtkTextIter::line`, such as
 /// indentation editing and selection line ranges.
 pub fn split_all(text: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut index = 0;
-    while index < text.len() {
-        if let Some(len) = break_len(text, index) {
-            index += len;
-            lines.push(&text[start..index]);
-            start = index;
-        } else {
-            index += next_char_len(text, index);
-        }
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    } else {
-        lines.push("");
-    }
-    lines
+    iter_all(text).collect()
 }
 
 /// Byte offset of the start of `line` using `split_inclusive` numbering.
@@ -106,7 +151,7 @@ pub fn line_start_byte(text: &str, line: usize) -> usize {
         return 0;
     }
     let mut offset = 0;
-    for (index, item) in split_inclusive(text).into_iter().enumerate() {
+    for (index, item) in iter_inclusive(text).enumerate() {
         if index == line {
             return offset;
         }
@@ -121,15 +166,15 @@ pub fn slice_lines(text: &str, start: usize, len: usize) -> &str {
     if len == 0 {
         return "";
     }
-    let lines = split_inclusive(text);
+    let stop = start.saturating_add(len);
     let mut begin = None;
     let mut end = text.len();
     let mut offset = 0;
-    for (index, line) in lines.iter().enumerate() {
+    for (index, line) in iter_inclusive(text).enumerate() {
         if index == start {
             begin = Some(offset);
         }
-        if index == start.saturating_add(len) {
+        if index == stop {
             end = offset;
             break;
         }
@@ -149,10 +194,6 @@ pub fn content(line: &str) -> &str {
         }
     }
     line
-}
-
-fn next_char_len(text: &str, index: usize) -> usize {
-    text[index..].chars().next().map_or(1, char::len_utf8)
 }
 
 #[cfg(test)]

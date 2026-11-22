@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use adw::prelude::*;
 use gtk::glib;
@@ -1343,19 +1343,10 @@ fn pane_time() -> gtk::Label {
 }
 
 fn set_time_label(label: &gtk::Label, at: Option<SystemTime>, tooltip: &str) {
-    let text = at.and_then(format_time);
+    let text = at.and_then(crate::ui::format_local_time);
     label.set_text(text.as_deref().unwrap_or(""));
     label.set_tooltip_text(text.as_ref().map(|_| tooltip));
     label.set_visible(text.is_some());
-}
-
-fn format_time(at: SystemTime) -> Option<String> {
-    let secs = at.duration_since(UNIX_EPOCH).ok()?.as_secs();
-    let secs = i64::try_from(secs).ok()?;
-    let date = glib::DateTime::from_unix_local(secs).ok()?;
-    date.format("%Y-%m-%d %H:%M")
-        .ok()
-        .map(|text| text.to_string())
 }
 
 fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {

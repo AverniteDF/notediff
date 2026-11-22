@@ -11,6 +11,7 @@ use std::ops::{Range, RangeInclusive};
 use super::textlines;
 
 /// True when any line's content ends in an ASCII space or tab.
+#[cfg(test)]
 pub fn has_trailing(text: &str) -> bool {
     let bytes = text.as_bytes();
     for (index, &byte) in bytes.iter().enumerate() {
@@ -28,6 +29,7 @@ pub fn has_trailing(text: &str) -> bool {
 
 /// True when any line's content is non-empty and contains only ASCII spaces
 /// and tabs. The synthetic empty line after a final break does not count.
+#[cfg(test)]
 pub fn has_non_empty_blank_line(text: &str) -> bool {
     let mut index = 0;
     while index < text.len() {
@@ -45,18 +47,10 @@ pub fn has_non_empty_blank_line(text: &str) -> bool {
             return true;
         }
         // Skip the rest of this line.
-        let mut scan = content_end;
-        loop {
-            if scan >= text.len() {
-                return false;
-            }
-            if let Some(len) = textlines::break_len(text, scan) {
-                scan += len;
-                break;
-            }
-            scan += text[scan..].chars().next().map_or(1, char::len_utf8);
+        match textlines::next_break(text, content_end) {
+            Some((pos, len)) => index = pos + len,
+            None => return false,
         }
-        index = scan;
     }
     false
 }
@@ -64,8 +58,7 @@ pub fn has_non_empty_blank_line(text: &str) -> bool {
 /// True when any line in `lines` (0-based, inclusive) ends in ASCII spaces or
 /// tabs. `None` checks the whole text.
 pub fn has_trailing_in(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
-    textlines::split_all(text)
-        .into_iter()
+    textlines::iter_all(text)
         .enumerate()
         .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
         .any(|(_, line)| trailing_len(textlines::content(line)) > 0)
@@ -74,8 +67,7 @@ pub fn has_trailing_in(text: &str, lines: Option<RangeInclusive<usize>>) -> bool
 /// True when any line in `lines` (0-based, inclusive) begins with ASCII spaces
 /// or tabs. `None` checks the whole text.
 pub fn has_leading_in(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
-    textlines::split_all(text)
-        .into_iter()
+    textlines::iter_all(text)
         .enumerate()
         .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
         .any(|(_, line)| leading_len(textlines::content(line)) > 0)
@@ -90,47 +82,37 @@ pub struct TrimChange {
     pub len: usize,
 }
 
+/// Iterate non-terminating target lines (`(0-based index, content)`).
+/// `iter_inclusive` omits the synthetic empty line after a final break.
+fn non_terminating_target_lines(
+    text: &str,
+    lines: Option<RangeInclusive<usize>>,
+) -> impl Iterator<Item = (usize, &str)> {
+    textlines::iter_inclusive(text)
+        .enumerate()
+        .filter(move |(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
+        .map(|(index, line)| (index, textlines::content(line)))
+}
+
 /// True when any target line is blank: its content is empty or contains only
 /// ASCII spaces and tabs. The synthetic empty line after a final break does
 /// not count.
 pub fn has_blank_line_remove(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
-    let text_lines = textlines::split_all(text);
-    let last_line = text_lines.len().saturating_sub(1);
-    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
-    text_lines.into_iter().enumerate().any(|(index, line)| {
-        !(ignore_terminating_line && index == last_line)
-            && lines.as_ref().is_none_or(|range| range.contains(&index))
-            && is_blank_line(textlines::content(line))
-    })
+    non_terminating_target_lines(text, lines).any(|(_, content)| is_blank_line(content))
 }
 
 /// True when any target blank line contains at least one ASCII space or tab.
 /// The synthetic empty line after a final break does not count.
 pub fn has_blank_line_strip(text: &str, lines: Option<RangeInclusive<usize>>) -> bool {
-    let text_lines = textlines::split_all(text);
-    let last_line = text_lines.len().saturating_sub(1);
-    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
-    text_lines.into_iter().enumerate().any(|(index, line)| {
-        let content = textlines::content(line);
-        !(ignore_terminating_line && index == last_line)
-            && lines.as_ref().is_none_or(|range| range.contains(&index))
-            && !content.is_empty()
-            && is_blank_line(content)
-    })
+    non_terminating_target_lines(text, lines)
+        .any(|(_, content)| !content.is_empty() && is_blank_line(content))
 }
 
 /// Blank-line removals for `lines` (0-based, inclusive), or for the whole text
 /// when `None`. Returns the 0-based line indices to delete, in ascending order.
 pub fn blank_line_remove_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<usize> {
-    let text_lines = textlines::split_all(text);
-    let last_line = text_lines.len().saturating_sub(1);
-    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
-    text_lines
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| !(ignore_terminating_line && *index == last_line))
-        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
-        .filter(|(_, line)| is_blank_line(textlines::content(line)))
+    non_terminating_target_lines(text, lines)
+        .filter(|(_, content)| is_blank_line(content))
         .map(|(index, _)| index)
         .collect()
 }
@@ -139,23 +121,15 @@ pub fn blank_line_remove_plan(text: &str, lines: Option<RangeInclusive<usize>>) 
 /// the whole text when `None`. Only blank lines with at least one space or tab
 /// are returned.
 pub fn blank_line_strip_plan(text: &str, lines: Option<RangeInclusive<usize>>) -> Vec<TrimChange> {
-    let text_lines = textlines::split_all(text);
-    let last_line = text_lines.len().saturating_sub(1);
-    let ignore_terminating_line = text.is_empty() || textlines::ends_with_break(text);
-    text_lines
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| !(ignore_terminating_line && *index == last_line))
-        .filter(|(index, _)| lines.as_ref().is_none_or(|range| range.contains(index)))
-        .filter_map(|(line, text)| {
-            let content = textlines::content(text);
+    non_terminating_target_lines(text, lines)
+        .filter_map(|(line, content)| {
             if content.is_empty() || !is_blank_line(content) {
                 return None;
             }
             Some(TrimChange {
                 line,
                 start: 0,
-                len: content.chars().count(),
+                len: content.len(),
             })
         })
         .collect()

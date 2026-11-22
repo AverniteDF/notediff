@@ -11,7 +11,7 @@
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use adw::prelude::*;
 use gtk::glib;
@@ -461,18 +461,6 @@ pub(crate) fn link_buttons_smoke(store: &SnapshotStore, dir: &std::path::Path) {
 }
 
 fn format_time(time: Option<SystemTime>) -> String {
-    let Some(time) = time else {
-        return "unknown".to_string();
-    };
-    let Ok(duration) = time.duration_since(UNIX_EPOCH) else {
-        return "unknown".to_string();
-    };
-    let secs = duration.as_secs().min(i64::MAX as u64) as i64;
-    match glib::DateTime::from_unix_local(secs) {
-        Ok(datetime) => datetime
-            .format("%Y-%m-%d %H:%M")
-            .map(|value| value.to_string())
-            .unwrap_or_else(|_| "unknown".to_string()),
-        Err(_) => "unknown".to_string(),
-    }
+    time.and_then(crate::ui::format_local_time)
+        .unwrap_or_else(|| "unknown".to_string())
 }

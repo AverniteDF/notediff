@@ -393,31 +393,51 @@ fn trim_common_span_whitespace(
     old: &mut Range<usize>,
     new: &mut Range<usize>,
 ) {
-    while old.start < old.end && new.start < new.end {
-        let old_char = old_line.chars().nth(old.start);
-        let new_char = new_line.chars().nth(new.start);
-        match (old_char, new_char) {
-            (Some(old_char), Some(new_char))
-                if old_char == new_char && old_char.is_whitespace() =>
-            {
-                old.start += 1;
-                new.start += 1;
-            }
-            _ => break,
+    let old_slice = slice_char_range(old_line, old);
+    let new_slice = slice_char_range(new_line, new);
+    let leading = old_slice
+        .chars()
+        .zip(new_slice.chars())
+        .take_while(|(a, b)| a == b && a.is_whitespace())
+        .count();
+    old.start += leading;
+    new.start += leading;
+
+    let remaining_old = old.end.saturating_sub(old.start);
+    let remaining_new = new.end.saturating_sub(new.start);
+    let max_trailing = remaining_old.min(remaining_new);
+    if max_trailing > 0 {
+        let trailing = old_slice
+            .chars()
+            .rev()
+            .zip(new_slice.chars().rev())
+            .take(max_trailing)
+            .take_while(|(a, b)| a == b && a.is_whitespace())
+            .count();
+        old.end -= trailing;
+        new.end -= trailing;
+    }
+}
+
+fn slice_char_range<'a>(text: &'a str, range: &Range<usize>) -> &'a str {
+    if range.start >= range.end {
+        return "";
+    }
+    let mut start_byte = text.len();
+    let mut end_byte = text.len();
+    for (index, (byte, _)) in text.char_indices().enumerate() {
+        if index == range.start {
+            start_byte = byte;
+        }
+        if index == range.end {
+            end_byte = byte;
+            break;
         }
     }
-    while old.start < old.end && new.start < new.end {
-        let old_char = old_line.chars().nth(old.end - 1);
-        let new_char = new_line.chars().nth(new.end - 1);
-        match (old_char, new_char) {
-            (Some(old_char), Some(new_char))
-                if old_char == new_char && old_char.is_whitespace() =>
-            {
-                old.end -= 1;
-                new.end -= 1;
-            }
-            _ => break,
-        }
+    if start_byte >= end_byte {
+        ""
+    } else {
+        &text[start_byte..end_byte]
     }
 }
 
@@ -443,7 +463,15 @@ pub fn apply_hunk(baseline: &str, live: &str, hunk: &Hunk) -> Result<String, Str
         ));
     }
 
-    let mut result = String::with_capacity(baseline.len() + live.len());
+    let removed: usize = old_lines[hunk.old_start..hunk.old_end()]
+        .iter()
+        .map(|line| line.len())
+        .sum();
+    let added: usize = new_lines[hunk.new_start..hunk.new_end()]
+        .iter()
+        .map(|line| line.len())
+        .sum();
+    let mut result = String::with_capacity(baseline.len() - removed + added);
     for line in &old_lines[..hunk.old_start] {
         result.push_str(line);
     }
