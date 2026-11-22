@@ -120,6 +120,7 @@ cargo run --release -- /path/to/notes.md
 | `F5` | Review Changes (Diff Mode) |
 | `F6` | Run Script… |
 | `Ctrl+F` / `Ctrl+H` | Find / Replace |
+| `Ctrl+Shift+F` | Find in Files… |
 | `F3` / `Shift+F3` | Next / Previous match |
 | `Ctrl+G` | Go to Line |
 | `Ctrl+]` / `Ctrl+[` | Increase / Decrease indentation |

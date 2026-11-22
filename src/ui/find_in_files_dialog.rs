@@ -1,0 +1,667 @@
+//! Find in Files dialog (`Ctrl+Shift+F`): recursive literal search across a
+//! folder with Match Case, Whole Word, include/exclude globs, async execution
+//! with cancellation, and click-to-jump into the matching file and line.
+
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, TryRecvError};
+use std::thread;
+use std::time::Duration;
+
+use adw::prelude::*;
+use gtk::{gio, glib};
+
+use crate::core::find_in_files::{
+    self, DEFAULT_MAX_MATCHES, FileMatch, SearchOptions, SearchReport,
+};
+use crate::core::textstats::format_thousands;
+use crate::ui::dialogs::{self, Response};
+use crate::ui::display_path;
+
+type MatchCallback = Box<dyn Fn(PathBuf, usize, usize, usize) -> bool>;
+
+#[derive(Clone, Debug)]
+struct SavedInputs {
+    query: String,
+    match_case: bool,
+    whole_word: bool,
+    folder: String,
+    include: String,
+    exclude: String,
+}
+
+thread_local! {
+    /// Persists the Find in Files input fields across close/reopen within a session.
+    static SAVED_INPUTS: RefCell<Option<SavedInputs>> = const { RefCell::new(None) };
+}
+
+/// Present the Find in Files dialog over `parent`.
+pub fn present(
+    parent: &adw::ApplicationWindow,
+    initial_folder: PathBuf,
+    initial_query: Option<String>,
+    on_open_match: impl Fn(PathBuf, usize, usize, usize) -> bool + 'static,
+) {
+    let state = Rc::new(DialogState::new(
+        parent,
+        initial_folder,
+        initial_query,
+        Box::new(on_open_match),
+    ));
+    state.wire_signals();
+    state.dialog.present(Some(parent));
+    state.query_entry.grab_focus();
+    if !state.query_entry.text().is_empty() {
+        state.query_entry.select_region(0, -1);
+    }
+}
+
+struct DialogState {
+    parent: adw::ApplicationWindow,
+    dialog: adw::Dialog,
+    query_entry: gtk::SearchEntry,
+    match_case: gtk::ToggleButton,
+    whole_word: gtk::ToggleButton,
+    folder_entry: gtk::Entry,
+    browse_button: gtk::Button,
+    include_entry: gtk::Entry,
+    exclude_entry: gtk::Entry,
+    search_button: gtk::Button,
+    results_stack: gtk::Stack,
+    results_box: gtk::Box,
+    status_label: gtk::Label,
+    spinner: gtk::Spinner,
+    running_cancel: RefCell<Option<Arc<AtomicBool>>>,
+    on_open_match: MatchCallback,
+}
+
+impl DialogState {
+    fn new(
+        parent: &adw::ApplicationWindow,
+        initial_folder: PathBuf,
+        initial_query: Option<String>,
+        on_open_match: MatchCallback,
+    ) -> Self {
+        let dialog = adw::Dialog::builder()
+            .title("Find in Files")
+            .content_width(820)
+            .content_height(620)
+            .build();
+
+        let search_button = gtk::Button::with_label("Search");
+        search_button.add_css_class("suggested-action");
+
+        let header = adw::HeaderBar::new();
+        header.pack_end(&search_button);
+
+        let saved = SAVED_INPUTS.with_borrow(Clone::clone);
+
+        // Row 1: Query + Aa / W toggles.
+        let query_entry = gtk::SearchEntry::new();
+        query_entry.set_placeholder_text(Some("Search text"));
+        query_entry.set_hexpand(true);
+        if let Some(ref query) = initial_query {
+            query_entry.set_text(query);
+        } else if let Some(ref s) = saved {
+            query_entry.set_text(&s.query);
+        }
+
+        let options_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        options_box.add_css_class("linked");
+        let match_case = gtk::ToggleButton::with_label("Aa");
+        match_case.set_tooltip_text(Some("Match Case"));
+        let whole_word = gtk::ToggleButton::with_label("W");
+        whole_word.set_tooltip_text(Some("Whole Word"));
+        if let Some(ref s) = saved {
+            match_case.set_active(s.match_case);
+            whole_word.set_active(s.whole_word);
+        }
+        options_box.append(&match_case);
+        options_box.append(&whole_word);
+
+        let query_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        query_row.append(&query_entry);
+        query_row.append(&options_box);
+
+        // Row 2: Folder entry + Browse button.
+        let folder_label = gtk::Label::new(Some("Folder:"));
+        folder_label.add_css_class("dim-label");
+        folder_label.set_width_chars(7);
+        folder_label.set_xalign(0.0);
+
+        let folder_entry = gtk::Entry::new();
+        folder_entry.set_hexpand(true);
+        if let Some(ref s) = saved
+            && !s.folder.is_empty()
+        {
+            folder_entry.set_text(&s.folder);
+        } else {
+            folder_entry.set_text(&display_path(&initial_folder, &glib::home_dir()));
+        }
+
+        let browse_button = gtk::Button::with_label("Browse…");
+
+        let folder_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        folder_row.append(&folder_label);
+        folder_row.append(&folder_entry);
+        folder_row.append(&browse_button);
+
+        // Row 3: Include / Exclude glob filters.
+        let include_label = gtk::Label::new(Some("Files:"));
+        include_label.add_css_class("dim-label");
+        include_label.set_width_chars(7);
+        include_label.set_xalign(0.0);
+
+        let include_entry = gtk::Entry::new();
+        include_entry.set_hexpand(true);
+        include_entry.set_placeholder_text(Some("*.rs, *.md (all files if blank)"));
+        if let Some(ref s) = saved {
+            include_entry.set_text(&s.include);
+        }
+
+        let exclude_label = gtk::Label::new(Some("Exclude:"));
+        exclude_label.add_css_class("dim-label");
+
+        let exclude_entry = gtk::Entry::new();
+        exclude_entry.set_hexpand(true);
+        exclude_entry.set_placeholder_text(Some("*.lock, *.log"));
+        if let Some(ref s) = saved {
+            exclude_entry.set_text(&s.exclude);
+        }
+
+        let filter_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        filter_row.append(&include_label);
+        filter_row.append(&include_entry);
+        filter_row.append(&exclude_label);
+        filter_row.append(&exclude_entry);
+
+        let controls = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        controls.set_margin_top(12);
+        controls.set_margin_bottom(12);
+        controls.set_margin_start(14);
+        controls.set_margin_end(14);
+        controls.append(&query_row);
+        controls.append(&folder_row);
+        controls.append(&filter_row);
+
+        // Results area.
+        let empty_page = adw::StatusPage::builder()
+            .icon_name("system-search-symbolic")
+            .title("Find in Files")
+            .description("Enter text to search across UTF-8 files in the chosen folder.")
+            .vexpand(true)
+            .build();
+
+        let no_matches_page = adw::StatusPage::builder()
+            .icon_name("edit-find-symbolic")
+            .title("No Matches Found")
+            .description("Try a different query, folder, or file filter.")
+            .vexpand(true)
+            .build();
+
+        let results_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        results_box.set_margin_top(10);
+        results_box.set_margin_bottom(10);
+        results_box.set_margin_start(12);
+        results_box.set_margin_end(12);
+        let results_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&results_box)
+            .build();
+
+        let results_stack = gtk::Stack::new();
+        results_stack.set_vexpand(true);
+        results_stack.add_named(&empty_page, Some("empty"));
+        results_stack.add_named(&no_matches_page, Some("no-matches"));
+        results_stack.add_named(&results_scroll, Some("results"));
+        results_stack.set_visible_child_name("empty");
+
+        // Footer bar.
+        let spinner = gtk::Spinner::new();
+        spinner.set_visible(false);
+        let status_label = gtk::Label::new(Some("Ready"));
+        status_label.set_xalign(0.0);
+        status_label.set_hexpand(true);
+        status_label.add_css_class("caption");
+        status_label.add_css_class("dim-label");
+
+        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        footer.add_css_class("script-footer");
+        footer.set_margin_top(6);
+        footer.set_margin_bottom(6);
+        footer.set_margin_start(14);
+        footer.set_margin_end(14);
+        footer.append(&spinner);
+        footer.append(&status_label);
+
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        body.append(&controls);
+        body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        body.append(&results_stack);
+        body.append(&footer);
+
+        let toolbar = adw::ToolbarView::new();
+        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(&body));
+        dialog.set_child(Some(&toolbar));
+
+        search_button.set_sensitive(!query_entry.text().is_empty());
+
+        Self {
+            parent: parent.clone(),
+            dialog,
+            query_entry,
+            match_case,
+            whole_word,
+            folder_entry,
+            browse_button,
+            include_entry,
+            exclude_entry,
+            search_button,
+            results_stack,
+            results_box,
+            status_label,
+            spinner,
+            running_cancel: RefCell::new(None),
+            on_open_match,
+        }
+    }
+
+    fn wire_signals(self: &Rc<Self>) {
+        // Query changes update Search button sensitivity.
+        {
+            let weak = Rc::downgrade(self);
+            self.query_entry.connect_changed(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.update_search_sensitivity();
+                }
+            });
+        }
+
+        // Pressing Enter in any input field triggers Search.
+        {
+            let weak = Rc::downgrade(self);
+            self.query_entry.connect_activate(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.start_search();
+                }
+            });
+        }
+        for entry in [&self.folder_entry, &self.include_entry, &self.exclude_entry] {
+            let weak = Rc::downgrade(self);
+            entry.connect_activate(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.start_search();
+                }
+            });
+        }
+
+        // Browse folder button.
+        {
+            let weak = Rc::downgrade(self);
+            self.browse_button.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.choose_folder();
+                }
+            });
+        }
+
+        // Search / Cancel button.
+        {
+            let weak = Rc::downgrade(self);
+            self.search_button.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    if let Some(cancel) = this.running_cancel.borrow().as_ref() {
+                        cancel.store(true, Ordering::Relaxed);
+                    } else {
+                        this.start_search();
+                    }
+                }
+            });
+        }
+
+        // Sole strong owner of `DialogState`, released when the dialog closes.
+        let keep_alive = self.clone();
+        self.dialog.connect_closed(move |_| {
+            keep_alive.save_inputs();
+            if let Some(cancel) = keep_alive.running_cancel.borrow().as_ref() {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        });
+    }
+
+    fn save_inputs(&self) {
+        SAVED_INPUTS.with_borrow_mut(|slot| {
+            *slot = Some(SavedInputs {
+                query: self.query_entry.text().to_string(),
+                match_case: self.match_case.is_active(),
+                whole_word: self.whole_word.is_active(),
+                folder: self.folder_entry.text().to_string(),
+                include: self.include_entry.text().to_string(),
+                exclude: self.exclude_entry.text().to_string(),
+            });
+        });
+    }
+
+    fn update_search_sensitivity(&self) {
+        if self.running_cancel.borrow().is_some() {
+            self.search_button.set_sensitive(true);
+            return;
+        }
+        self.search_button
+            .set_sensitive(!self.query_entry.text().is_empty());
+    }
+
+    fn resolve_folder(&self) -> PathBuf {
+        let raw = self.folder_entry.text().as_str().trim().to_string();
+        if raw.is_empty() {
+            return glib::home_dir();
+        }
+        if raw == "~" {
+            return glib::home_dir();
+        }
+        if let Some(rest) = raw.strip_prefix("~/") {
+            return glib::home_dir().join(rest);
+        }
+        PathBuf::from(raw)
+    }
+
+    fn choose_folder(self: &Rc<Self>) {
+        let current = self.resolve_folder();
+        let initial = if current.is_dir() {
+            current
+        } else {
+            glib::home_dir()
+        };
+        let dialog = gtk::FileDialog::builder()
+            .title("Search Folder")
+            .modal(true)
+            .initial_folder(&gio::File::for_path(initial))
+            .build();
+        let weak = Rc::downgrade(self);
+        dialog.select_folder(Some(&self.parent), None::<&gio::Cancellable>, move |res| {
+            if let (Some(this), Ok(file)) = (weak.upgrade(), res)
+                && let Some(path) = file.path()
+            {
+                this.folder_entry
+                    .set_text(&display_path(&path, &glib::home_dir()));
+            }
+        });
+    }
+
+    fn set_running(&self, cancel: Option<Arc<AtomicBool>>) {
+        let running = cancel.is_some();
+        *self.running_cancel.borrow_mut() = cancel;
+        self.query_entry.set_sensitive(!running);
+        self.match_case.set_sensitive(!running);
+        self.whole_word.set_sensitive(!running);
+        self.folder_entry.set_sensitive(!running);
+        self.browse_button.set_sensitive(!running);
+        self.include_entry.set_sensitive(!running);
+        self.exclude_entry.set_sensitive(!running);
+        self.spinner.set_visible(running);
+        if running {
+            self.spinner.start();
+            self.status_label.set_text("Searching…");
+            self.search_button.set_label("Cancel");
+            self.search_button.remove_css_class("suggested-action");
+            self.search_button.add_css_class("destructive-action");
+            self.search_button.set_sensitive(true);
+        } else {
+            self.spinner.stop();
+            self.search_button.set_label("Search");
+            self.search_button.remove_css_class("destructive-action");
+            self.search_button.add_css_class("suggested-action");
+            self.update_search_sensitivity();
+        }
+    }
+
+    fn start_search(self: &Rc<Self>) {
+        if self.running_cancel.borrow().is_some() {
+            return;
+        }
+        let query = self.query_entry.text().to_string();
+        if query.is_empty() {
+            return;
+        }
+        let root = self.resolve_folder();
+        if !root.is_dir() {
+            dialogs::ask(
+                &self.dialog,
+                "Folder not found",
+                &format!("{} is not an existing folder.", root.display()),
+                &[Response::new("close", "Close")],
+                "close",
+                "close",
+                |_| {},
+            );
+            return;
+        }
+
+        let options = SearchOptions {
+            root,
+            query,
+            match_case: self.match_case.is_active(),
+            whole_word: self.whole_word.is_active(),
+            include_globs: find_in_files::parse_globs(self.include_entry.text().as_str()),
+            exclude_globs: find_in_files::parse_globs(self.exclude_entry.text().as_str()),
+            max_matches: DEFAULT_MAX_MATCHES,
+        };
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.set_running(Some(cancel.clone()));
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let res = find_in_files::search(&options, &cancel);
+            let _ = tx.send(res);
+        });
+
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(Duration::from_millis(25), move || match rx.try_recv() {
+            Ok(result) => {
+                if let Some(this) = weak.upgrade() {
+                    this.finish_search(result);
+                }
+                glib::ControlFlow::Break
+            }
+            Err(TryRecvError::Empty) => {
+                if weak.strong_count() == 0 {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            }
+            Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        });
+    }
+
+    fn finish_search(self: &Rc<Self>, result: Result<SearchReport, String>) {
+        self.set_running(None);
+        match result {
+            Err(err) => {
+                self.status_label.set_text("Search failed");
+                dialogs::ask(
+                    &self.dialog,
+                    "Search failed",
+                    &err,
+                    &[Response::new("close", "Close")],
+                    "close",
+                    "close",
+                    |_| {},
+                );
+            }
+            Ok(report) => {
+                if report.cancelled {
+                    self.status_label.set_text("Search cancelled");
+                    return;
+                }
+                self.populate_results(&report);
+            }
+        }
+    }
+
+    fn populate_results(self: &Rc<Self>, report: &SearchReport) {
+        while let Some(child) = self.results_box.first_child() {
+            self.results_box.remove(&child);
+        }
+
+        if report.matches.is_empty() {
+            self.results_stack.set_visible_child_name("no-matches");
+            self.status_label.set_text(&format!(
+                "No matches ({} files searched)",
+                format_thousands(report.files_searched)
+            ));
+            return;
+        }
+
+        // Matches from `find_in_files::search` are already grouped contiguously
+        // per file in deterministic traversal order.
+        let mut start = 0usize;
+        while start < report.matches.len() {
+            let path = &report.matches[start].path;
+            let mut end = start + 1;
+            while end < report.matches.len() && report.matches[end].path == *path {
+                end += 1;
+            }
+            let group = &report.matches[start..end];
+            self.results_box.append(&self.build_file_group(group));
+            start = end;
+        }
+        self.results_stack.set_visible_child_name("results");
+
+        let match_word = if report.matches.len() == 1 {
+            "match"
+        } else {
+            "matches"
+        };
+        let file_word = if report.files_matched == 1 {
+            "file"
+        } else {
+            "files"
+        };
+        let mut summary = format!(
+            "{} {match_word} in {} {file_word} ({} searched)",
+            format_thousands(report.matches.len()),
+            format_thousands(report.files_matched),
+            format_thousands(report.files_searched),
+        );
+        if report.truncated {
+            summary.push_str(&format!(
+                " — stopped at {}",
+                format_thousands(DEFAULT_MAX_MATCHES)
+            ));
+        }
+        self.status_label.set_text(&summary);
+    }
+
+    fn build_file_group(self: &Rc<Self>, hits: &[FileMatch]) -> gtk::Expander {
+        let first = &hits[0];
+        let count_text = if hits.len() == 1 {
+            "1 match".to_string()
+        } else {
+            format!("{} matches", format_thousands(hits.len()))
+        };
+
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let path_label = gtk::Label::new(Some(&first.rel_path));
+        path_label.set_xalign(0.0);
+        path_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        path_label.set_tooltip_text(Some(&first.path.display().to_string()));
+        path_label.add_css_class("heading");
+
+        let count_label = gtk::Label::new(Some(&count_text));
+        count_label.add_css_class("caption");
+        count_label.add_css_class("dim-label");
+        count_label.set_valign(gtk::Align::Center);
+
+        header.append(&path_label);
+        header.append(&count_label);
+
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::None);
+        list.set_activate_on_single_click(true);
+        list.add_css_class("boxed-list");
+        list.set_margin_top(4);
+        list.set_margin_start(16);
+
+        for hit in hits {
+            list.append(&build_match_row(hit));
+        }
+
+        let group_hits: Vec<FileMatch> = hits.to_vec();
+        let weak = Rc::downgrade(self);
+        list.connect_row_activated(move |_, row| {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            let idx = row.index() as usize;
+            if let Some(hit) = group_hits.get(idx) {
+                let close_dialog = (this.on_open_match)(
+                    hit.path.clone(),
+                    hit.line,
+                    hit.column_char,
+                    hit.match_chars,
+                );
+                if close_dialog {
+                    this.dialog.close();
+                }
+            }
+        });
+
+        let expander = gtk::Expander::new(None);
+        expander.set_label_widget(Some(&header));
+        expander.set_expanded(false);
+        expander.set_child(Some(&list));
+        expander
+    }
+}
+
+fn build_match_row(hit: &FileMatch) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.set_margin_top(4);
+    row.set_margin_bottom(4);
+    row.set_margin_start(8);
+    row.set_margin_end(8);
+
+    let line_label = gtk::Label::new(Some(&hit.line.to_string()));
+    line_label.set_width_chars(5);
+    line_label.set_xalign(1.0);
+    line_label.add_css_class("monospace");
+    line_label.add_css_class("caption");
+    line_label.add_css_class("dim-label");
+    line_label.add_css_class("script-slider-value");
+
+    let preview_markup = match hit.preview_highlight {
+        Some((start, end)) if start < end && end <= hit.preview.len() => {
+            let before = glib::markup_escape_text(&hit.preview[..start]);
+            let matched = glib::markup_escape_text(&hit.preview[start..end]);
+            let after = glib::markup_escape_text(&hit.preview[end..]);
+            format!("{before}<b><u>{matched}</u></b>{after}")
+        }
+        _ => glib::markup_escape_text(&hit.preview).to_string(),
+    };
+    let preview_label = gtk::Label::new(None);
+    preview_label.set_markup(&preview_markup);
+    preview_label.set_xalign(0.0);
+    preview_label.set_hexpand(true);
+    preview_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    preview_label.add_css_class("monospace");
+    preview_label.add_css_class("caption");
+
+    row.append(&line_label);
+    row.append(&preview_label);
+    row
+}
+
+/// Default starting folder for Find in Files: the open document's parent
+/// directory, or the user's home directory for untitled documents.
+pub fn default_folder_for(doc_path: Option<&Path>) -> PathBuf {
+    doc_path
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(glib::home_dir)
+}

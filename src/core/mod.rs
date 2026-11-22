@@ -9,6 +9,7 @@ pub mod diff;
 pub mod document;
 pub mod elapsed;
 pub mod eol;
+pub mod find_in_files;
 pub mod fsutil;
 pub mod indent;
 pub mod inline;

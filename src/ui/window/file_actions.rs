@@ -226,6 +226,9 @@ impl AppWindow {
         self.flags.declined_reload_mtime.set(None);
         self.show_document_text(mode);
         self.reset_cursor_to_top();
+        if let Some((line, col_char, match_chars)) = self.pending_jump.take() {
+            self.jump_to_match(line, col_char, match_chars);
+        }
         self.stack.set_visible_child_name("editor");
         *self.diff_state.borrow_mut() = None;
         self.search_bar.set_search_mode(false);
@@ -275,6 +278,7 @@ impl AppWindow {
     /// The user cancelled the Convert Tabs prompt of an open.
     fn abort_open(&self, after: AfterOpen) {
         self.pending_open.replace(None);
+        self.pending_jump.set(None);
         match after {
             AfterOpen::Stay => {}
             AfterOpen::CloseWindowOnCancel => {

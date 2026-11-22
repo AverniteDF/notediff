@@ -200,6 +200,9 @@ pub struct AppWindow {
     /// Canonical path reserved while the asynchronous Convert Tabs prompt is
     /// open, before the document itself is loaded into `doc`.
     pending_open: RefCell<Option<PathBuf>>,
+    /// One-shot `(1-based line, 0-based char col, match char len)` jump applied
+    /// after `load_document` completes (used by Find in Files).
+    pending_jump: Cell<Option<(usize, usize, usize)>>,
     /// Cached baseline text of the open document (see `BaselineCache`).
     baseline: RefCell<BaselineCache>,
     /// Whether the editor text currently differs from that baseline.
@@ -391,6 +394,7 @@ impl AppWindow {
             doc: RefCell::new(Document::new()),
             untitled_name: RefCell::new(None),
             pending_open: RefCell::new(None),
+            pending_jump: Cell::new(None),
             baseline: RefCell::new(BaselineCache::default()),
             baseline_differs: Cell::new(false),
             flags: flags::DocumentFlags::default(),
@@ -1116,6 +1120,82 @@ impl AppWindow {
         } else if let Some(summary) = scripts::stderr_toast_summary(&output.stderr) {
             self.toast(ToastKind::Info, &summary);
         }
+    }
+
+    /// Return a short single-line selection from the editor (at most 256
+    /// characters) for pre-populating Find in Files.
+    pub(super) fn short_editor_selection(&self) -> Option<String> {
+        if self.diff_active() {
+            return None;
+        }
+        let (start, end) = self.editor_buffer.selection_bounds()?;
+        let text = self.editor_buffer.text(&start, &end, false);
+        let s = text.as_str();
+        if s.is_empty() || s.contains(['\n', '\r', '\u{2029}']) || s.chars().count() > 256 {
+            return None;
+        }
+        Some(s.to_string())
+    }
+
+    /// Scroll to 1-based `line` and select `[col_char .. col_char + match_chars]`.
+    pub(super) fn jump_to_match(&self, line: usize, col_char: usize, match_chars: usize) {
+        let line_count = self.editor_buffer.line_count().max(1);
+        let line_idx = (line.saturating_sub(1) as i32).clamp(0, line_count - 1);
+        let Some(mut line_start) = self.editor_buffer.iter_at_line(line_idx) else {
+            return;
+        };
+        let line_chars = line_start.chars_in_line().max(0) as usize;
+        let start_col = col_char.min(line_chars) as i32;
+        let end_col = (col_char + match_chars).min(line_chars) as i32;
+        if let (Some(mut start), Some(end)) = (
+            self.editor_buffer.iter_at_line_offset(line_idx, start_col),
+            self.editor_buffer.iter_at_line_offset(line_idx, end_col),
+        ) {
+            self.editor_buffer.select_range(&end, &start);
+            self.editor_view
+                .scroll_to_iter(&mut start, 0.2, true, 0.0, 0.35);
+        } else {
+            self.editor_buffer.place_cursor(&line_start);
+            self.editor_view
+                .scroll_to_iter(&mut line_start, 0.2, true, 0.0, 0.35);
+        }
+    }
+
+    /// Open a Find in Files match: raise the owning window if already open,
+    /// reuse this window if empty and untitled, otherwise open a new window,
+    /// and jump to the matching line and selection.
+    pub(super) fn open_search_match(
+        self: &Rc<Self>,
+        path: &Path,
+        line: usize,
+        col_char: usize,
+        match_chars: usize,
+    ) -> bool {
+        if let Some(target) = window_for_open_path(path) {
+            let same_window = Rc::ptr_eq(&target, self);
+            target.window.present();
+            if !target.diff_active() {
+                target.jump_to_match(line, col_char, match_chars);
+                target.editor_view.grab_focus();
+            }
+            return same_window;
+        }
+        if let Some(app) = self
+            .window
+            .application()
+            .and_then(|app| app.downcast::<adw::Application>().ok())
+        {
+            let window = AppWindow::with_parts(
+                &app,
+                self.store.clone(),
+                self.persist_settings,
+                self.recent.clone(),
+            );
+            window.pending_jump.set(Some((line, col_char, match_chars)));
+            window.window.present();
+            AppWindow::open_path_after(&window, path, AfterOpen::CloseWindowOnCancel);
+        }
+        false
     }
 
     /// Show a script's stdout: reuse this window if it is empty and untitled,

@@ -39,6 +39,8 @@ src/
     tabs.rs             no-tab policy helpers: tab detection and conversion
     textlines.rs        GTK-compatible line breaks, splitting and byte offsets
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
+    find_in_files.rs    recursive UTF-8 literal search with glob filters and
+                        cancellable traversal
     indent.rs           indentation editing: increase including empty lines,
                         strict decrease, double and halve
     whitespace.rs       leading/trailing ASCII space/tab detection, non-empty
@@ -103,6 +105,7 @@ src/
       appearance_tab.rs theme picker and content font controls
       font_controls.rs  staged font editing, global apply and persistence
     about_dialog.rs     About dialog
+    find_in_files_dialog.rs Find in Files dialog (Ctrl+Shift+F)
     run_script_dialog.rs Run Script dialog (F6) and dynamic parameter form
     dialogs.rs          shared AlertDialog builder and response helpers
     status_bar.rs       status bar widget for the editor and the diff panes

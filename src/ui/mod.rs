@@ -3,6 +3,7 @@ pub mod app_dialog;
 pub mod dialogs;
 pub mod diff_page;
 mod diff_toolbar;
+pub mod find_in_files_dialog;
 pub(crate) mod gutter_selection;
 pub mod run_script_dialog;
 pub mod status_bar;

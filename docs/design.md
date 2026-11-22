@@ -82,6 +82,8 @@ notediff/
     app_dialog/appearance_tab  Appearance tab (live theme picker and staged font controls)
     app_dialog/font_controls   font family and size fields, Apply Font and persistence
     about_dialog      About dialog (name, version, description, copyright and license notice)
+    find_in_files_dialog Find in Files dialog (Ctrl+Shift+F): recursive literal search with globs,
+                      cancellable background execution and click-to-jump results
     run_script_dialog Run Script dialog (F6): script discovery, dynamic metadata form,
                       bwrap sandbox controls and asynchronous execution
     dialogs           shared AlertDialog builder and response helpers (heading, body, responses, default, close)
@@ -110,6 +112,8 @@ notediff/
     tabs              no-tab policy helpers: tab detection and tab-to-space conversion (no GTK)
     textlines         GTK-compatible line breaks, splitting, byte offsets and slices (no GTK)
     eol               line-ending conversion to LF or CRLF, including lone CR/U+2029 (no GTK)
+    find_in_files     recursive UTF-8 literal search with Match Case, Whole Word, glob filters and
+                      cancellable traversal (no GTK)
     indent            indentation editing: plans increasing, decreasing, doubling or halving
                       leading spaces, with optional skip-empty filtering (no GTK)
     whitespace        leading/trailing ASCII space/tab detection, non-empty blank-line

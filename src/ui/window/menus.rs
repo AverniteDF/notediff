@@ -9,7 +9,7 @@ use gtk::glib::variant::ToVariant;
 use gtk::{gio, glib};
 
 use crate::core::pending::PendingAction;
-use crate::ui::{about_dialog, app_dialog, display_path, run_script_dialog};
+use crate::ui::{about_dialog, app_dialog, display_path, find_in_files_dialog, run_script_dialog};
 
 use super::diff_actions::AfterDiscardReview;
 use super::{AppWindow, add_action};
@@ -37,6 +37,21 @@ impl AppWindow {
                         this.invalidate_baseline_cache();
                         this.update_diff_button();
                     }
+                },
+            );
+        });
+        add_action(window, this, "find-in-files", |this| {
+            let folder = find_in_files_dialog::default_folder_for(this.doc.borrow().path());
+            let query = this.short_editor_selection();
+            let weak = Rc::downgrade(this);
+            find_in_files_dialog::present(
+                &this.window,
+                folder,
+                query,
+                move |path, line, col_char, match_chars| {
+                    weak.upgrade().is_some_and(|this| {
+                        this.open_search_match(&path, line, col_char, match_chars)
+                    })
                 },
             );
         });
@@ -123,6 +138,7 @@ fn build_main_menu() -> gio::Menu {
 
     let tools = gio::Menu::new();
     tools.append(Some("Find…"), Some("win.find"));
+    tools.append(Some("Find in Files…"), Some("win.find-in-files"));
     tools.append(Some("Replace…"), Some("win.replace"));
     tools.append(Some("Go to Line…"), Some("win.goto-line"));
     tools.append(Some("Word Wrap"), Some("win.word-wrap"));
@@ -435,6 +451,7 @@ pub(super) fn install_accels(app: &adw::Application) {
     app.set_accels_for_action("win.enter-diff", &["F5"]);
     app.set_accels_for_action("win.run-script", &["F6"]);
     app.set_accels_for_action("win.find", &["<Ctrl>f"]);
+    app.set_accels_for_action("win.find-in-files", &["<Ctrl><Shift>f"]);
     app.set_accels_for_action("win.find-next", &["F3"]);
     app.set_accels_for_action("win.find-previous", &["<Shift>F3"]);
     app.set_accels_for_action("win.replace", &["<Ctrl>h"]);
@@ -610,6 +627,9 @@ mod tests {
             action(mode.upcast_ref::<gio::MenuModel>(), 0).as_deref(),
             Some("win.read-only")
         );
+        let tools = menu.item_link(2, gio::MENU_LINK_SECTION).unwrap();
+        assert_eq!(action(&tools, 1).as_deref(), Some("win.find-in-files"));
+
         let scripts = menu.item_link(3, gio::MENU_LINK_SECTION).unwrap();
         assert_eq!(scripts.n_items(), 1);
         assert_eq!(action(&scripts, 0).as_deref(), Some("win.run-script"));

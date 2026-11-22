@@ -155,6 +155,22 @@ notes for details and workarounds.
   Word), and wraps at the ends of the document. Replacement tabs become
   spaces. Replace is disabled for read-only documents and in Diff Mode; Find
   remains available for read-only documents and is disabled in Diff Mode.
+- **Find in Files…** (**Ctrl+Shift+F**, main menu) opens a dialog to search
+  recursively across UTF-8 text files in a folder (defaulting to the current
+  document's folder, or your home directory for untitled windows). Input field
+  values and toggles are remembered when the dialog is closed and reopened
+  during the session; a short single-line selection in the editor pre-populates
+  the query. Toggle **Aa** (Match Case) or **W** (Whole Word), and optionally
+  narrow results with comma-separated **Files** (for example `*.rs, *.md`) and
+  **Exclude** globs. Common dependency/build folders (`.git`, `node_modules`,
+  `target`, `dist`, `build`, `venv`, `__pycache__`) and binary or oversized
+  (>16 MiB) files are skipped automatically; up to 1,000 matches are shown,
+  grouped into collapsible per-file sections (collapsed by default) with each
+  file's match count beside its name. Searches run asynchronously and can be
+  stopped with **Cancel**. Clicking a match raises the window that already owns
+  that file or opens it in a new window, and jumps directly to the matching
+  line and selection; the dialog stays open unless the match targets the
+  searching window's own open document. Available in Diff Mode as well.
 - Click or drag the line-number gutter to select whole lines. The same works
   in either full Diff Mode pane.
 - Go to Line with **Ctrl+G** (out-of-range numbers are clamped). It is

@@ -234,6 +234,7 @@ fn gtk_window_smoke() {
     whitespace_highlight_scenario(&app, &dir, &store);
     caret_navigation_scenario(&app, &dir, &store);
     script_output_window_scenario(&app, &dir, &store);
+    find_in_files_jump_scenario(&app, &dir, &store);
     blank_marker_scenario(&app, &dir, &store);
     inspection_blank_marker_layer_scenario(&app, &dir, &store);
     full_boundary_marker_scenario(&app, &dir, &store);
@@ -6710,5 +6711,44 @@ fn script_output_window_scenario(app: &adw::Application, dir: &Path, store: &Sna
     assert!(window.untitled_name.borrow().is_none());
     assert_eq!(window.window.title().as_deref(), Some("script-saved.md"));
     assert!(!window.flags.dirty.get());
+    window.window.destroy();
+}
+
+fn find_in_files_jump_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    let first = dir.join("search-a.txt");
+    let second = dir.join("search-b.txt");
+    std::fs::write(&first, "alpha\nbeta needle gamma\n").unwrap();
+    std::fs::write(&second, "one\ntwo\nthree needle four\n").unwrap();
+
+    // Even from an empty untitled window, clicking a match opens a new window
+    // (returns false -> keep dialog open) and jumps straight to the match.
+    let window = AppWindow::with_store(app, store.clone());
+    let before = super::WINDOWS.with_borrow(Vec::len);
+    assert!(!window.open_search_match(&first, 2, 5, 6));
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before + 1);
+    let first_win = super::WINDOWS.with_borrow(|windows| windows.last().unwrap().clone());
+    let (start, end) = first_win.editor_buffer.selection_bounds().unwrap();
+    assert_eq!(first_win.editor_buffer.text(&start, &end, false), "needle");
+    assert_eq!(start.line(), 1);
+
+    // Jumping to a second file opens another new window (returns false -> keep dialog open).
+    assert!(!window.open_search_match(&second, 3, 6, 6));
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before + 2);
+    let second_win = super::WINDOWS.with_borrow(|windows| windows.last().unwrap().clone());
+    let (start, end) = second_win.editor_buffer.selection_bounds().unwrap();
+    assert_eq!(second_win.editor_buffer.text(&start, &end, false), "needle");
+    assert_eq!(start.line(), 2);
+
+    // Jumping back to an already-open file in another window raises it (returns false -> keep dialog open).
+    assert!(!second_win.open_search_match(&first, 1, 0, 5));
+    assert_eq!(super::WINDOWS.with_borrow(Vec::len), before + 2);
+    let (start, end) = first_win.editor_buffer.selection_bounds().unwrap();
+    assert_eq!(first_win.editor_buffer.text(&start, &end, false), "alpha");
+
+    // Jumping to a match in the searching window's own open document returns true (-> close dialog).
+    assert!(first_win.open_search_match(&first, 2, 5, 6));
+
+    second_win.window.destroy();
+    first_win.window.destroy();
     window.window.destroy();
 }
