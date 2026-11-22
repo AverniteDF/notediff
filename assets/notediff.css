@@ -21,6 +21,15 @@ entry.notediff-open-location-error:focus-within {
     -gtk-icon-size: 1em;
 }
 
+.search-match-count {
+    font-size: 0.9em;
+    font-variant-numeric: tabular-nums;
+}
+
+searchentry.notediff-search-no-match:focus-within {
+    outline-color: #e01b24;
+}
+
 /* The custom diff renderer supplies its own opaque markup colours. An opaque
    inherited colour stops the gutter's translucent fallback colour from dimming
    those colours a second time. */

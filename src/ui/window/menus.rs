@@ -421,6 +421,8 @@ pub(super) fn install_accels(app: &adw::Application) {
     app.set_accels_for_action("win.rename", &["F2"]);
     app.set_accels_for_action("win.enter-diff", &["F5"]);
     app.set_accels_for_action("win.find", &["<Ctrl>f"]);
+    app.set_accels_for_action("win.find-next", &["F3"]);
+    app.set_accels_for_action("win.find-previous", &["<Shift>F3"]);
     app.set_accels_for_action("win.replace", &["<Ctrl>h"]);
     app.set_accels_for_action("win.goto-line", &["<Ctrl>g"]);
     app.set_accels_for_action(

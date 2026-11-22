@@ -3376,6 +3376,113 @@ fn search_replace_scenario(app: &adw::Application, dir: &Path, store: &SnapshotS
     editor.search_entry.emit_by_name::<()>("activate", &[]);
     assert_eq!(editor.selection_offsets(), Some((0, 2)));
 
+    // Previous/Next navigation works bidirectionally and even when the search
+    // bar is closed (F3 / Shift+F3).
+    let find_action = editor
+        .window
+        .lookup_action("find")
+        .unwrap()
+        .downcast::<gtk::gio::SimpleAction>()
+        .unwrap();
+    let find_next = editor
+        .window
+        .lookup_action("find-next")
+        .unwrap()
+        .downcast::<gtk::gio::SimpleAction>()
+        .unwrap();
+    let find_prev = editor
+        .window
+        .lookup_action("find-previous")
+        .unwrap()
+        .downcast::<gtk::gio::SimpleAction>()
+        .unwrap();
+    find_prev.activate(None);
+    assert_eq!(editor.selection_offsets(), Some((3, 5)));
+    editor.search_bar.set_search_mode(false);
+    find_next.activate(None);
+    assert_eq!(editor.selection_offsets(), Some((0, 2)));
+    find_prev.activate(None);
+    assert_eq!(editor.selection_offsets(), Some((3, 5)));
+
+    // Selection pre-population on Ctrl+F (single-line only) and cursor-anchored
+    // incremental search.
+    editor.set_editor_text("cat scatter cat\nsecond line\n");
+    editor.search_controls.match_case.set_active(false);
+    editor.search_controls.whole_word.set_active(false);
+    buffer.select_range(&buffer.iter_at_offset(12), &buffer.iter_at_offset(15));
+    find_action.activate(None);
+    assert_eq!(editor.search_entry.text().as_str(), "cat");
+    assert_eq!(editor.search_entry.selection_bounds(), Some((0, 3)));
+    // Multi-line selection leaves the existing query intact.
+    buffer.select_range(&buffer.iter_at_offset(0), &buffer.iter_at_offset(20));
+    find_action.activate(None);
+    assert_eq!(editor.search_entry.text().as_str(), "cat");
+
+    // Incremental search starts from the cursor anchor rather than line 1.
+    editor.search_bar.set_search_mode(false);
+    buffer.place_cursor(&buffer.iter_at_offset(10));
+    find_action.activate(None);
+    editor.search_entry.set_text("cat");
+    editor
+        .search_entry
+        .emit_by_name::<()>("search-changed", &[]);
+    assert_eq!(editor.selection_offsets(), Some((12, 15)));
+
+    // Whole Word matches "cat" but skips "scatter".
+    editor.search_controls.whole_word.set_active(true);
+    buffer.place_cursor(&buffer.start_iter());
+    find_next.activate(None);
+    assert_eq!(editor.selection_offsets(), Some((0, 3)));
+    find_next.activate(None);
+    assert_eq!(editor.selection_offsets(), Some((12, 15)));
+    editor.search_controls.whole_word.set_active(false);
+
+    // Live match count and zero-match disabling after the async scan settles.
+    let context = gtk::glib::MainContext::default();
+    for _ in 0..20 {
+        while context.pending() {
+            context.iteration(false);
+        }
+    }
+    assert!(editor.search_controls.match_count.is_visible());
+    assert_eq!(editor.search_controls.match_count.text().as_str(), "3 of 3");
+
+    editor.search_entry.set_text("not-present");
+    for _ in 0..20 {
+        while context.pending() {
+            context.iteration(false);
+        }
+    }
+    assert_eq!(
+        editor.search_controls.match_count.text().as_str(),
+        "No matches"
+    );
+    assert!(!one.is_enabled());
+    assert!(!all.is_enabled());
+    assert!(!find_next.is_enabled());
+    assert!(!find_prev.is_enabled());
+
+    // Smart Ctrl+H focuses the Replace field when Find is already open with a
+    // query and no new selection was pre-populated.
+    editor.search_entry.set_text("cat");
+    buffer.place_cursor(&buffer.start_iter());
+    replace.activate(None);
+    assert!(editor.search_controls.replace_toggle.is_active());
+    let focus = gtk::prelude::GtkWindowExt::focus(&editor.window).unwrap();
+    assert!(
+        focus == editor.search_controls.replacement
+            || focus.is_ancestor(&editor.search_controls.replacement)
+    );
+
+    editor.set_editor_text(".* .* aaaa\r\n");
+    editor.search_entry.set_text(".*");
+    editor.search_controls.match_case.set_active(true);
+    for _ in 0..20 {
+        while context.pending() {
+            context.iteration(false);
+        }
+    }
+
     editor.set_read_only(true);
     assert!(!replace.is_enabled());
     assert!(!one.is_enabled());

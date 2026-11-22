@@ -12,6 +12,7 @@
 
   <style name="text"                 foreground="fg" background="bg"/>
   <style name="selection"            foreground="fg-strong" background="bg-selection"/>
+  <style name="search-match"         foreground="fg-strong" background="#4b4228"/>
   <style name="cursor"               foreground="amber"/>
   <style name="current-line"         background="bg-line"/>
   <style name="line-numbers"         foreground="fg-dim" background="gutter-bg"/>

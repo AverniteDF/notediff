@@ -348,7 +348,7 @@ impl AppWindow {
         toast_overlay.set_hexpand(true);
         toast_overlay.set_vexpand(true);
 
-        let (search_bar, search_entry, search_controls) = search::build_search_bar();
+        let (search_bar, search_entry, search_controls) = search::build_search_bar(&editor_buffer);
 
         let toolbar_view = adw::ToolbarView::new();
         toolbar_view.add_top_bar(&header);

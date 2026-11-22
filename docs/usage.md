@@ -127,20 +127,32 @@ notes for details and workarounds.
   that uses one style. Files over 1 MiB ask for confirmation. Files over 16 MiB,
   folders and non-UTF-8 files are refused. An empty file inserts nothing. This
   action is unavailable for read-only documents and in Diff Mode.
-- Find with **Ctrl+F**; press Enter to jump to the next match. **Esc** closes
+- Find with **Ctrl+F**; if a short single-line selection exists in the editor,
+  it pre-populates the Find field (selected so typing immediately replaces it).
+  All matches are highlighted live while the bar is open, with a match counter
+  (`3 of 12` or `No matches`) beside the field. Incremental search starts near
+  the cursor rather than jumping back to line 1. Press **Enter** or **F3** (or
+  the down arrow button) for the next match, and **Shift+Enter** or
+  **Shift+F3** (or the up arrow button) for the previous match; **F3** and
+  **Shift+F3** keep working even after the Find bar is closed. Toggle **Aa**
+  (Match Case) or **W** (Whole Word) in the bar. **Esc** closes
   the Find/Replace bar from anywhere in the window, unless a dialog or menu is
-  open, and returns focus to the editor.
+  open, clears match highlights, and returns focus to the editor.
   Ordinary typing never opens Find. Cancelling Open File restores editor focus.
   Focus also returns after the unsaved-changes prompt closes, after the main
   menu or the Open menu is dismissed, or after closing Manage App… → Baseline Snapshots. In Diff Mode it returns to a
   visible pane instead; Find and newly opened dialogs retain their own focus.
-- **Replace…** (**Ctrl+H**, main menu) adds a replacement field to the Find bar.
-  **Replace** changes the selected match and finds the next; if the selection
-  is not a match, it only finds the next match. **Replace All** changes every
+- **Replace…** (**Ctrl+H**, main menu, or the expand arrow at the left of the
+  Find bar) adds a replacement field to the Find bar; pressing **Ctrl+H** while
+  Find is already open with a query focuses the Replace field directly.
+  **Replace** (**Enter** in the Replace field) changes the selected match and
+  finds the next; if the selection is not a match, it only finds the next match.
+  **Replace All** (**Ctrl+Enter** in the Replace field) changes every
   non-overlapping match in the document and reports the count. Each operation
-  is one undo step. An empty replacement deletes matches; an empty search does
-  nothing. Matching is literal (no regex), case-insensitive unless **Match Case**
-  is checked, and Find wraps at the end of the document. Replacement tabs become
+  is one undo step. An empty replacement deletes matches; an empty search or
+  zero matches disables Replace and Replace All. Matching is literal (no regex),
+  case-insensitive unless **Aa** (Match Case) is active, respects **W** (Whole
+  Word), and wraps at the ends of the document. Replacement tabs become
   spaces. Replace is disabled for read-only documents and in Diff Mode; Find
   remains available for read-only documents and is disabled in Diff Mode.
 - Click or drag the line-number gutter to select whole lines. The same works

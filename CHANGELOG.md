@@ -6,6 +6,12 @@ versioning.
 
 ## [Unreleased]
 
+- **Find and Replace** now pre-populates from a short single-line selection,
+  highlights all matches live with a match counter (`3 of 12` / `No matches`),
+  anchors incremental search at the cursor instead of jumping to line 1, adds
+  **Whole Word** (`W`), linked Previous/Next buttons, **Shift+Enter** / **F3**
+  / **Shift+F3** navigation (working even with the bar closed), an in-bar
+  Replace toggle, and **Ctrl+Enter** for Replace All.
 - Holding **Shift** in the header **Open** menu now shows a small new-window
   icon beside each recent file name; **Shift-clicking** a recent entry or
   **Browse…**, or pressing **Shift+Enter** in the path field, opens the file in

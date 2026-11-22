@@ -115,6 +115,7 @@ cargo run --release -- /path/to/notes.md
 | `F2` | Rename or Move |
 | `F5` | Review Changes (Diff Mode) |
 | `Ctrl+F` / `Ctrl+H` | Find / Replace |
+| `F3` / `Shift+F3` | Next / Previous match |
 | `Ctrl+G` | Go to Line |
 | `Ctrl+]` / `Ctrl+[` | Increase / Decrease indentation |
 | `Ctrl+Shift+]` / `Ctrl+Shift+[` | Double / Halve indentation |
