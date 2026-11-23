@@ -18,6 +18,8 @@ versioning.
 
 ### Changed
 
+- The About dialog now reads "A plain-text editor with document baseline
+  comparison. Review changes without needing a repository."
 - Moved the **Run** button in **Run Script** into the bottom footer bar,
   right-aligned alongside the sandbox controls.
 - `install.sh` now also installs missing example themes into

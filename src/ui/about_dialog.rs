@@ -45,7 +45,7 @@ fn build_dialog() -> adw::Dialog {
     }
 
     let description = centered_label(&format!(
-        "{DESCRIPTION}. Review and accept changes without needing a repository."
+        "{DESCRIPTION}. Review changes without needing a repository."
     ));
 
     let released = centered_label(&format!("Released {RELEASE_DATE}."));

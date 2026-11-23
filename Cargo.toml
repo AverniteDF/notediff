@@ -6,7 +6,7 @@ authors = ["Robert Hewitt (Avernite)"]
 # The app's own version is the `version` field above.
 edition = "2024"
 rust-version = "1.92"
-description = "A plain-text editor with baseline comparison"
+description = "A plain-text editor with document baseline comparison"
 license = "MIT"
 repository = "https://github.com/AverniteDF/notediff"
 readme = "README.md"
