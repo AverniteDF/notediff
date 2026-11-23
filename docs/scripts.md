@@ -131,8 +131,15 @@ order.
 | `required` | No | `true` or `false` (default `false`). When `true`, **Run** stays disabled until the field has a non-empty value |
 | `arg` | No | CLI flag to pass this field (for example `--prompt`, `-x`, `--verbose`, or `--format=`). Mutually exclusive with `positional = true` |
 | `positional` | No | `true` or `false` (default `false`). Appends value(s) as positional CLI arguments after all flags. Mutually exclusive with `arg` |
-| `options` | For `choice` & `slider` | Discrete choices separated by `\|` (or by `,` if no `\|` is present). Duplicate entries are ignored |
+| `options` | For `choice` & `slider` | Discrete choices separated by bare pipe characters (see example below), or by commas if no pipe is present. Duplicate entries are ignored |
 | `min` / `max` | No (`int`) | Optional integer lower/upper bounds (`min` must be `<= max`) |
+
+Example `options` lines (use bare `|` characters, or `,` if no `|` is present):
+
+```ini
+options = low | medium | high
+options = 2, 4, 8
+```
 
 ---
 
