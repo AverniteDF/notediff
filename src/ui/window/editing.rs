@@ -34,7 +34,7 @@ impl AppWindow {
     pub(super) fn connect_editing(this: &Rc<Self>) {
         // No-tab policy and line-ending consistency. Tabs in pasted, dropped
         // or otherwise inserted text become spaces. New line breaks match the
-        // document's dominant ending, so Enter in a CRLF file inserts CRLF and
+        // document's uniform ending, so Enter in a CRLF file inserts CRLF and
         // a pasted LF does not silently make the document mixed. The handler
         // replaces the insertion with a converted one; the nested insert has
         // nothing left to convert and passes straight through. The

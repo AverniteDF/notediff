@@ -20,12 +20,15 @@ never the document.
 - **Diff Mode**: compare the live file against a saved baseline, inspect whole
   hunks or individual word-level changes, and accept them one at a time.
 - Baselines can be created, moved, copied and re-linked when files move on disk.
-- Atomic saves and baseline writes, including a direct-write fallback for shared
-  folders that reject sibling renames.
+- Atomic saves and private, atomic baseline writes. Live-file saves can fall
+  back to a direct write on shared folders that reject sibling renames.
 - Light and dark themes plus user theme bundles.
+- **Find in Files… (`Ctrl+Shift+F`)**: search a folder recursively, including
+  unsaved edits in open files, and jump to results.
 - **Run Script… (`F6`)**: run local scripts with a dynamic parameter form
-  defined in a script comment header, optional bubblewrap (`bwrap`) sandboxing,
-  and stdout opened in a new editor window.
+  defined in a script comment header, with optional bubblewrap (`bwrap`)
+  filesystem write restrictions. Standard output opens in the current window
+  if it is empty and untitled, or in a new window otherwise. Run trusted scripts only.
 - Explicit protection against external file changes and oversized or binary
   files. The 16 MiB limit applies to opening, reloading, saving and baselines,
   so the app cannot create a file it would refuse to reopen.

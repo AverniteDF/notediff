@@ -77,6 +77,9 @@ pub fn diff_texts(baseline: &str, live: &str) -> DiffResult {
 }
 
 fn diff_texts_with_timeout(baseline: &str, live: &str, timeout: Duration) -> DiffResult {
+    if baseline == live {
+        return DiffResult::default();
+    }
     let old_lines = split_lines(baseline);
     let new_lines = split_lines(live);
     let deadline = Instant::now() + timeout;
@@ -484,36 +487,6 @@ pub fn apply_hunk(baseline: &str, live: &str, hunk: &Hunk) -> Result<String, Str
     Ok(result)
 }
 
-/// Apply every hunk at once. Accepting all hunks must produce exactly `live`;
-/// this is the primary invariant of the application.
-pub fn apply_all_hunks(baseline: &str, live: &str) -> String {
-    let old_lines = split_lines(baseline);
-    let new_lines = split_lines(live);
-    let hunks = hunks_for(&old_lines, &new_lines, Instant::now() + DIFF_TIMEOUT);
-
-    let mut out = String::with_capacity(live.len());
-    let mut old_pos = 0;
-    for hunk in &hunks {
-        if hunk.old_start < old_pos
-            || hunk.old_end() > old_lines.len()
-            || hunk.new_end() > new_lines.len()
-        {
-            return live.to_string();
-        }
-        for line in &old_lines[old_pos..hunk.old_start] {
-            out.push_str(line);
-        }
-        for line in &new_lines[hunk.new_start..hunk.new_end()] {
-            out.push_str(line);
-        }
-        old_pos = hunk.old_end();
-    }
-    for line in &old_lines[old_pos..] {
-        out.push_str(line);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,14 +545,12 @@ mod tests {
         let diff = diff_texts(old, new);
         assert_eq!(diff.hunks.len(), 1);
         assert_eq!(apply_hunk(old, new, &diff.hunks[0]).unwrap(), new);
-        assert_eq!(apply_all_hunks(old, new), new);
 
         let old = "a\nx\ny\nb\n";
         let new = "a\nb\n";
         let diff = diff_texts(old, new);
         assert_eq!(diff.hunks.len(), 1);
         assert_eq!(apply_hunk(old, new, &diff.hunks[0]).unwrap(), new);
-        assert_eq!(apply_all_hunks(old, new), new);
     }
 
     #[test]
@@ -592,7 +563,7 @@ mod tests {
         assert_eq!(diff.hunks[0].old_len, 2);
         assert_eq!(diff.hunks[0].new_start, 0);
         assert_eq!(diff.hunks[0].new_len, 3);
-        assert_eq!(apply_all_hunks(old, new), new);
+        assert_eq!(apply_hunk(old, new, &diff.hunks[0]).unwrap(), new);
 
         // Paragraph replacements on both sides of a blank line stay separate.
         let old = "one\n\ntwo\n";
@@ -603,7 +574,6 @@ mod tests {
         let old = "\n\nx\n\n\n";
         let new = "a\n\nx\n\nb\n";
         assert_eq!(diff_texts(old, new).hunks.len(), 3);
-        assert_eq!(apply_all_hunks(old, new), new);
     }
 
     #[test]
@@ -613,11 +583,11 @@ mod tests {
 
         let diff = diff_texts(without, with);
         assert!(!diff.hunks.is_empty());
-        assert_eq!(apply_all_hunks(without, with), with);
+        assert_eq!(apply_hunk(without, with, &diff.hunks[0]).unwrap(), with);
 
         let diff = diff_texts(with, without);
         assert!(!diff.hunks.is_empty());
-        assert_eq!(apply_all_hunks(with, without), without);
+        assert_eq!(apply_hunk(with, without, &diff.hunks[0]).unwrap(), without);
     }
 
     #[test]
@@ -637,15 +607,16 @@ mod tests {
         let new = "a\r\nB\nc\r\n";
         let diff = diff_texts(old, new);
         assert!(!diff.hunks.is_empty());
-        assert_eq!(apply_all_hunks(old, new), new);
+        assert_eq!(apply_hunk(old, new, &diff.hunks[0]).unwrap(), new);
     }
 
     #[test]
     fn empty_files() {
-        assert_eq!(apply_all_hunks("", ""), "");
-        assert_eq!(apply_all_hunks("", "hello\n"), "hello\n");
-        assert_eq!(apply_all_hunks("hello\n", ""), "");
-        assert_eq!(apply_all_hunks("hello", "world\n"), "world\n");
+        assert!(diff_texts("", "").is_empty());
+        for (old, new) in [("", "hello\n"), ("hello\n", "")] {
+            let hunk = &diff_texts(old, new).hunks[0];
+            assert_eq!(apply_hunk(old, new, hunk).unwrap(), new);
+        }
     }
 
     #[test]
@@ -839,16 +810,6 @@ mod tests {
             }
 
             assert_eq!(current, live, "case {case} failed to reach live text");
-        }
-    }
-
-    #[test]
-    fn applying_all_hunks_equals_live() {
-        let mut rng = Rng(0x1234_5678_9abc_def0);
-        for _ in 0..300 {
-            let baseline = random_text(&mut rng);
-            let live = random_text(&mut rng);
-            assert_eq!(apply_all_hunks(&baseline, &live), live);
         }
     }
 }

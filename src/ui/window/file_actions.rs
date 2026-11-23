@@ -6,12 +6,13 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::SystemTime;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
 
 use crate::core::LARGE_FILE_WARNING_BYTES;
-use crate::core::document::Document;
+use crate::core::document::{DiskChange, Document};
 use crate::core::fsutil;
 use crate::core::pending::{AfterOpen, ExternalCheck, PendingAction};
 use crate::core::rename::{self, BaselineMove, RenameError};
@@ -250,6 +251,7 @@ impl AppWindow {
         let document = match Document::open(path) {
             Ok(document) => document,
             Err(err) => {
+                this.pending_jump.set(None);
                 this.show_error("Could not open file", &err.open_message());
                 return;
             }
@@ -629,12 +631,15 @@ impl AppWindow {
             return;
         }
 
-        if self.doc.borrow().externally_modified() {
-            self.confirm_overwrite_save(then);
-            return;
+        let change = self.doc.borrow().disk_change();
+        match change {
+            DiskChange::Unchanged => self.save_now(then),
+            DiskChange::Modified(time) => self.confirm_overwrite_save(time, then),
+            DiskChange::Unavailable(err) => self.show_error(
+                "Could not save",
+                &format!("The current file is unavailable: {err}\n\nUse Save As to save to a different path."),
+            ),
         }
-
-        self.save_now(then);
     }
 
     fn save_now(self: &Rc<Self>, then: Option<PendingAction>) {
@@ -652,7 +657,7 @@ impl AppWindow {
         }
     }
 
-    fn confirm_overwrite_save(self: &Rc<Self>, then: Option<PendingAction>) {
+    fn confirm_overwrite_save(self: &Rc<Self>, observed: SystemTime, then: Option<PendingAction>) {
         if self.flags.external_dialog_open.replace(true) {
             return;
         }
@@ -671,7 +676,14 @@ impl AppWindow {
         dialogs::choose(&dialog, &self.window, move |response| {
             this.flags.external_dialog_open.set(false);
             if response == "overwrite" {
-                this.save_now(then);
+                let current = this.doc.borrow().disk_change();
+                if matches!(current, DiskChange::Modified(time) if time == observed)
+                    || matches!(current, DiskChange::Unchanged)
+                {
+                    this.save_now(then);
+                } else {
+                    glib::idle_add_local_once(move || this.save_then(then));
+                }
             }
         });
     }
@@ -747,6 +759,10 @@ impl AppWindow {
         }
 
         let previous = self.path_for_snapshot();
+        if previous.as_deref() == Some(canonical.as_path()) {
+            self.save_then(then);
+            return;
+        }
         match self.persist(Some(path)) {
             Ok(()) => {
                 *self.untitled_name.borrow_mut() = None;
@@ -1149,12 +1165,22 @@ impl AppWindow {
             return;
         }
 
-        let modified = self.doc.borrow().externally_modified();
-        let disk_mtime = self.doc.borrow().disk_mtime();
+        let change = self.doc.borrow().disk_change();
+        let disk_mtime = match change {
+            DiskChange::Modified(time) => time,
+            DiskChange::Unchanged => {
+                self.run_after_check(after);
+                return;
+            }
+            DiskChange::Unavailable(_) => {
+                self.toast(ToastKind::Warning, "The current file is unavailable");
+                self.run_after_check(after);
+                return;
+            }
+        };
         // After Cancel on a reload's Convert Tabs prompt, stay quiet until the
         // file changes again.
-        let declined = disk_mtime.is_some() && disk_mtime == self.flags.declined_reload_mtime.get();
-        if !modified || declined {
+        if Some(disk_mtime) == self.flags.declined_reload_mtime.get() {
             self.run_after_check(after);
             return;
         }

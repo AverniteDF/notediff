@@ -102,14 +102,16 @@ notes for details and workarounds.
   (**Copy Baseline**); the original keeps its own. If the chosen path is
   already open in another window, Save As is refused with **Could not save**
   and `That file is already open in another window.` and neither document
-  changes; saving onto the current window's own path remains allowed.
+  changes. Saving onto the current window's own path uses the same
+  external-change check as **Save**.
 - Rename or move the open file with **F2** or **Rename or Move…** in the File
   menu. Enter a new name to rename in place, or a path to move it (absolute,
   relative to the file's folder, or starting with `~/`; a folder keeps the file
-  name). The destination folder must exist and nothing is overwritten. The file
-  is moved on disk and its baseline moves with it, so Review Changes keeps
-  working. Unsaved edits are untouched. Unavailable in Diff Mode. For an
-  untitled document, this opens Save As instead.
+  name). The destination folder must exist, and an existing live destination is
+  never overwritten. The file and its baseline move together; the moved baseline
+  can replace an orphaned baseline at the destination. Unsaved edits are
+  untouched. Unavailable in Diff Mode. For an untitled document, this opens
+  Save As instead.
 - In the Rename or Move dialog, **...** (to the right of the input field) opens a file browser (starting in the
   file's folder) to pick the new folder and name; the chosen path is filled into
   the field and nothing happens until you press **Rename**.
@@ -166,16 +168,17 @@ notes for details and workarounds.
   `target`, `dist`, `build`, `venv`, `__pycache__`) and binary or oversized
   (>16 MiB) files are skipped automatically; up to 1,000 matches are shown,
   grouped into collapsible per-file sections (collapsed by default) with each
-  file's match count beside its name. For files currently open with unsaved
-  changes in any notediff window, the live in-memory buffer is searched instead
-  of the older on-disk copy (marked `unsaved` beside the match count) so line
-  numbers and selections always match what is on screen. Searches run
-  asynchronously and can be stopped with **Cancel**. Clicking a match raises the window that already owns
-  that file or opens it in a new window, and jumps directly to the matching
-  line and selection; the dialog stays open unless the match targets the
-  searching window's own open document. Each matching line appears once as a
-  single-line preview truncated around its matches (while spanning every match
-  on that line) and pre-scrolled to center the highlighted match. On lines with
+  file's match count beside its name. Queries are limited to 16 KiB. For files
+  open with unsaved changes, a copy of the in-memory text taken at search start
+  is used instead of the disk file (marked `unsaved` beside the match count).
+  Edits made after the search starts can make result positions stale; rerun the
+  search to refresh them. Searches run asynchronously and can be stopped with
+  **Cancel**. Clicking a match raises the window that already owns the file or
+  opens it in a new window. In the editor it jumps to the match; if the target
+  is in Diff Mode, notediff says **Leave Diff Mode to jump to the search
+  match**. The dialog stays open unless the result jumps within the searching
+  window. Each matching line appears once, with a bounded preview around the
+  highlighted match. On lines with
   multiple matches, the line number appears in bold and its segment can be
   clicked to cycle which match is bolded, underlined and centered; on
   single-match lines the line number segment is not clickable. Clicking a
@@ -270,9 +273,9 @@ notes for details and workarounds.
   instead. Tabs in pasted or
   dropped text are converted to spaces automatically. The **Tab** key inserts
   one space (in overwrite mode it overwrites the next character with a space
-  instead), or indents every selected line by one space; **Shift+Tab** removes
-  one leading space from the selected lines (or the current line when nothing
-  is selected).
+   instead), or indents each selected non-blank line by one space.
+   **Shift+Tab** removes one leading space from the selected lines (or the
+   current line when nothing is selected).
 - **About notediff** (menu) shows everything at once: the version (a blue
   button; click it to copy the version number), a short description, the
   release date, the copyright line and the no-warranty / MIT License notice.
@@ -316,7 +319,9 @@ notes for details and workarounds.
   review untouched and continues any pending action, but does not acknowledge
   the disk change, so the warning can return on the next check. Saving with
   **Ctrl+S** also checks the modification time and asks before overwriting a
-  file that changed on disk.
+  file that changed on disk. If the file is missing or unavailable, **Could
+  not save** leaves the draft intact; use **Save As** to save to a different
+  path, leaving Diff Mode first if needed.
 - Quit with **Ctrl+Q** or **Quit** in the main menu. Every window is handled at
   once through the normal close flow: a clean window with no accepted review
   changes closes immediately, while a dirty document gets its save prompt and a
@@ -329,8 +334,9 @@ Files are read and written as UTF-8. CRLF, LF and mixed endings are preserved
 exactly. Files containing a NUL byte are refused. Files above 1 MiB show a
 warning at open and reload because diffing runs in-process. Files above 16 MiB
 are refused at open and reload, and a buffer that grows above 16 MiB cannot be
-saved until text is removed. New line breaks, including Enter, follow the
-document's dominant ending so a CRLF file stays CRLF.
+saved until text is removed. Inserted line breaks, including Enter, are
+normalized when the document has a uniform LF or CRLF style (LF for a document
+with no breaks yet). Mixed endings do not trigger normalization.
 
 ## Review Changes
 
@@ -723,9 +729,13 @@ header, and uses the same 16 MiB cap as documents. Symlinks are resolved, so a
 link and its target share one baseline.
 No baseline or other persistent artifact is written next to user documents.
 Snapshot writes and live-file saves use a short-lived hidden temporary file and
-a rename; it is normally removed immediately. A failure while writing the
-temporary file leaves the original file untouched; only a mount that rejects the
-rename itself falls back to a direct write.
+a rename. A failure while writing the temporary file leaves the original file
+untouched. Only live-file saves can fall back to direct writes if a shared
+mount rejects the rename. New baseline files and directories are private to the
+current user. The store root is secured when notediff next writes a baseline;
+if you have an existing store, make sure its root is accessible only to your
+user rather than waiting for another write. Also check any backups or copies
+of the store.
 
 **Manage App…** (menu), **Baseline Snapshots** tab, walks the store and lists:
 
@@ -766,13 +776,13 @@ for you.
 ## Run Script
 
 Press **F6** or choose **Run Script…** in the main menu to run an
-executable script and open its output in a new notediff window. Because output
-opens in a new window without modifying the current document, **Run Script…**
-remains available while Diff Mode is open.
+executable script and open its output in notediff. An empty untitled window is
+reused; otherwise output opens in a new window without modifying the current
+document. **Run Script…** remains available while Diff Mode is open.
 
 For the complete authoring specification (all field types, CLI/environment
 parameter passing, sandboxing details and language examples), see
-[Writing Scripts](scripts.md).
+[Writing Scripts](scripts.md) or click **ℹ️** in the Run Script dialog header.
 
 ### Discovering and choosing scripts
 
@@ -856,28 +866,37 @@ and `NOTEDIFF_WRITABLE_DIR` (when applicable).
 
 ### Sandboxing
 
-When `bwrap` (bubblewrap) is installed, the **Safety** selector in the footer
+When `bwrap` (bubblewrap) is installed and usable, the **Safety** selector in the footer
 offers three modes:
 
 - **Read-Only Sandbox** (default): mounts the host filesystem read-only with a
-  private ephemeral `/tmp`, preventing scripts from modifying user files.
+  private ephemeral `/tmp`, restricting direct writes to host files.
 - **Allow Writing to Folder…**: keeps the rest of the filesystem read-only and
   grants write access only to the chosen folder.
 - **No Sandbox**: runs the script directly with normal user permissions.
 
-If `bwrap` is not installed, the dialog falls back to **No Sandbox**.
+If `bwrap` is absent or blocked, **No Sandbox** is the only available mode and
+the footer says **Bubblewrap sandboxing is unavailable**.
+Running in that mode always asks **Run without a sandbox?**; choose **Run
+Without Sandbox** to proceed or **Cancel** to abort. The sandbox modes are not
+safe for untrusted code: scripts can still read accessible files and inherited
+environment variables, and can use the network and desktop session services.
+Only run scripts you trust.
 
 ### Output and errors
 
-- Scripts run asynchronously; click **Cancel** while running to stop the script.
+- Scripts run asynchronously; click **Cancel** while running to stop the script
+  process group. A background process cannot keep the run waiting indefinitely
+  just by holding an output pipe open.
 - On exit status 0, `stdout` opens in the current window if it is empty and
   untitled, or in a new editor window otherwise, with a timestamped unsaved
   title (`<script>-YYYY-MM-DD-HHMMSS.<ext>`) pre-filled in **Save As**. Closing
   a non-empty output window without saving prompts **Save changes?** like any
   other unsaved document. If `stdout` contains tab characters, the window opens
-  read-only under notediff's no-tab policy. Any `stderr` summary is shown as a
-  toast in the output window.
+  read-only under notediff's no-tab policy. The first non-empty `stderr` line
+  is shown as a summary toast unless a large-output or tab warning takes precedence.
 - Output must be valid UTF-8, contain no NUL bytes, and stay within notediff's
   16 MiB document limit (output over 1 MiB shows a warning toast).
-- On a non-zero exit status or validation error, the Run Script dialog stays
-  open and displays an error dialog with the exit status and `stderr` output.
+- On a non-zero exit status or output validation error, the Run Script dialog
+  stays open. A non-zero exit includes its status and captured `stderr`;
+  validation errors explain why the output could not be opened.

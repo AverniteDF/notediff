@@ -28,7 +28,7 @@ src/
     document.rs         live path, saved text and character count, mtime,
                         preferred line ending, size/NUL-refusing reads,
                         save-size limit, rename
-    snapshot_store.rs   canonical path mapping, atomic writes, scan,
+    snapshot_store.rs   canonical path mapping, private atomic writes, scan,
                         link (move/copy) and baseline move
     undo.rs             generic bounded in-memory undo stack (`UndoStack<T>`)
     textstats.rs        status-bar numbers: byte and character counts, line count,
@@ -39,8 +39,8 @@ src/
     tabs.rs             no-tab policy helpers: tab detection and conversion
     textlines.rs        GTK-compatible line breaks, splitting and byte offsets
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
-    find_in_files.rs    recursive UTF-8 literal search with glob filters and
-                        cancellable traversal
+    find_in_files.rs    recursive UTF-8 literal search with glob filters,
+                        cancellable matching and bounded hit previews
     indent.rs           indentation editing: increase including empty lines,
                         strict decrease, double and halve
     whitespace.rs       leading/trailing ASCII space/tab detection, non-empty
@@ -60,11 +60,11 @@ src/
     rename.rs           plan a rename or move (name or path); move a file
                         with its baseline
     scripts.rs          script metadata header parsing, discovery, CLI/env
-                        invocation building and sandboxed execution
+                        invocation building and process-group execution
     session.rs          Diff Mode session: focus, inspection, accept, accept all,
                         bounded undo (100 entries or 64 MiB)
-    fsutil.rs           atomic replace with a rename-only fallback, bounded
-                        UTF-8 reads, regular-file/NUL/size refusal, path helpers
+    fsutil.rs           atomic replacement, private baseline writes, no-replace
+                        moves, bounded UTF-8 reads and path helpers
   ui/
     window.rs           main window: shared state, widget construction, status
                         updates and the registry that owns every open window
@@ -129,7 +129,8 @@ with random texts, CRLF, LF, lone CR and U+2029 endings.
 
 Full diffing and inspection inline refinement each use a one-second time budget. A timed-out diff
 is still valid; it may be less minimal, but every hunk range remains usable.
-`apply_all_hunks` builds its result in one pass rather than re-diffing per hunk.
+**Accept All** copies the exact live text in one undoable step. The property
+test still exercises accepting individual hunks in arbitrary order.
 
 ## Tests
 
@@ -170,7 +171,10 @@ an example theme as a user bundle, saved-ID fallback without rewriting, and exis
 editor plus all four diff buffers. Ordinary unit tests cover descriptor parsing,
 discovery, colour fallback, contrast and stylesheet substitution, regular-file
 read rejection, atomic-write fallback policy and permissions, save-size limits,
-and the undo byte budget.
+and the undo byte budget. The smoke test checks that closing Find in Files and
+Run Script releases their state. Core tests cover search cancellation and
+bounded previews, private baselines, non-overwriting moves, and cancelling and
+finishing scripts with inherited output pipes.
 
 ```sh
 cargo test gtk_window_smoke -- --ignored
@@ -231,17 +235,19 @@ so a launch does not fsync them again.
 
 ## Notes and limitations
 
-- One baseline per file, no history. Replacing the live file outside notediff
-  (rename, move, symlink retarget) breaks the association; either start a new
-  baseline at any time or re-link the old one in **Manage App… → Baseline
-  Snapshots**.
+- One baseline per canonical path, no history. Renaming, moving or retargeting
+  a symlink outside notediff can change the path used for the association.
+  Replacing a file at the same canonical path keeps its baseline. If the path
+  changes, start a fresh baseline or re-link the old one in **Manage App… →
+  Baseline Snapshots**.
 - Hunk rejection happens by leaving Diff Mode and editing the live text;
   rejection is not an in-Diff-Mode action.
 - Files above 16 MiB are refused at open and reload, and a buffer that grows
   above that limit cannot be saved. The same limit applies to baselines, so the
   app cannot create a file it would refuse to reopen.
 - Change notification relies on modification times, which is the portable
-  approach for ChromeOS shared folders.
+  approach for ChromeOS shared folders. A missing or inaccessible current path
+  is treated separately, and in-place saves are refused while it is unavailable.
 - Quit handles every window at once: clean windows close immediately, while
   dirty windows and windows with accepted review changes each show their prompt.
   Cancelling a prompt leaves that window open; windows already closed stay

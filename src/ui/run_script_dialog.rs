@@ -45,6 +45,21 @@ pub fn present(
     state.dialog.present(Some(parent));
 }
 
+#[cfg(test)]
+pub(super) fn close_for_smoke(parent: &adw::ApplicationWindow) -> impl Fn() -> bool + use<> {
+    let state = Rc::new(DialogState::new(
+        parent,
+        None,
+        Box::new(|| {}),
+        Box::new(|_, _| {}),
+    ));
+    let weak = Rc::downgrade(&state);
+    state.wire_signals();
+    state.dialog.present(Some(parent));
+    state.dialog.close();
+    move || weak.upgrade().is_none()
+}
+
 enum FieldWidget {
     Text(gtk::Entry),
     Multiline(gtk::TextBuffer),
@@ -239,7 +254,7 @@ impl DialogState {
         footer.append(&writable_dir_button);
 
         if !bwrap_ok {
-            let hint = gtk::Label::new(Some("Install bubblewrap (bwrap) to enable sandboxing"));
+            let hint = gtk::Label::new(Some("Bubblewrap sandboxing is unavailable"));
             hint.add_css_class("caption");
             hint.add_css_class("dim-label");
             footer.append(&hint);
@@ -366,18 +381,21 @@ impl DialogState {
                     if let Some(cancel) = this.running_cancel.borrow().as_ref() {
                         cancel.cancel();
                     } else {
-                        this.start_run();
+                        this.request_run();
                     }
                 }
             });
         }
 
         // Sole strong owner of `DialogState`; released when the dialog closes.
-        let keep_alive = self.clone();
+        let keep_alive = Cell::new(Some(self.clone()));
         self.dialog.connect_closed(move |_| {
+            let Some(keep_alive) = keep_alive.take() else {
+                return;
+            };
             if let Some(cancel) = keep_alive.running_cancel.borrow().as_ref() {
                 cancel.cancel();
-            }
+            };
         });
     }
 
@@ -1176,6 +1194,32 @@ impl DialogState {
             }
             Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
         });
+    }
+
+    fn request_run(self: &Rc<Self>) {
+        if !matches!(self.selected_sandbox(), SandboxMode::None) {
+            self.start_run();
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        dialogs::ask(
+            &self.dialog,
+            "Run without a sandbox?",
+            "This script will run with your normal permissions and can read or change your files. Only continue if you trust it.",
+            &[
+                Response::new("cancel", "Cancel"),
+                Response::destructive("run", "Run Without Sandbox"),
+            ],
+            "cancel",
+            "cancel",
+            move |response| {
+                if response == "run"
+                    && let Some(this) = weak.upgrade()
+                {
+                    this.start_run();
+                }
+            },
+        );
     }
 
     fn finish_run(

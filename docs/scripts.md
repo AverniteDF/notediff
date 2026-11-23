@@ -2,7 +2,7 @@
 
 `notediff`'s **Run Script…** (`F6`) feature lets you run local executable
 scripts from a dynamically generated GUI form and open their `stdout` directly
-in a new editor window.
+in the current editor if it is empty and untitled, or in a new window otherwise.
 
 This document specifies everything needed to write, install, and debug your own
 scripts.
@@ -102,7 +102,9 @@ Each `[field.<id>]` section defines one input control, rendered in declaration
 order.
 
 - `<id>` must be 1–64 ASCII characters, start with a letter or `_`, and contain
-  only letters, digits, `_`, or `-`. IDs must be unique within a script.
+  only letters, digits, `_`, or `-`. IDs must be unique within a script even
+  after uppercasing and replacing `-` with `_` (for example, `my-file` and
+  `MY_FILE` cannot both be used).
 
 ### Field Types
 
@@ -199,24 +201,31 @@ by the host, the **Safety** selector in the dialog footer offers three modes:
   ```text
   bwrap --die-with-parent --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp -- <script> [args...]
   ```
-  The entire host filesystem is mounted read-only; `/tmp` is a private,
-  ephemeral `tmpfs` so scripts and interpreters can still create temporary
-  files without modifying user files.
+  The host filesystem is mounted read-only, with private ephemeral `/tmp` for
+  temporary writes. This hides existing host files under `/tmp` from the script.
 - **Allow Writing to Folder…** (`sandbox = writable-dir`):
-  Same as above, plus `--bind <dir> <dir>` so writes are permitted only inside
-  the single user-selected folder (and `/tmp`).
+  Same as above, plus `--bind <dir> <dir>` to permit direct writes inside the
+  user-selected folder as well.
 - **No Sandbox** (`sandbox = none`):
   Executes `<script> [args...]` directly with normal user permissions.
 
-If `bwrap` is unavailable or blocked by the environment, `notediff` falls back
-to **No Sandbox** automatically.
+If `bwrap` is unavailable or blocked, **No Sandbox** is the only available
+mode. Selecting a script that defaults to `none` or running without bubblewrap
+does not bypass confirmation: choose **Run Without Sandbox** in the **Run
+without a sandbox?** prompt to proceed.
+
+**Only run scripts you trust.** These modes restrict direct filesystem writes,
+not reads, the inherited environment, the network, or desktop session services.
+They are not an isolation boundary for untrusted scripts.
 
 ---
 
 ## 6. Output, Errors & Limits
 
 - **Asynchronous & cancellable:** Scripts run on a background thread. Clicking
-  **Cancel** (or closing the dialog) terminates the running process.
+  **Cancel** (or closing the dialog) terminates the script process group.
+  A background process that holds an output pipe open does not delay
+  completion indefinitely; keep output-producing jobs in the foreground.
 - **`stdout` → editor window (on exit status `0`):**
   - Must be valid UTF-8, contain no NUL bytes, and not exceed **16 MiB**
     (matching `notediff`'s document limit). Exceeding 16 MiB stops the script
@@ -236,8 +245,9 @@ to **No Sandbox** automatically.
   - Captured up to **256 KiB** (further bytes are drained and truncated with
     `… (stderr truncated)` so the child never blocks on a full pipe).
   - On exit status `0`, the **first non-empty line** of `stderr` (up to 140
-    characters) is shown as an info toast in the new window. Emit a concise
-    one-line summary on `stderr` if you want status feedback in the UI.
+     characters) is shown as an info toast in the output window unless a
+     large-output or tab warning takes precedence. Emit a concise one-line
+     summary on `stderr` if you want status feedback in the UI.
   - On any non-zero exit status, the **Run Script** dialog stays open and shows
     an error dialog containing the exit code and captured `stderr` so the user
     can adjust inputs and retry.

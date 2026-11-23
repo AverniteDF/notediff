@@ -125,8 +125,7 @@ impl AppWindow {
             return;
         }
 
-        // Saving is deferred until the user tries to accept something (see
-        // `require_saved`), so unsaved edits can be reviewed.
+        // Saving is deferred until Confirm, so unsaved edits can be reviewed.
         self.check_external(ExternalCheck::EnterDiff);
     }
 

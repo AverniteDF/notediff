@@ -233,6 +233,7 @@ fn gtk_window_smoke() {
     inline_inspection_scenario(&app, &dir, &store);
     whitespace_highlight_scenario(&app, &dir, &store);
     caret_navigation_scenario(&app, &dir, &store);
+    async_dialog_ownership_scenario(&app, &store);
     script_output_window_scenario(&app, &dir, &store);
     find_in_files_jump_scenario(&app, &dir, &store);
     blank_marker_scenario(&app, &dir, &store);
@@ -246,6 +247,19 @@ fn gtk_window_smoke() {
     assert!(app.windows().is_empty());
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(theme_dir).unwrap();
+}
+
+fn async_dialog_ownership_scenario(app: &adw::Application, store: &SnapshotStore) {
+    let window = AppWindow::with_store(app, store.clone());
+    window.window.present();
+    wait_for(|| window.window.is_mapped());
+    wait_for(crate::ui::run_script_dialog::close_for_smoke(
+        &window.window,
+    ));
+    wait_for(crate::ui::find_in_files_dialog::close_for_smoke(
+        &window.window,
+    ));
+    window.window.destroy();
 }
 
 fn gutter_selection_scenario(app: &adw::Application, store: SnapshotStore) {
@@ -1724,7 +1738,8 @@ fn save_external_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSt
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "disk two\n");
     assert!(window.doc.borrow().externally_modified());
 
-    window.save_then(None);
+    // Save As to the current path must use the same overwrite guard.
+    window.save_as_path(&path, None);
     wait_for(|| {
         window
             .window
@@ -1743,6 +1758,23 @@ fn save_external_scenario(app: &adw::Application, dir: &Path, store: &SnapshotSt
     wait_for(|| window.window.visible_dialog().is_none());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "local edit\n");
     assert!(!window.doc.borrow().externally_modified());
+
+    std::fs::remove_file(&path).unwrap();
+    window.set_editor_text("draft after removal\n");
+    window.save_then(None);
+    wait_for(|| window.window.visible_dialog().is_some());
+    let dialog = window
+        .window
+        .visible_dialog()
+        .unwrap()
+        .downcast::<adw::AlertDialog>()
+        .unwrap();
+    assert_eq!(dialog.heading().as_deref(), Some("Could not save"));
+    assert!(dialog.body().contains("The current file is unavailable"));
+    assert!(!path.exists());
+    assert_eq!(window.current_text(), "draft after removal\n");
+    dialog.force_close();
+    wait_for(|| window.window.visible_dialog().is_none());
     window.window.destroy();
 }
 fn quit_scenario(app: &adw::Application, store: SnapshotStore) {

@@ -25,7 +25,7 @@ git ls-remote --tags origin 'v*'
 ```
 
 - Confirm whether the release is source-only or should include built assets.
-  The `v1.0.0`, `v1.1.0`, `v1.2.0` and `v1.3.0` releases are source-only.
+  Default to source-only unless the user requests assets.
 - Confirm the GitHub CLI is installed and authenticated before starting
   (section 6). The token needs the `repo` scope, and HTTPS pushes need
   `gh auth setup-git` when no credential helper is configured.
@@ -81,7 +81,7 @@ On a ChromeOS/Sommelier host, the explicit `GDK_BACKEND=x11` and
 `NO_AT_BRIDGE=1` avoid the known Wayland-bridge display failure. CI also runs
 the same checks on Debian trixie.
 
-Optional local deployment check:
+Install the build locally for the deployment check:
 
 ```sh
 ./install.sh
@@ -151,11 +151,15 @@ gh auth setup-git
 
 ## 7. Create the GitHub release
 
-Extract the release section from `CHANGELOG.md` (replace `X.Y.Z`), for example:
+Build the release body from the synopsis and the release section in
+`CHANGELOG.md` (replace the synopsis and `X.Y.Z`), for example:
 
 ```sh
-awk '/^## \[X\.Y\.Z\]/{flag=1; next} /^## \[/{flag=0} flag' \
-  CHANGELOG.md > /tmp/notediff-X.Y.Z-release.md
+synopsis='One sentence summarizing this release.'
+{
+  printf '%s\n\n' "$synopsis"
+  awk '/^## \[X\.Y\.Z\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md
+} > /tmp/notediff-X.Y.Z-release.md
 ```
 
 Create the release after the tag is pushed:
@@ -233,5 +237,5 @@ Optionally redeploy locally with `./install.sh`.
 - [ ] `main` and the annotated tag are pushed after approval and point at the
       same commit.
 - [ ] The GitHub release is source-only unless assets were requested, is
-      **Latest**, and its body matches the changelog.
+  **Latest**, and its body matches the synopsis plus the changelog section.
 - [ ] The release is public, not a draft or prerelease.

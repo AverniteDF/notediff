@@ -63,6 +63,22 @@ pub fn present(
     }
 }
 
+#[cfg(test)]
+pub(super) fn close_for_smoke(parent: &adw::ApplicationWindow) -> impl Fn() -> bool + use<> {
+    let state = Rc::new(DialogState::new(
+        parent,
+        glib::home_dir(),
+        None,
+        Box::new(HashMap::new),
+        Box::new(|_, _, _, _| false),
+    ));
+    let weak = Rc::downgrade(&state);
+    state.wire_signals();
+    state.dialog.present(Some(parent));
+    state.dialog.close();
+    move || weak.upgrade().is_none()
+}
+
 struct DialogState {
     parent: adw::ApplicationWindow,
     dialog: adw::Dialog,
@@ -334,8 +350,11 @@ impl DialogState {
         }
 
         // Sole strong owner of `DialogState`, released when the dialog closes.
-        let keep_alive = self.clone();
+        let keep_alive = Cell::new(Some(self.clone()));
         self.dialog.connect_closed(move |_| {
+            let Some(keep_alive) = keep_alive.take() else {
+                return;
+            };
             keep_alive.save_inputs();
             if let Some(cancel) = keep_alive.running_cancel.borrow().as_ref() {
                 cancel.store(true, Ordering::Relaxed);
@@ -674,9 +693,10 @@ impl DialogState {
         line_segment.set_vexpand(true);
         line_segment.append(&line_label);
 
-        let first_highlight = hit.hits.first().map(|h| h.byte_range);
+        let first = &hit.hits[0];
+        let first_highlight = Some(first.byte_range);
         let preview_label = gtk::Label::new(None);
-        preview_label.set_markup(&format_preview_markup(&hit.line_text, first_highlight));
+        preview_label.set_markup(&format_preview_markup(&first.preview, first_highlight));
         preview_label.set_xalign(0.0);
         preview_label.set_halign(gtk::Align::Start);
         preview_label.set_margin_top(4);
@@ -725,7 +745,6 @@ impl DialogState {
 
             let line_click = gtk::GestureClick::new();
             line_click.set_button(1);
-            let line_text = hit.line_text.clone();
             let line_hits = hit.hits.clone();
             let active = active_idx.clone();
             let label_ref = preview_label.downgrade();
@@ -733,15 +752,24 @@ impl DialogState {
             line_click.connect_released(move |_, _, _, _| {
                 let next = (active.get() + 1) % line_hits.len();
                 active.set(next);
-                let range = line_hits[next].byte_range;
+                let hit = &line_hits[next];
+                let range = Some(hit.byte_range);
                 if let Some(label) = label_ref.upgrade() {
-                    label.set_markup(&format_preview_markup(&line_text, Some(range)));
+                    label.set_markup(&format_preview_markup(&hit.preview, range));
                 }
-                if let (Some(hadj), Some(ratio)) = (
-                    hadj_ref.upgrade(),
-                    match_center_ratio(&line_text, Some(range)),
-                ) {
+                if let (Some(hadj), Some(ratio)) =
+                    (hadj_ref.upgrade(), match_center_ratio(&hit.preview, range))
+                {
                     center_preview(&hadj, ratio);
+                    let hadj = hadj.downgrade();
+                    let active = active.clone();
+                    glib::idle_add_local_once(move || {
+                        if active.get() == next
+                            && let Some(hadj) = hadj.upgrade()
+                        {
+                            center_preview(&hadj, ratio);
+                        }
+                    });
                 }
             });
             line_segment.add_controller(line_click);
@@ -776,7 +804,7 @@ impl DialogState {
         });
         preview_scroll.add_controller(text_click);
 
-        let ratio = match_center_ratio(&hit.line_text, first_highlight);
+        let ratio = match_center_ratio(&first.preview, first_highlight);
         let hadj_weak = hadj.downgrade();
 
         row.append(&line_segment);

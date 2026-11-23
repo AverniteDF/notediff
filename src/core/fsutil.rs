@@ -1,11 +1,12 @@
+use std::ffi::CString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -28,8 +29,40 @@ pub fn atomic_write(path: &Path, contents: &str, create_parent: bool) -> io::Res
         fs::create_dir_all(parent)?;
     }
 
+    replace(path, contents, WriteMode::Ordinary)
+}
+
+#[derive(Clone, Copy)]
+enum WriteMode {
+    Ordinary,
+    Private { replace: bool },
+}
+
+/// Write a baseline without ever exposing it using the process's default mode.
+pub fn write_private(root: &Path, path: &Path, contents: &str, overwrite: bool) -> io::Result<()> {
+    if let Some(parent) = parent_dir(root) {
+        fs::create_dir_all(parent)?;
+    }
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(root)?;
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(root)?;
+    if directory.metadata()?.permissions().mode() & 0o077 != 0 {
+        directory.set_permissions(fs::Permissions::from_mode(0o700))?;
+    }
+    builder.create(parent_dir(path).unwrap_or(root))?;
+    replace(path, contents, WriteMode::Private { replace: overwrite })
+}
+
+fn replace(path: &Path, contents: &str, mode: WriteMode) -> io::Result<()> {
     let parent = parent_dir(path).unwrap_or_else(|| Path::new("."));
-    let existing_permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
+    let existing_permissions = match mode {
+        WriteMode::Ordinary => fs::metadata(path).ok().map(|meta| meta.permissions()),
+        WriteMode::Private { .. } => None,
+    };
 
     let mut last_rename_error = None;
     for attempt in 0..4 {
@@ -52,8 +85,9 @@ pub fn atomic_write(path: &Path, contents: &str, create_parent: bool) -> io::Res
         // file is being written. The mode is masked by the process umask; the
         // exact destination permissions are applied after the write. New files
         // keep the normal umask-derived mode.
-        #[cfg(unix)]
-        if let Some(permissions) = &existing_permissions {
+        if matches!(mode, WriteMode::Private { .. }) {
+            options.mode(0o600);
+        } else if let Some(permissions) = &existing_permissions {
             options.mode(permissions.mode() & 0o777);
         }
         let mut file = match options.open(&temp_path) {
@@ -73,8 +107,8 @@ pub fn atomic_write(path: &Path, contents: &str, create_parent: bool) -> io::Res
         let written = file
             .write_all(contents.as_bytes())
             .and_then(|()| file.sync_all());
-        drop(file);
         if let Err(err) = written {
+            drop(file);
             let _ = fs::remove_file(&temp_path);
             return Err(err);
         }
@@ -83,10 +117,15 @@ pub fn atomic_write(path: &Path, contents: &str, create_parent: bool) -> io::Res
         // in that case, which is never wider than the intended destination
         // permissions for an existing file.
         if let Some(permissions) = &existing_permissions {
-            let _ = fs::set_permissions(&temp_path, permissions.clone());
+            let _ = file.set_permissions(permissions.clone());
         }
+        drop(file);
 
-        match fs::rename(&temp_path, path) {
+        let renamed = match mode {
+            WriteMode::Private { replace: false } => rename_noreplace(&temp_path, path),
+            _ => fs::rename(&temp_path, path),
+        };
+        match renamed {
             Ok(()) => {
                 sync_parent_dir(parent);
                 return Ok(());
@@ -109,7 +148,7 @@ pub fn atomic_write(path: &Path, contents: &str, create_parent: bool) -> io::Res
     let Some(rename_error) = last_rename_error else {
         return Err(io::Error::other("atomic write failed without an error"));
     };
-    if !may_fall_back_to_direct_write(&rename_error) {
+    if !matches!(mode, WriteMode::Ordinary) || !may_fall_back_to_direct_write(&rename_error) {
         return Err(rename_error);
     }
 
@@ -162,8 +201,16 @@ fn direct_write(path: &Path, contents: &str) -> io::Result<()> {
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
+        .truncate(false)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    file.set_len(0)?;
     file.write_all(contents.as_bytes())?;
     file.sync_all()
 }
@@ -204,7 +251,11 @@ fn read_utf8_limited_meta(
             limit: max_bytes,
         });
     }
-    let file = fs::File::open(path).map_err(ReadError::Io)?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(ReadError::Io)?;
     let open_meta = file.metadata().map_err(ReadError::Io)?;
     if !open_meta.is_file() {
         return Err(ReadError::NotRegularFile);
@@ -298,7 +349,14 @@ pub fn canonical_target(path: &Path) -> io::Result<PathBuf> {
 }
 
 pub fn file_mtime(path: &Path) -> io::Result<SystemTime> {
-    fs::metadata(path)?.modified()
+    let meta = fs::metadata(path)?;
+    if !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    meta.modified()
 }
 
 /// `$XDG_DATA_HOME`, falling back to `~/.local/share`.
@@ -314,42 +372,96 @@ pub fn data_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".local/share"))
 }
 
-/// Move a file. A plain rename is used when possible; when `from` and `to` are
-/// on different filesystems the file is copied and the original removed.
-/// Returns true when the copy fallback was used (the new file then has a new
-/// modification time). The caller has checked that `to` does not exist.
-pub fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
-    match fs::rename(from, to) {
-        Ok(()) => Ok(false),
+fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    let from = CString::new(from.as_os_str().as_bytes())?;
+    let to = CString::new(to.as_os_str().as_bytes())?;
+    // SAFETY: both paths are live, NUL-terminated C strings for the call.
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+pub struct CopiedFile {
+    pub source_mtime: Option<SystemTime>,
+    pub destination_mtime: Option<SystemTime>,
+}
+
+/// Move without replacing an existing destination. When a copy is required,
+/// return its timestamps so the caller can preserve external-change detection.
+pub fn move_file(from: &Path, to: &Path) -> io::Result<Option<CopiedFile>> {
+    match rename_noreplace(from, to) {
+        Ok(()) => Ok(None),
         Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
-            let mut src = fs::File::open(from)?;
-            let src_permissions = src.metadata().ok().map(|meta| meta.permissions());
-            let mut dst = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(to)?;
-            if let Err(err) = io::copy(&mut src, &mut dst).and_then(|_| {
-                if let Some(permissions) = src_permissions {
-                    let _ = dst.set_permissions(permissions);
-                }
-                dst.sync_all()
-            }) {
-                drop(dst);
-                let _ = fs::remove_file(to);
-                return Err(err);
-            }
-            drop(dst);
-            if let Some(parent) = parent_dir(to) {
-                sync_parent_dir(parent);
-            }
-            if let Err(err) = fs::remove_file(from) {
-                let _ = fs::remove_file(to);
-                return Err(err);
-            }
-            Ok(true)
+            copy_then_remove(from, to).map(Some)
         }
         Err(err) => Err(err),
     }
+}
+
+fn copy_then_remove(from: &Path, to: &Path) -> io::Result<CopiedFile> {
+    let mut src = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(from)?;
+    let meta = src.metadata()?;
+    if !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    let source_mtime = meta.modified().ok();
+    let mut dst = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(meta.permissions().mode() & 0o700)
+        .open(to)?;
+    if let Err(err) = io::copy(&mut src, &mut dst).and_then(|_| {
+        let _ = dst.set_permissions(meta.permissions());
+        dst.sync_all()
+    }) {
+        drop(dst);
+        let _ = fs::remove_file(to);
+        return Err(err);
+    }
+    let destination_mtime = dst.metadata().and_then(|meta| meta.modified()).ok();
+    drop(dst);
+    if let Some(parent) = parent_dir(to) {
+        sync_parent_dir(parent);
+    }
+    let remove_source = fs::symlink_metadata(from).and_then(|current| {
+        if current.dev() != meta.dev()
+            || current.ino() != meta.ino()
+            || current.len() != meta.len()
+            || current.modified().ok() != source_mtime
+            || current.ctime() != meta.ctime()
+            || current.ctime_nsec() != meta.ctime_nsec()
+        {
+            return Err(io::Error::other(
+                "The source changed while it was being copied.",
+            ));
+        }
+        fs::remove_file(from)
+    });
+    if let Err(err) = remove_source {
+        let _ = fs::remove_file(to);
+        return Err(err);
+    }
+    Ok(CopiedFile {
+        source_mtime,
+        destination_mtime,
+    })
 }
 
 /// Remove empty directories from `start` upwards, stopping at `stop`
@@ -572,9 +684,46 @@ mod tests {
         let from = dir.join("a.txt");
         let to = dir.join("b.txt");
         fs::write(&from, "x").unwrap();
-        assert!(!move_file(&from, &to).unwrap());
+        assert!(move_file(&from, &to).unwrap().is_none());
         assert!(!from.exists());
         assert_eq!(fs::read_to_string(&to).unwrap(), "x");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn move_file_never_replaces_existing_destination() {
+        let dir = test_dir("move-no-replace");
+        let from = dir.join("from.txt");
+        let to = dir.join("to.txt");
+        fs::write(&from, "source").unwrap();
+        fs::write(&to, "destination").unwrap();
+        assert_eq!(
+            move_file(&from, &to).err().unwrap().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read_to_string(&from).unwrap(), "source");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "destination");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn copy_fallback_preserves_private_permissions_and_reports_timestamps() {
+        let dir = test_dir("copy-move");
+        let from = dir.join("from.txt");
+        let to = dir.join("to.txt");
+        fs::write(&from, "private").unwrap();
+        fs::set_permissions(&from, fs::Permissions::from_mode(0o600)).unwrap();
+        let source_mtime = file_mtime(&from).unwrap();
+
+        let copied = copy_then_remove(&from, &to).unwrap();
+        assert_eq!(copied.source_mtime, Some(source_mtime));
+        assert_eq!(copied.destination_mtime, Some(file_mtime(&to).unwrap()));
+        assert_eq!(fs::read_to_string(&to).unwrap(), "private");
+        assert_eq!(
+            fs::metadata(&to).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!from.exists());
         let _ = fs::remove_dir_all(dir);
     }
 

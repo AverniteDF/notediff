@@ -1170,9 +1170,8 @@ impl AppWindow {
         });
     }
 
-    /// Open a Find in Files match: raise the owning window if already open,
-    /// reuse this window if empty and untitled, otherwise open a new window,
-    /// and jump to the matching line and selection.
+    /// Open a Find in Files match: raise the owner or open a new window,
+    /// then jump to the match when the target editor is available.
     pub(super) fn open_search_match(
         self: &Rc<Self>,
         path: &Path,
@@ -1183,10 +1182,15 @@ impl AppWindow {
         if let Some(target) = window_for_open_path(path) {
             let same_window = Rc::ptr_eq(&target, self);
             target.window.present();
-            if !target.diff_active() {
-                target.jump_to_match(line, col_char, match_chars);
-                target.editor_view.grab_focus();
+            if target.diff_active() {
+                target.toast(
+                    ToastKind::Info,
+                    "Leave Diff Mode to jump to the search match",
+                );
+                return false;
             }
+            target.jump_to_match(line, col_char, match_chars);
+            target.editor_view.grab_focus();
             return same_window;
         }
         if let Some(app) = self

@@ -21,6 +21,12 @@ pub struct Document {
     line_ending: LineEnding,
 }
 
+pub enum DiskChange {
+    Unchanged,
+    Modified(SystemTime),
+    Unavailable(io::Error),
+}
+
 impl Document {
     pub fn new() -> Self {
         Self::default()
@@ -51,7 +57,7 @@ impl Document {
         self.saved_chars
     }
 
-    /// The document's dominant line ending, used when inserting new breaks.
+    /// The document's line-ending style, used when inserting new breaks.
     /// It is derived from the last open, save or reload and updated by
     /// explicit line-ending conversion.
     pub fn line_ending(&self) -> LineEnding {
@@ -116,12 +122,20 @@ impl Document {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "document has no path"))?;
         let copied = move_file(&old, new_path)?;
         self.path = Some(canonical_target(new_path).unwrap_or_else(|_| new_path.to_path_buf()));
-        if copied {
-            // A cross-filesystem move is a copy, so the mtime is new. Adopt it
-            // so no false "changed on disk" prompt follows.
-            self.last_mtime = file_mtime(new_path).ok();
+        if let Some(copy) = copied {
+            self.record_copy(copy);
         }
         Ok(())
+    }
+
+    fn record_copy(&mut self, copy: super::fsutil::CopiedFile) {
+        // Only acknowledge the destination if its bytes came from the version
+        // we already knew. Otherwise force an external-change check.
+        self.last_mtime = if self.last_mtime.is_some() && self.last_mtime == copy.source_mtime {
+            copy.destination_mtime
+        } else {
+            None
+        };
     }
 
     pub fn reload(&mut self) -> Result<(), ReadError> {
@@ -139,16 +153,19 @@ impl Document {
 
     /// Returns true when the file on disk has changed since this document was
     /// read or last saved.
+    #[cfg(test)]
     pub fn externally_modified(&self) -> bool {
+        matches!(self.disk_change(), DiskChange::Modified(_))
+    }
+
+    pub fn disk_change(&self) -> DiskChange {
         let Some(path) = &self.path else {
-            return false;
+            return DiskChange::Unchanged;
         };
-        let Ok(disk_mtime) = file_mtime(path) else {
-            return false;
-        };
-        match self.last_mtime {
-            Some(known) => known != disk_mtime,
-            None => true,
+        match file_mtime(path) {
+            Ok(time) if Some(time) == self.last_mtime => DiskChange::Unchanged,
+            Ok(time) => DiskChange::Modified(time),
+            Err(err) => DiskChange::Unavailable(err),
         }
     }
 
@@ -260,6 +277,38 @@ mod tests {
         doc.adopt_disk_mtime().unwrap();
         assert!(!doc.externally_modified());
         assert_eq!(doc.text(), "same\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn copy_timestamps_only_acknowledge_the_known_source() {
+        use super::super::fsutil::CopiedFile;
+
+        let dir = test_dir();
+        let path = dir.join("copied.md");
+        fs::write(&path, "known\n").unwrap();
+        let mut doc = Document::open(&path).unwrap();
+        let destination_mtime = doc.last_mtime;
+        let old_mtime = SystemTime::UNIX_EPOCH;
+        doc.set_last_mtime(Some(old_mtime));
+        doc.record_copy(CopiedFile {
+            source_mtime: Some(old_mtime),
+            destination_mtime,
+        });
+        assert!(matches!(doc.disk_change(), DiskChange::Unchanged));
+
+        doc.set_last_mtime(Some(old_mtime));
+        doc.record_copy(CopiedFile {
+            source_mtime: destination_mtime,
+            destination_mtime,
+        });
+        assert!(matches!(doc.disk_change(), DiskChange::Modified(_)));
+
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            doc.disk_change(),
+            DiskChange::Unavailable(err) if err.kind() == io::ErrorKind::NotFound
+        ));
         let _ = fs::remove_dir_all(dir);
     }
 

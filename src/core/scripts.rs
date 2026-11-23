@@ -4,12 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{self, Read};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::thread;
 use std::time::Duration;
 
 use super::MAX_OPEN_BYTES;
@@ -464,6 +465,7 @@ pub fn parse_metadata(text: &str, script_path: &Path) -> Result<ScriptMetadata, 
     let mut header_keys: BTreeMap<String, String> = BTreeMap::new();
     let mut field_order: Vec<String> = Vec::new();
     let mut field_maps: BTreeMap<String, (usize, BTreeMap<String, String>)> = BTreeMap::new();
+    let mut field_env_keys = BTreeSet::new();
     let mut current_field: Option<String> = None;
     let mut closed = false;
 
@@ -493,6 +495,12 @@ pub fn parse_metadata(text: &str, script_path: &Path) -> Result<ScriptMetadata, 
             validate_field_id(id, line_no)?;
             if field_maps.contains_key(id) {
                 return Err(format!("line {line_no}: duplicate field id `{id}`"));
+            }
+            let env_key = input_env_key(id);
+            if !field_env_keys.insert(env_key.clone()) {
+                return Err(format!(
+                    "line {line_no}: field id `{id}` maps to duplicate environment variable `{env_key}`"
+                ));
             }
             field_order.push(id.to_string());
             field_maps.insert(id.to_string(), (line_no, BTreeMap::new()));
@@ -760,10 +768,7 @@ pub fn build_invocation(
             continue;
         };
 
-        let env_key = format!(
-            "NOTEDIFF_INPUT_{}",
-            field.id.to_ascii_uppercase().replace('-', "_")
-        );
+        let env_key = input_env_key(&field.id);
         match value {
             FieldValue::Text(text) => {
                 env_vars.push((env_key, text.clone()));
@@ -847,6 +852,13 @@ fn push_flag_value(args: &mut Vec<String>, flag: &str, value: &str) {
         args.push(flag.to_string());
         args.push(value.to_string());
     }
+}
+
+fn input_env_key(id: &str) -> String {
+    format!(
+        "NOTEDIFF_INPUT_{}",
+        id.to_ascii_uppercase().replace('-', "_")
+    )
 }
 
 /// Build the `std::process::Command` for running `script_path` under `sandbox`.
@@ -937,58 +949,35 @@ pub fn run_script(
     context: &InvocationContext,
     cancel: &CancelHandle,
 ) -> Result<ScriptOutput, ScriptRunError> {
+    if cancel.is_cancelled() {
+        return Err(ScriptRunError::Cancelled);
+    }
     let mut cmd = build_command(script_path, args, env_vars, context)?;
+    cmd.process_group(0);
     let mut child = cmd
         .spawn()
         .map_err(|err| ScriptRunError::SpawnFailed(err.to_string()))?;
 
-    let stdout_pipe = child.stdout.take().expect("stdout piped");
-    let stderr_pipe = child.stderr.take().expect("stderr piped");
-    let overflow = Arc::new(AtomicBool::new(false));
-    let overflow_reader = overflow.clone();
-
-    let stdout_handle = thread::spawn(move || {
-        read_bounded(stdout_pipe, MAX_OPEN_BYTES as usize, Some(overflow_reader))
-    });
-    let stderr_handle = thread::spawn(move || read_bounded(stderr_pipe, MAX_STDERR_BYTES, None));
-
-    let status = loop {
-        if cancel.is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_handle.join();
-            let _ = stderr_handle.join();
-            return Err(ScriptRunError::Cancelled);
-        }
-        if overflow.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_handle.join();
-            let _ = stderr_handle.join();
-            return Err(ScriptRunError::OutputTooLarge);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(25)),
-            Err(err) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(ScriptRunError::SpawnFailed(err.to_string()));
-            }
-        }
-    };
-
-    let (stdout_bytes, stdout_truncated) =
-        stdout_handle.join().unwrap_or_else(|_| (Vec::new(), false));
-    let (stderr_bytes, stderr_truncated) =
-        stderr_handle.join().unwrap_or_else(|_| (Vec::new(), false));
+    let pid = child.id() as libc::pid_t;
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    let mut out = Capture::new(MAX_OPEN_BYTES as usize);
+    let mut err = Capture::new(MAX_STDERR_BYTES);
+    let collected = collect_output(pid, &mut stdout, &mut stderr, &mut out, &mut err, cancel);
+    if collected.is_err() || !out.closed || !err.closed {
+        kill_group(pid);
+        let _ = child.kill();
+    }
+    let status = child.wait();
+    collected?;
+    let status = status.map_err(run_io_error)?;
 
     if cancel.is_cancelled() {
         return Err(ScriptRunError::Cancelled);
     }
 
-    let mut stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
-    if stderr_truncated {
+    let mut stderr = String::from_utf8_lossy(&err.bytes).replace('\0', "\u{fffd}");
+    if err.truncated {
         stderr.push_str("\n… (stderr truncated)");
     }
 
@@ -999,52 +988,163 @@ pub fn run_script(
         });
     }
 
-    if stdout_truncated || overflow.load(Ordering::Relaxed) {
-        return Err(ScriptRunError::OutputTooLarge);
-    }
-
-    if stdout_bytes.contains(&0) {
+    if out.bytes.contains(&0) {
         return Err(ScriptRunError::ContainsNul);
     }
 
-    let stdout = String::from_utf8(stdout_bytes).map_err(|_| ScriptRunError::InvalidUtf8)?;
+    let stdout = String::from_utf8(out.bytes).map_err(|_| ScriptRunError::InvalidUtf8)?;
     Ok(ScriptOutput { stdout, stderr })
 }
 
-fn read_bounded(
-    mut reader: impl Read,
-    limit: usize,
-    overflow_flag: Option<Arc<AtomicBool>>,
-) -> (Vec<u8>, bool) {
-    let mut out = Vec::new();
-    let mut chunk = [0u8; 8192];
-    let mut truncated = false;
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => {
-                let remaining = limit.saturating_sub(out.len());
-                if n > remaining {
-                    out.extend_from_slice(&chunk[..remaining]);
-                    truncated = true;
-                    if let Some(ref flag) = overflow_flag {
-                        flag.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    // For stderr, keep draining so the child never blocks on a full pipe.
-                } else {
-                    out.extend_from_slice(&chunk[..n]);
-                }
-            }
-            Err(_) => break,
+fn run_io_error(err: io::Error) -> ScriptRunError {
+    ScriptRunError::SpawnFailed(err.to_string())
+}
+
+fn collect_output(
+    pid: libc::pid_t,
+    stdout: &mut (impl Read + AsRawFd),
+    stderr: &mut (impl Read + AsRawFd),
+    out: &mut Capture,
+    err: &mut Capture,
+    cancel: &CancelHandle,
+) -> Result<(), ScriptRunError> {
+    let stdout_fd = stdout.as_raw_fd();
+    let stderr_fd = stderr.as_raw_fd();
+    for fd in [stdout_fd, stderr_fd] {
+        // SAFETY: the descriptors are owned by the live pipe objects above.
+        if unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) } == -1 {
+            return Err(run_io_error(io::Error::last_os_error()));
         }
     }
-    (out, truncated)
+    let mut drain_deadline = None;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(ScriptRunError::Cancelled);
+        }
+        let read_stdout = out.drain(stdout).map_err(run_io_error)?;
+        if out.truncated {
+            return Err(ScriptRunError::OutputTooLarge);
+        }
+        let read_stderr = err.drain(stderr).map_err(run_io_error)?;
+        if drain_deadline.is_none() && child_exited(pid).map_err(run_io_error)? {
+            if out.closed && err.closed {
+                return Ok(());
+            }
+            // Do not let a background descendant keep the run alive. Give
+            // buffered output a final bounded drain even if a pipe stays open.
+            kill_group(pid);
+            drain_deadline = Some(std::time::Instant::now() + Duration::from_millis(250));
+        }
+        if let Some(deadline) = drain_deadline
+            && ((out.closed && err.closed) || std::time::Instant::now() >= deadline)
+        {
+            return Ok(());
+        }
+        if !read_stdout && !read_stderr {
+            let mut fds = [
+                libc::pollfd {
+                    fd: if out.closed { -1 } else { stdout_fd },
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: if err.closed { -1 } else { stderr_fd },
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            // SAFETY: poll receives a writable array of two descriptors tied
+            // to the live pipes. The timeout also bounds cancellation latency.
+            if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 20) } == -1 {
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(run_io_error(error));
+                }
+            }
+        }
+    }
+}
+
+fn child_exited(pid: libc::pid_t) -> io::Result<bool> {
+    // WNOWAIT keeps the leader's PID reserved until group cleanup is finished.
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    // SAFETY: info is writable storage for waitid, and pid is our child.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            info.as_mut_ptr(),
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if result == 0 {
+        // SAFETY: on success waitid populates the child status (PID zero when
+        // no child has exited); the storage was zero initialized.
+        Ok(unsafe { info.assume_init().si_pid() } != 0)
+    } else {
+        let err = io::Error::last_os_error();
+        if err.kind() == io::ErrorKind::Interrupted {
+            Ok(false)
+        } else {
+            Err(err)
+        }
+    }
+}
+
+fn kill_group(pid: libc::pid_t) {
+    // SAFETY: a positive PID from spawn was made its own process-group ID.
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
+}
+
+struct Capture {
+    bytes: Vec<u8>,
+    limit: usize,
+    truncated: bool,
+    closed: bool,
+}
+
+impl Capture {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            truncated: false,
+            closed: false,
+        }
+    }
+
+    fn drain(&mut self, reader: &mut impl Read) -> io::Result<bool> {
+        let mut progress = false;
+        let mut chunk = [0u8; 8192];
+        if !self.closed {
+            // Keep stdout, stderr, child status, and cancellation all moving
+            // even when one stream produces data continuously.
+            for _ in 0..32 {
+                match reader.read(&mut chunk) {
+                    Ok(0) => {
+                        self.closed = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        progress = true;
+                        let keep = n.min(self.limit - self.bytes.len());
+                        self.bytes.extend_from_slice(&chunk[..keep]);
+                        self.truncated |= keep < n;
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        Ok(progress)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!(
@@ -1328,6 +1428,16 @@ print("ok")
             ScriptRunError::ContainsNul
         );
 
+        let large_script = dir.join("large.sh");
+        write_exec(
+            &large_script,
+            &format!("#!/bin/sh\nhead -c {} /dev/zero\n", MAX_OPEN_BYTES + 1),
+        );
+        assert_eq!(
+            run_script(&large_script, &[], &[], &ctx, &CancelHandle::new()).unwrap_err(),
+            ScriptRunError::OutputTooLarge
+        );
+
         // Sandbox read-only test when bwrap is available.
         if bwrap_available() {
             let write_script = dir.join("try_write.sh");
@@ -1354,6 +1464,53 @@ print("ok")
             assert!(target.exists());
         }
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn field_ids_must_map_to_distinct_environment_variables() {
+        let header = "\
+# --- notediff-script ---\n\
+# [field.some-name]\n\
+# type = text\n\
+# [field.SOME_NAME]\n\
+# type = text\n\
+# --- end-notediff-script ---\n";
+        let err = parse_metadata(header, Path::new("test.sh")).unwrap_err();
+        assert!(err.contains("duplicate environment variable `NOTEDIFF_INPUT_SOME_NAME`"));
+    }
+
+    #[test]
+    fn runner_finishes_when_a_descendant_holds_the_pipes_open() {
+        let dir = temp_dir("inherited-pipes");
+        let script = dir.join("test.sh");
+        let ctx = InvocationContext {
+            current_file: None,
+            current_dir: Some(dir.clone()),
+            sandbox: SandboxMode::None,
+        };
+        write_exec(&script, "#!/bin/sh\nsleep 5 &\nprintf 'complete\\n'\n");
+        let start = std::time::Instant::now();
+        let result = run_script(&script, &[], &[], &ctx, &CancelHandle::new()).unwrap();
+        assert_eq!(result.stdout, "complete\n");
+        assert!(start.elapsed() < Duration::from_secs(3));
+
+        write_exec(&script, "#!/bin/sh\nsleep 5 &\ntouch started\nwait\n");
+        let cancel = CancelHandle::new();
+        let worker_cancel = cancel.clone();
+        let worker = thread::spawn(move || run_script(&script, &[], &[], &ctx, &worker_cancel));
+        let start = std::time::Instant::now();
+        while !dir.join("started").exists() {
+            assert!(start.elapsed() < Duration::from_secs(3));
+            thread::sleep(Duration::from_millis(5));
+        }
+        let start = std::time::Instant::now();
+        cancel.cancel();
+        assert_eq!(
+            worker.join().unwrap().unwrap_err(),
+            ScriptRunError::Cancelled
+        );
+        assert!(start.elapsed() < Duration::from_secs(3));
         let _ = fs::remove_dir_all(&dir);
     }
 

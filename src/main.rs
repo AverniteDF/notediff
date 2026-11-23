@@ -33,7 +33,11 @@ fn main() -> glib::ExitCode {
     });
 
     // Pass argv through so GTK can parse its own options.
-    let args: Vec<String> = std::env::args().collect();
+    let Ok(args): Result<Vec<_>, _> = std::env::args_os().map(|arg| arg.into_string()).collect()
+    else {
+        eprintln!("notediff: command-line arguments must be valid UTF-8");
+        return glib::ExitCode::FAILURE;
+    };
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     app.run_with_args(&refs)
 }

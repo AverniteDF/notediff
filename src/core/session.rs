@@ -268,10 +268,9 @@ impl DiffSession {
         if self.diff.is_empty() {
             return false;
         }
-        // Apply every hunk rather than copying the live text directly. This
-        // exercises the same path as individual accepts and preserves the core
-        // invariant: accepting all hunks equals D.
-        let after = diff::apply_all_hunks(&self.baseline, &self.live);
+        // The end state is exactly the live text, regardless of how the diff
+        // was grouped. Individual accepts still exercise hunk application.
+        let after = self.live.clone();
         let focus = self.focus;
         let pending = self.diff.hunks.len();
         self.replace_baseline(after, focus);

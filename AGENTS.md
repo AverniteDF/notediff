@@ -47,13 +47,19 @@ explicit distribution or release build.
 - No tab characters in editable documents. Tabs in opened files trigger the
   Convert Tabs prompt; pasted/dropped tabs become spaces.
 - Atomic writes must never touch the destination when the temporary write fails.
-  Only a rejected rename may fall back to a direct write.
+  Only a rejected live-file or ordinary state-file rename may fall back to a
+  direct write. Baseline files and directories are private; baseline writes
+  never fall back to a direct write. Rename or Move must not replace a live
+  destination, and Link or Copy must not replace an existing baseline.
 - The 16 MiB limit applies to open, reload, save and baselines.
 - Diff Mode locks document-replacing file actions: New File, Open File, Save As
   and Rename or Move are disabled. New Window remains available.
 - A canonical document path is open in at most one window. Opening it from
   another window raises the existing window; opening it in its own window
   reloads it from disk after confirming unsaved changes.
+- Run Script requires explicit confirmation before unsandboxed execution.
+  Its bubblewrap modes restrict filesystem writes, not access to secrets,
+  networking or desktop services.
 - User-visible labels and messages are documented in `docs/usage.md`. Update the
   docs in the same change as behavioural code.
 - User-visible behaviour also gets one bullet under `## [Unreleased]` in

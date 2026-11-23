@@ -140,7 +140,13 @@ pub fn rename_document(
         return Err(RenameError::TargetExists(new));
     }
 
-    doc.rename_to(&new).map_err(RenameError::Io)?;
+    doc.rename_to(&new).map_err(|err| {
+        if err.kind() == io::ErrorKind::AlreadyExists {
+            RenameError::TargetExists(new.clone())
+        } else {
+            RenameError::Io(err)
+        }
+    })?;
 
     let renamed = doc.path().unwrap_or(&new).to_path_buf();
     Ok(match store.move_baseline(&old, &renamed) {

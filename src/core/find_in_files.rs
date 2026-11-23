@@ -12,6 +12,7 @@ use super::textlines;
 
 /// Default maximum number of matches collected before stopping.
 pub const DEFAULT_MAX_MATCHES: usize = 1_000;
+const MAX_QUERY_BYTES: usize = 16 * 1024;
 
 /// Directories always skipped during recursive folder traversal unless
 /// explicitly passed as the search root.
@@ -28,8 +29,7 @@ const DEFAULT_IGNORED_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
-/// Default preview window (in characters) when truncating long lines.
-/// Lines with multiple matches extend past this as needed to cover every match.
+/// Maximum preview window (in characters), excluding omission markers.
 const MAX_PREVIEW_CHARS: usize = 240;
 
 #[derive(Clone, Debug)]
@@ -52,7 +52,9 @@ pub struct LineHit {
     pub column_char: usize,
     /// Character length of the matched query.
     pub match_chars: usize,
-    /// Byte range `(start, end)` of this match within `FileMatch::line_text`.
+    /// Bounded snippet around this match, with tabs displayed as spaces.
+    pub preview: String,
+    /// Byte range `(start, end)` of the visible match within `preview`.
     pub byte_range: (usize, usize),
 }
 
@@ -62,9 +64,6 @@ pub struct FileMatch {
     pub rel_path: String,
     /// 1-based line number matching GTK and `core::textlines`.
     pub line: usize,
-    /// Trimmed line preview (tabs replaced with spaces), truncated on long
-    /// lines while staying long enough to cover every match in `hits`.
-    pub line_text: String,
     /// All non-overlapping matches on this line, in left-to-right order.
     pub hits: Vec<LineHit>,
     /// True when this match came from an unsaved in-memory buffer rather than disk.
@@ -129,129 +128,145 @@ fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
-/// Find all non-overlapping literal matches of `query` in `line`, returning
-/// `(char_offset, char_len)` pairs.
-pub fn find_line_matches(
-    line: &str,
-    query: &str,
-    match_case: bool,
-    whole_word: bool,
-) -> Vec<(usize, usize)> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let line_chars: Vec<char> = line.chars().collect();
-    let query_chars: Vec<char> = query.chars().collect();
-    let qlen = query_chars.len();
-    if qlen > line_chars.len() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + qlen <= line_chars.len() {
-        let matched = if match_case {
-            line_chars[i..i + qlen] == query_chars[..]
-        } else {
-            line_chars[i..i + qlen]
-                .iter()
-                .zip(query_chars.iter())
-                .all(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
-        };
-        if matched {
-            let boundary_ok = !whole_word
-                || ((i == 0 || !is_word_char(line_chars[i - 1]))
-                    && (i + qlen == line_chars.len() || !is_word_char(line_chars[i + qlen])));
-            if boundary_ok {
-                out.push((i, qlen));
-                i += qlen;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    out
+#[derive(Clone, Copy)]
+struct RawHit {
+    column: usize,
+    start: usize,
+    end: usize,
 }
 
-/// Build a trimmed display snippet for `line` (with tabs replaced by spaces)
-/// and map every `(col_char, match_chars)` hit to its byte range inside the
-/// returned string. Long lines are truncated with `…`, while always spanning
-/// from the first match through the last match on the line.
-fn build_line_hits(line: &str, raw_hits: &[(usize, usize)]) -> (String, Vec<LineHit>) {
-    let chars: Vec<char> = line.chars().collect();
-    let mut lead_trim = chars
-        .iter()
-        .take_while(|c| **c == ' ' || **c == '\t')
-        .count();
-    let tail_trim = chars
-        .iter()
-        .rev()
-        .take_while(|c| **c == ' ' || **c == '\t')
-        .count();
-    let mut trim_end = chars.len().saturating_sub(tail_trim).max(lead_trim);
+struct Matcher<'a> {
+    query: Vec<[char; 3]>,
+    prefix: Vec<usize>,
+    ring: Vec<(usize, bool)>,
+    match_case: bool,
+    whole_word: bool,
+    cancel: &'a AtomicBool,
+}
 
-    // Ensure any match on leading/trailing whitespace stays inside the slice.
-    let first_col = raw_hits.first().map(|&(c, _)| c).unwrap_or(lead_trim);
-    let last_end = raw_hits
-        .last()
-        .map(|&(c, l)| (c + l).min(chars.len()))
-        .unwrap_or(trim_end);
-    lead_trim = lead_trim.min(first_col);
-    trim_end = trim_end.max(last_end);
-
-    let (slice_start, slice_end, prefix_ellipsis, suffix_ellipsis) =
-        if trim_end - lead_trim <= MAX_PREVIEW_CHARS {
-            (lead_trim, trim_end, false, false)
-        } else {
-            let start = first_col
-                .saturating_sub(MAX_PREVIEW_CHARS / 3)
-                .max(lead_trim);
-            let min_end = (last_end + 40).min(trim_end);
-            let end = (start + MAX_PREVIEW_CHARS).max(min_end).min(trim_end);
-            (start, end, start > lead_trim, end < trim_end)
-        };
-
-    let slice = &chars[slice_start..slice_end];
-    let mut text = String::with_capacity(slice.len() + 6);
-    if prefix_ellipsis {
-        text.push('…');
-    }
-    let mut byte_offsets = Vec::with_capacity(slice.len() + 1);
-    for &ch in slice {
-        byte_offsets.push(text.len());
-        if ch == '\t' {
-            text.push(' ');
-        } else {
-            text.push(ch);
+impl<'a> Matcher<'a> {
+    fn new(query: &str, match_case: bool, whole_word: bool, cancel: &'a AtomicBool) -> Self {
+        let query: Vec<_> = query.chars().map(|c| char_key(c, match_case)).collect();
+        let mut prefix = vec![0; query.len()];
+        let mut matched = 0;
+        for i in 1..query.len() {
+            while matched > 0 && query[i] != query[matched] {
+                matched = prefix[matched - 1];
+            }
+            if query[i] == query[matched] {
+                matched += 1;
+            }
+            prefix[i] = matched;
+        }
+        let ring = vec![(0, false); query.len()];
+        Self {
+            query,
+            prefix,
+            ring,
+            match_case,
+            whole_word,
+            cancel,
         }
     }
-    byte_offsets.push(text.len());
-    if suffix_ellipsis {
-        text.push('…');
+
+    /// Stream a line with a prefix table, retaining only the requested hits.
+    /// The ring maps the start of a match back to byte and word boundaries.
+    fn scan_line(&mut self, line: &str, limit: usize) -> Option<Vec<RawHit>> {
+        let qlen = self.query.len();
+        if qlen == 0 || qlen > line.len() || limit == 0 {
+            return Some(Vec::new());
+        }
+        let mut matched = 0;
+        let mut previous_word = false;
+        let mut out = Vec::new();
+        let mut chars = line.char_indices().enumerate().peekable();
+        while let Some((column, (byte, ch))) = chars.next() {
+            if column % 4096 == 0 && self.cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            self.ring[column % qlen] = (byte, previous_word);
+            previous_word = is_word_char(ch);
+            let key = char_key(ch, self.match_case);
+            while matched > 0 && key != self.query[matched] {
+                matched = self.prefix[matched - 1];
+            }
+            if key == self.query[matched] {
+                matched += 1;
+            }
+            if matched == qlen {
+                let start_column = column + 1 - qlen;
+                let (start_byte, preceded_by_word) = self.ring[start_column % qlen];
+                if !self.whole_word
+                    || (!preceded_by_word
+                        && chars.peek().is_none_or(|(_, (_, c))| !is_word_char(*c)))
+                {
+                    out.push(RawHit {
+                        column: start_column,
+                        start: start_byte,
+                        end: byte + ch.len_utf8(),
+                    });
+                    if out.len() == limit {
+                        break;
+                    }
+                    matched = 0;
+                } else {
+                    matched = self.prefix[matched - 1];
+                }
+            }
+        }
+        Some(out)
     }
+}
 
-    let hits = raw_hits
-        .iter()
-        .filter_map(|&(col_char, match_chars)| {
-            let rel_start = col_char.checked_sub(slice_start)?;
-            let rel_end = rel_start.checked_add(match_chars)?;
-            let byte_start = *byte_offsets.get(rel_start)?;
-            let byte_end = *byte_offsets.get(rel_end)?;
-            Some(LineHit {
-                column_char: col_char,
-                match_chars,
-                byte_range: (byte_start, byte_end),
-            })
-        })
-        .collect();
+fn char_key(ch: char, match_case: bool) -> [char; 3] {
+    let mut key = [ch, '\0', '\0'];
+    if !match_case {
+        for (out, c) in key.iter_mut().zip(ch.to_lowercase()) {
+            *out = c;
+        }
+    }
+    key
+}
 
-    (text, hits)
+fn make_preview(line: &str, hit: RawHit, match_chars: usize) -> LineHit {
+    let mut start = hit.start;
+    let mut before = 0;
+    for ch in line[..hit.start].chars().rev().take(MAX_PREVIEW_CHARS / 3) {
+        start -= ch.len_utf8();
+        before += 1;
+    }
+    let end = line[hit.start..]
+        .char_indices()
+        .nth(MAX_PREVIEW_CHARS - before)
+        .map_or(line.len(), |(offset, _)| hit.start + offset);
+    let mut preview = String::new();
+    if start > 0 {
+        preview.push('…');
+    }
+    // Replacing a tab with a space preserves byte offsets.
+    let byte_range = (
+        preview.len() + hit.start - start,
+        preview.len() + hit.end.min(end) - start,
+    );
+    preview.push_str(&line[start..end].replace('\t', " "));
+    if end < line.len() {
+        preview.push('…');
+    }
+    LineHit {
+        column_char: hit.column,
+        match_chars,
+        preview,
+        byte_range,
+    }
 }
 
 /// Recursively search `options.root` for `options.query`.
 pub fn search(options: &SearchOptions, cancel: &Arc<AtomicBool>) -> Result<SearchReport, String> {
     if options.query.is_empty() {
         return Err("Search query cannot be empty.".to_string());
+    }
+    if options.query.len() > MAX_QUERY_BYTES {
+        return Err("Search query exceeds the 16 KiB limit.".to_string());
     }
     if !options.root.is_dir() {
         return Err(format!(
@@ -262,7 +277,20 @@ pub fn search(options: &SearchOptions, cancel: &Arc<AtomicBool>) -> Result<Searc
 
     let mut report = SearchReport::default();
     let max_matches = options.max_matches.max(1);
-    walk_dir(&options.root, "", options, max_matches, cancel, &mut report);
+    let mut matcher = Matcher::new(
+        &options.query,
+        options.match_case,
+        options.whole_word,
+        cancel,
+    );
+    walk_dir(
+        &options.root,
+        "",
+        options,
+        max_matches,
+        &mut matcher,
+        &mut report,
+    );
     Ok(report)
 }
 
@@ -271,10 +299,10 @@ fn walk_dir(
     rel_prefix: &str,
     options: &SearchOptions,
     max_matches: usize,
-    cancel: &Arc<AtomicBool>,
+    matcher: &mut Matcher<'_>,
     report: &mut SearchReport,
 ) {
-    if cancel.load(Ordering::Relaxed) {
+    if matcher.cancel.load(Ordering::Relaxed) {
         report.cancelled = true;
         return;
     }
@@ -296,7 +324,7 @@ fn walk_dir(
 
     let mut subdirs = Vec::new();
     for (name, path) in items {
-        if cancel.load(Ordering::Relaxed) {
+        if matcher.cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
             return;
         }
@@ -330,12 +358,15 @@ fn walk_dir(
             {
                 continue;
             }
-            search_file(&path, &rel, options, max_matches, report);
+            search_file(&path, &rel, options, max_matches, matcher, report);
+            if report.cancelled || report.truncated {
+                return;
+            }
         }
     }
 
     for (subdir, rel) in subdirs {
-        walk_dir(&subdir, &rel, options, max_matches, cancel, report);
+        walk_dir(&subdir, &rel, options, max_matches, matcher, report);
         if report.cancelled || report.truncated {
             return;
         }
@@ -347,6 +378,7 @@ fn search_file(
     rel_path: &str,
     options: &SearchOptions,
     max_matches: usize,
+    matcher: &mut Matcher<'_>,
     report: &mut SearchReport,
 ) {
     let live_text = if options.open_buffers.is_empty() {
@@ -373,14 +405,20 @@ fn search_file(
 
     let mut matched_this_file = false;
     for (idx, line_slice) in textlines::iter_inclusive(text).enumerate() {
+        if matcher.cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            return;
+        }
         let line_no = idx + 1;
         let line = line_slice.trim_end_matches(['\n', '\r', '\u{2029}']);
-        let mut hits =
-            find_line_matches(line, &options.query, options.match_case, options.whole_word);
+        let remaining = max_matches.saturating_sub(report.total_matches);
+        let Some(mut hits) = matcher.scan_line(line, remaining.saturating_add(1)) else {
+            report.cancelled = true;
+            return;
+        };
         if hits.is_empty() {
             continue;
         }
-        let remaining = max_matches.saturating_sub(report.total_matches);
         if remaining == 0 {
             report.truncated = true;
             return;
@@ -393,13 +431,15 @@ fn search_file(
             matched_this_file = true;
             report.files_matched += 1;
         }
-        let (line_text, line_hits) = build_line_hits(line, &hits);
+        let line_hits: Vec<_> = hits
+            .into_iter()
+            .map(|hit| make_preview(line, hit, matcher.query.len()))
+            .collect();
         report.total_matches += line_hits.len();
         report.matches.push(FileMatch {
             path: path.to_path_buf(),
             rel_path: rel_path.to_string(),
             line: line_no,
-            line_text,
             hits: line_hits,
             from_unsaved_buffer,
         });
@@ -438,18 +478,30 @@ mod tests {
 
     #[test]
     fn line_matching_respects_case_and_whole_word() {
-        assert_eq!(
-            find_line_matches("Foo foo foobar", "foo", false, false),
-            vec![(0, 3), (4, 3), (8, 3)]
-        );
-        assert_eq!(
-            find_line_matches("Foo foo foobar", "foo", true, false),
-            vec![(4, 3), (8, 3)]
-        );
-        assert_eq!(
-            find_line_matches("Foo foo foobar _foo", "foo", false, true),
-            vec![(0, 3), (4, 3)]
-        );
+        let find = |line, query, case, word| {
+            Matcher::new(query, case, word, &AtomicBool::new(false))
+                .scan_line(line, usize::MAX)
+                .unwrap()
+                .into_iter()
+                .map(|hit| hit.column)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(find("Foo foo foobar", "foo", false, false), vec![0, 4, 8]);
+        assert_eq!(find("Foo foo foobar", "foo", true, false), vec![4, 8]);
+        assert_eq!(find("Foo foo foobar _foo", "foo", false, true), vec![0, 4]);
+        assert_eq!(find("a--- éÉ-é", "--", true, true), vec![2]);
+        assert_eq!(find("a--- éÉ-é", "é", false, false), vec![5, 6, 8]);
+        assert_eq!(find("aaaaa", "aa", true, false), vec![0, 2]);
+    }
+
+    #[test]
+    fn matcher_honors_the_hit_budget_and_cancellation_on_a_long_line() {
+        let cancel = AtomicBool::new(false);
+        let mut matcher = Matcher::new("a", true, false, &cancel);
+        let line = "a".repeat(100_000);
+        assert_eq!(matcher.scan_line(&line, 3).unwrap().len(), 3);
+        cancel.store(true, Ordering::Relaxed);
+        assert!(matcher.scan_line(&line, 3).is_none());
     }
 
     #[test]
@@ -551,8 +603,7 @@ mod tests {
         assert_eq!(disk_removed.matches[0].rel_path, "sub/b.rs");
         assert!(!disk_removed.matches[0].from_unsaved_buffer);
 
-        // Long lines with multiple matches produce one truncated FileMatch that still
-        // spans every match on the line.
+        // Long lines keep one row, with a bounded preview for each match.
         let long_line = format!(
             "{}needle{}needle{}\n",
             "a".repeat(200),
@@ -578,15 +629,15 @@ mod tests {
         assert_eq!(long_report.matches.len(), 1);
         assert_eq!(long_report.total_matches, 2);
         let row = &long_report.matches[0];
-        assert!(row.line_text.starts_with('…'));
-        assert!(row.line_text.ends_with('…'));
-        assert!(row.line_text.len() < long_line.len());
         assert_eq!(row.hits.len(), 2);
         assert_eq!(row.hits[0].column_char, 200);
         assert_eq!(row.hits[1].column_char, 356);
         for hit in &row.hits {
             let (s, e) = hit.byte_range;
-            assert_eq!(&row.line_text[s..e], "needle");
+            assert!(hit.preview.starts_with('…'));
+            assert!(hit.preview.ends_with('…'));
+            assert!(hit.preview.chars().count() <= MAX_PREVIEW_CHARS + 2);
+            assert_eq!(&hit.preview[s..e], "needle");
         }
 
         let _ = fs::remove_dir_all(&dir);

@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use super::MAX_OPEN_BYTES;
-use super::fsutil::{ReadError, atomic_write, data_home, prune_empty_dirs, read_utf8_limited};
+use super::fsutil::{ReadError, data_home, prune_empty_dirs, read_utf8_limited, write_private};
 
 #[derive(Debug, Clone)]
 pub struct SnapshotStore {
@@ -107,7 +107,7 @@ impl SnapshotStore {
             ));
         }
         let path = self.snapshot_path_for_canonical(canonical);
-        atomic_write(&path, text, true)
+        write_private(&self.root, &path, text, true)
     }
 
     #[cfg(test)]
@@ -174,7 +174,7 @@ impl SnapshotStore {
                 "the document already has a baseline; linking never replaces one",
             ));
         }
-        self.transfer(source_snapshot, &destination, mode == LinkMode::Move)
+        self.transfer(source_snapshot, &destination, mode == LinkMode::Move, false)
     }
 
     /// Move the baseline of `from` to `to` after the live file was renamed.
@@ -187,13 +187,19 @@ impl SnapshotStore {
         if source == destination || !source.is_file() {
             return Ok(false);
         }
-        self.transfer(&source, &destination, true)?;
+        self.transfer(&source, &destination, true, true)?;
         Ok(true)
     }
 
-    fn transfer(&self, source: &Path, destination: &Path, remove_source: bool) -> io::Result<()> {
+    fn transfer(
+        &self,
+        source: &Path,
+        destination: &Path,
+        remove_source: bool,
+        overwrite: bool,
+    ) -> io::Result<()> {
         let text = read_utf8_limited(source, MAX_OPEN_BYTES).map_err(read_error_to_io)?;
-        atomic_write(destination, &text, true)?;
+        write_private(&self.root, destination, &text, overwrite)?;
         if remove_source {
             delete_file_and_prune(source, &self.root).map_err(|err| {
                 io::Error::new(
@@ -405,6 +411,36 @@ mod tests {
     }
 
     #[test]
+    fn baseline_writes_and_copies_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir();
+        let root = dir.join("store");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let store = SnapshotStore::at(root.clone());
+        let source = Path::new("/notes/original.md");
+        let destination = Path::new("/new/copied.md");
+        store
+            .write_for_canonical(source, "private contents")
+            .unwrap();
+        let snapshot = store.snapshot_path_for_canonical(source);
+        store.link(&snapshot, destination, LinkMode::Copy).unwrap();
+        let copy = store.snapshot_path_for_canonical(destination);
+        for path in [
+            &snapshot,
+            &copy,
+            &root,
+            &root.join("notes"),
+            &root.join("new"),
+        ] {
+            assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o077, 0);
+        }
+        assert_eq!(fs::read_to_string(copy).unwrap(), "private contents");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn unreadable_baseline_paths_are_errors_not_missing() {
         let dir = test_dir();
         let store = SnapshotStore::at(dir.join("store"));
@@ -455,8 +491,9 @@ mod tests {
             .write_for_canonical(&live.canonicalize().unwrap(), "baseline\n")
             .unwrap();
 
-        let orphan = store.root().join("definitely/missing/orphan.md");
-        atomic_write(&orphan, "orphan\n", true).unwrap();
+        store
+            .write_for_canonical(Path::new("/definitely/missing/orphan.md"), "orphan\n")
+            .unwrap();
 
         // Simulate a path under a missing mount. We cannot write through the
         // real /mnt, so invoke the helper directly.

@@ -14,12 +14,9 @@ versioning.
   exclude globs, session-persisted inputs, collapsible per-file result groups
   (collapsed by default) with match counts, live in-memory searching of dirty
   open buffers, and cancellable background execution. Each matching line
-  appears once as a single-line preview pre-scrolled to its highlighted match
-  (clicking a bold line number on multi-match lines cycles and centers the next
-  match). Clicking a result's text area raises an already-open window or opens
-  a new window and jumps straight to the matching line and selection (keeping
-  the dialog open unless the match targets the searching window's current
-  document).
+  appears once, with a bounded preview around the highlighted match. Clicking
+  a bold line number cycles matches. Clicking the preview opens or raises the
+  target and jumps to the match if it is not in Diff Mode.
 - **Run Script…** (**F6**, also in its own section of the main menu) discovers
   executable scripts in `$XDG_DATA_HOME/notediff/scripts/` (or any script
   chosen with **Browse…**), includes a clickable `ℹ️` header button to open the
@@ -32,6 +29,27 @@ versioning.
   `examples/scripts/prompt-packer.py`, `examples/scripts/folder-search.py`, and
   `examples/scripts/file-stats.py` (installed automatically by `install.sh` when
   not already present).
+
+### Changed
+
+- **Run Script** requires explicit confirmation before running without
+  bubblewrap, including when sandboxing is unavailable.
+- **Accept All** uses the exact live text without rebuilding it from a new diff.
+
+### Fixed
+
+- **Rename or Move** never replaces an existing live destination, and a move
+  across filesystems no longer hides a previously unnoticed external edit.
+- Saving refuses an unavailable current path instead of silently recreating it.
+  **Save As** to the current path also checks for external changes.
+- Baselines are written privately without a non-atomic fallback, and Link and
+  Copy cannot replace a baseline that appears during the operation.
+- **Run Script** no longer gets stuck on inherited output pipes and rejects
+  fields that would overwrite each other's environment variable.
+- **Find in Files** checks for cancellation within long lines and bounds the
+  number of hits it collects per line and the size of each preview.
+- Closing **Find in Files** or **Run Script** releases the dialog's state.
+- Non-UTF-8 command-line arguments produce an error instead of a panic.
 
 ## [1.3.0] - 2026-11-22
 
