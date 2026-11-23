@@ -368,7 +368,6 @@ impl DialogState {
         let header = adw::HeaderBar::new();
         header.set_title_widget(Some(&title_box));
         header.pack_start(&browse_button);
-        header.pack_end(&run_button);
 
         // Left sidebar: discovered scripts list.
         let sidebar_list = gtk::ListBox::new();
@@ -401,13 +400,33 @@ impl DialogState {
         split.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         split.append(&form_scroll);
 
-        // Footer bar: sandbox controls + running indicator.
+        // Footer bar: running indicator on left; safety controls + Run right-aligned.
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         footer.add_css_class("script-footer");
         footer.set_margin_top(8);
         footer.set_margin_bottom(8);
         footer.set_margin_start(12);
         footer.set_margin_end(12);
+
+        let spinner = gtk::Spinner::new();
+        let running_label = gtk::Label::new(Some("Running…"));
+        running_label.add_css_class("dim-label");
+        let running_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        running_box.append(&spinner);
+        running_box.append(&running_label);
+        running_box.set_visible(false);
+        footer.append(&running_box);
+
+        if !bwrap_ok {
+            let hint = gtk::Label::new(Some("Bubblewrap sandboxing is unavailable"));
+            hint.add_css_class("caption");
+            hint.add_css_class("dim-label");
+            footer.append(&hint);
+        }
+
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        footer.append(&spacer);
 
         let sandbox_label = gtk::Label::new(Some("Safety Setting:"));
         sandbox_label.add_css_class("dim-label");
@@ -430,26 +449,7 @@ impl DialogState {
         footer.append(&sandbox_label);
         footer.append(&sandbox_dropdown);
         footer.append(&writable_dir_button);
-
-        if !bwrap_ok {
-            let hint = gtk::Label::new(Some("Bubblewrap sandboxing is unavailable"));
-            hint.add_css_class("caption");
-            hint.add_css_class("dim-label");
-            footer.append(&hint);
-        }
-
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        footer.append(&spacer);
-
-        let spinner = gtk::Spinner::new();
-        let running_label = gtk::Label::new(Some("Running…"));
-        running_label.add_css_class("dim-label");
-        let running_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        running_box.append(&spinner);
-        running_box.append(&running_label);
-        running_box.set_visible(false);
-        footer.append(&running_box);
+        footer.append(&run_button);
 
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.append(&split);

@@ -15,6 +15,11 @@ versioning.
   to restore defaults. **No Sandbox** still requires confirmation before every
   run.
 
+### Changed
+
+- Moved the **Run** button in **Run Script** into the bottom footer bar,
+  right-aligned alongside the **Safety Setting** controls.
+
 ## [1.4.0] - 2026-11-23
 
 ### Added
