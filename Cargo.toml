@@ -1,6 +1,6 @@
 [package]
 name = "notediff"
-version = "1.4.0"
+version = "1.5.0"
 authors = ["Robert Hewitt (Avernite)"]
 # The Rust language edition (2015, 2018, 2021, 2024), not a notediff edition.
 # The app's own version is the `version` field above.

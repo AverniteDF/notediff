@@ -6,6 +6,8 @@ versioning.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-23
+
 ### Added
 
 - **Run Script** (`F6`) now remembers the last-selected script, per-script
@@ -304,7 +306,8 @@ The first public release.
 - An installer and uninstaller, desktop entry, application icon and GitHub
   Actions CI.
 
-[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/AverniteDF/notediff/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AverniteDF/notediff/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/AverniteDF/notediff/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/AverniteDF/notediff/compare/v1.1.0...v1.2.0
