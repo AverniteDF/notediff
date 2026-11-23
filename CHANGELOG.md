@@ -35,6 +35,8 @@ versioning.
 
 ### Changed
 
+- Added a little more space between the checkbox and its label in **Find in
+  Files** and **Run Script**.
 - **Run Script** requires explicit confirmation before running without
   bubblewrap, including when sandboxing is unavailable.
 - **Accept All** uses the exact live text without rebuilding it from a new diff.

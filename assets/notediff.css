@@ -26,6 +26,15 @@ entry.notediff-open-location-error:focus-within {
     font-variant-numeric: tabular-nums;
 }
 
+/* Add to the theme's indicator spacing without changing unlabeled checks. */
+checkbutton.notediff-labeled-check:dir(ltr) > label {
+    margin-left: 2px;
+}
+
+checkbutton.notediff-labeled-check:dir(rtl) > label {
+    margin-right: 2px;
+}
+
 searchentry.notediff-search-no-match:focus-within {
     outline-color: #e01b24;
 }

@@ -227,6 +227,7 @@ impl DialogState {
         }
 
         let recursive = gtk::CheckButton::with_label("Recursive");
+        recursive.add_css_class("notediff-labeled-check");
         recursive.set_tooltip_text(Some("Include subfolders"));
         recursive.set_active(saved.as_ref().is_none_or(|s| s.recursive));
 

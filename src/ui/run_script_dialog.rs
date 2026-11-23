@@ -658,6 +658,7 @@ impl DialogState {
             }
             FieldType::Bool => {
                 let check = gtk::CheckButton::with_label(&spec.label);
+                check.add_css_class("notediff-labeled-check");
                 let active = matches!(spec.default.as_deref(), Some("true" | "1"));
                 check.set_active(active);
                 container.append(&check);
