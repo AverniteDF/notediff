@@ -23,8 +23,8 @@ never the document.
 - Atomic saves and private, atomic baseline writes. Live-file saves can fall
   back to a direct write on shared folders that reject sibling renames.
 - Light and dark themes plus user theme bundles.
-- **Find in Files… (`Ctrl+Shift+F`)**: search a folder recursively, including
-  unsaved edits in open files, and jump to results.
+- **Find in Files… (`Ctrl+Shift+F`)**: search a folder with or without its
+  subfolders, including unsaved edits in open files, and jump to results.
 - **Run Script… (`F6`)**: run local scripts with a dynamic parameter form
   defined in a script comment header, with optional bubblewrap (`bwrap`)
   filesystem write restrictions. Standard output opens in the current window

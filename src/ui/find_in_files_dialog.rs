@@ -1,5 +1,5 @@
-//! Find in Files dialog (`Ctrl+Shift+F`): recursive literal search across a
-//! folder with Match Case, Whole Word, include/exclude globs, async execution
+//! Find in Files dialog (`Ctrl+Shift+F`): literal search across a folder with
+//! Match Case, Whole Word, optional recursion, include/exclude globs, async execution
 //! with cancellation, and click-to-jump into the matching file and line.
 
 use std::cell::{Cell, RefCell};
@@ -39,6 +39,7 @@ struct SavedInputs {
     query: String,
     match_case: bool,
     whole_word: bool,
+    recursive: bool,
     folder: String,
     include: String,
     exclude: String,
@@ -74,13 +75,24 @@ pub(super) fn present(
 
 #[cfg(test)]
 pub(super) fn close_for_smoke(parent: &adw::ApplicationWindow) -> impl Fn() -> bool + use<> {
-    let state = Rc::new(DialogState::new(
-        parent,
-        glib::home_dir(),
-        None,
-        Box::new(HashMap::new),
-        Box::new(|_, _| false),
-    ));
+    let new_state = || {
+        DialogState::new(
+            parent,
+            glib::home_dir(),
+            None,
+            Box::new(HashMap::new),
+            Box::new(|_, _| false),
+        )
+    };
+    let state = Rc::new(new_state());
+    assert!(state.recursive.is_active());
+    state.recursive.set_active(false);
+    state.set_running(Some(Arc::new(AtomicBool::new(false))));
+    assert!(!state.recursive.is_sensitive());
+    state.set_running(None);
+    assert!(state.recursive.is_sensitive());
+    state.save_inputs();
+    assert!(!new_state().recursive.is_active());
     let weak = Rc::downgrade(&state);
     state.wire_signals();
     state.dialog.present(Some(parent));
@@ -95,6 +107,7 @@ struct DialogState {
     match_case: gtk::ToggleButton,
     whole_word: gtk::ToggleButton,
     folder_entry: gtk::Entry,
+    recursive: gtk::CheckButton,
     browse_button: gtk::Button,
     include_entry: gtk::Entry,
     exclude_entry: gtk::Entry,
@@ -158,7 +171,7 @@ impl DialogState {
         query_row.append(&query_entry);
         query_row.append(&options_box);
 
-        // Row 2: Folder entry + Browse button.
+        // Row 2: Folder entry + Recursive checkbox + Browse button.
         let folder_label = gtk::Label::new(Some("Folder:"));
         folder_label.add_css_class("dim-label");
         folder_label.set_width_chars(7);
@@ -174,11 +187,15 @@ impl DialogState {
             folder_entry.set_text(&display_path(&initial_folder, &glib::home_dir()));
         }
 
+        let recursive = gtk::CheckButton::with_label("Recursive");
+        recursive.set_tooltip_text(Some("Include subfolders"));
+        recursive.set_active(saved.as_ref().is_none_or(|s| s.recursive));
         let browse_button = gtk::Button::with_label("Browse…");
 
         let folder_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         folder_row.append(&folder_label);
         folder_row.append(&folder_entry);
+        folder_row.append(&recursive);
         folder_row.append(&browse_button);
 
         // Row 3: Include / Exclude glob filters.
@@ -290,6 +307,7 @@ impl DialogState {
             match_case,
             whole_word,
             folder_entry,
+            recursive,
             browse_button,
             include_entry,
             exclude_entry,
@@ -377,6 +395,7 @@ impl DialogState {
                 query: self.query_entry.text().to_string(),
                 match_case: self.match_case.is_active(),
                 whole_word: self.whole_word.is_active(),
+                recursive: self.recursive.is_active(),
                 folder: self.folder_entry.text().to_string(),
                 include: self.include_entry.text().to_string(),
                 exclude: self.exclude_entry.text().to_string(),
@@ -437,6 +456,7 @@ impl DialogState {
         self.match_case.set_sensitive(!running);
         self.whole_word.set_sensitive(!running);
         self.folder_entry.set_sensitive(!running);
+        self.recursive.set_sensitive(!running);
         self.browse_button.set_sensitive(!running);
         self.include_entry.set_sensitive(!running);
         self.exclude_entry.set_sensitive(!running);
@@ -486,6 +506,7 @@ impl DialogState {
                 self.match_case.is_active(),
                 self.whole_word.is_active(),
             ),
+            recursive: self.recursive.is_active(),
             include_globs: find_in_files::parse_globs(self.include_entry.text().as_str()),
             exclude_globs: find_in_files::parse_globs(self.exclude_entry.text().as_str()),
             max_matches: DEFAULT_MAX_MATCHES,

@@ -39,7 +39,7 @@ src/
     tabs.rs             no-tab policy helpers: tab detection and conversion
     textlines.rs        GTK-compatible line breaks, splitting and byte offsets
     eol.rs              line-ending conversion (LF / CRLF, including lone CR/U+2029)
-    find_in_files.rs    recursive UTF-8 literal search with glob filters,
+    find_in_files.rs    optionally recursive UTF-8 literal search with glob filters,
                         cancellable matching and bounded hit previews
     indent.rs           indentation editing: increase including empty lines,
                         strict decrease, double and halve

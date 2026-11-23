@@ -158,11 +158,14 @@ notes for details and workarounds.
   spaces. Replace is disabled for read-only documents and in Diff Mode; Find
   remains available for read-only documents and is disabled in Diff Mode.
 - **Find in Files…** (**Ctrl+Shift+F**, main menu) opens a dialog to search
-  recursively across UTF-8 text files in a folder (defaulting to the current
-  document's folder, or your home directory for untitled windows). Input field
-  values and toggles are remembered when the dialog is closed and reopened
-  during the session; a short single-line selection in the editor pre-populates
-  the query. Toggle **Aa** (Match Case) or **W** (Whole Word), and optionally
+  UTF-8 text files in a folder (defaulting to the current document's folder,
+  or your home directory for untitled windows). The **Recursive** checkbox
+  next to the **Folder** field is checked by default and has the tooltip
+  **Include subfolders**. Uncheck it to search only files directly in the
+  selected folder the next time you click **Search**. Input fields and toggles
+  are remembered when the dialog is closed and reopened during the session.
+  A short single-line selection in the editor pre-populates the query.
+  Toggle **Aa** (Match Case) or **W** (Whole Word), and optionally
   narrow results with comma-separated **Files** (for example `*.rs, *.md`) and
   **Exclude** globs. Common dependency/build folders (`.git`, `node_modules`,
   `target`, `dist`, `build`, `venv`, `__pycache__`) and binary or oversized

@@ -1,4 +1,4 @@
-//! Pure-Rust recursive Find in Files engine (no GTK).
+//! Pure-Rust Find in Files engine (no GTK).
 
 use std::collections::HashMap;
 use std::fs;
@@ -36,6 +36,7 @@ const MAX_PREVIEW_CHARS: usize = 240;
 pub struct SearchOptions {
     pub root: PathBuf,
     pub query: MatchQuery,
+    pub recursive: bool,
     pub include_globs: Vec<String>,
     pub exclude_globs: Vec<String>,
     pub max_matches: usize,
@@ -298,7 +299,7 @@ fn make_preview(line: &str, hit: RawHit) -> LineHit {
     }
 }
 
-/// Recursively search `options.root` for `options.query`.
+/// Search `options.root` for `options.query`, optionally descending into subfolders.
 pub fn search(options: &SearchOptions, cancel: &Arc<AtomicBool>) -> Result<SearchReport, String> {
     if options.query.text.is_empty() {
         return Err("Search query cannot be empty.".to_string());
@@ -381,7 +382,8 @@ fn walk_dir(
             format!("{rel_prefix}/{name}")
         };
         if meta.is_dir() {
-            if DEFAULT_IGNORED_DIRS.contains(&name.as_str())
+            if !options.recursive
+                || DEFAULT_IGNORED_DIRS.contains(&name.as_str())
                 || matches_any_glob(&options.exclude_globs, &name, &rel)
             {
                 continue;
@@ -569,18 +571,16 @@ mod tests {
         fs::write(dir.join("bin.dat"), b"world\0binary").unwrap();
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let report = search(
-            &SearchOptions {
-                root: dir.clone(),
-                query: MatchQuery::new("world".into(), false, true),
-                include_globs: vec![],
-                exclude_globs: vec!["*.log".into()],
-                max_matches: 100,
-                open_buffers: HashMap::new(),
-            },
-            &cancel,
-        )
-        .unwrap();
+        let options = SearchOptions {
+            root: dir.clone(),
+            query: MatchQuery::new("world".into(), false, true),
+            recursive: true,
+            include_globs: vec![],
+            exclude_globs: vec!["*.log".into()],
+            max_matches: 100,
+            open_buffers: HashMap::new(),
+        };
+        let report = search(&options, &cancel).unwrap();
 
         assert_eq!(report.files_matched, 2);
         assert_eq!(report.matches.len(), 2);
@@ -592,11 +592,24 @@ mod tests {
         assert_eq!(report.matches[1].line, 1);
         assert_eq!(report.matches[1].hits[0].column_char, 4);
 
+        let flat = search(
+            &SearchOptions {
+                recursive: false,
+                ..options
+            },
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(flat.files_searched, 1);
+        assert_eq!(flat.total_matches, 1);
+        assert_eq!(flat.matches[0].rel_path, "a.md");
+
         // Include filter restricts to *.rs only.
         let rs_only = search(
             &SearchOptions {
                 root: dir.clone(),
                 query: MatchQuery::new("world".into(), false, false),
+                recursive: true,
                 include_globs: vec!["*.rs".into()],
                 exclude_globs: vec![],
                 max_matches: 100,
@@ -618,6 +631,7 @@ mod tests {
             &SearchOptions {
                 root: dir.clone(),
                 query: MatchQuery::new("fresh_token".into(), false, true),
+                recursive: true,
                 include_globs: vec![],
                 exclude_globs: vec![],
                 max_matches: 100,
@@ -636,6 +650,7 @@ mod tests {
             &SearchOptions {
                 root: dir.clone(),
                 query: MatchQuery::new("world".into(), false, true),
+                recursive: true,
                 include_globs: vec![],
                 exclude_globs: vec!["*.log".into()],
                 max_matches: 100,
@@ -661,6 +676,7 @@ mod tests {
             &SearchOptions {
                 root: dir.clone(),
                 query: MatchQuery::new("needle".into(), true, false),
+                recursive: true,
                 include_globs: vec!["long.txt".into()],
                 exclude_globs: vec![],
                 max_matches: 10,
