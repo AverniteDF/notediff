@@ -160,8 +160,8 @@ notes for details and workarounds.
 - **Find in Files…** (**Ctrl+Shift+F**, main menu) opens a dialog to search
   UTF-8 text files in a folder (defaulting to the current document's folder,
   or your home directory for untitled windows). The **Recursive** checkbox
-  next to the **Folder** field is checked by default and has the tooltip
-  **Include subfolders**. Uncheck it to search only files directly in the
+  at the end of the filters row, below **Browse…**, is checked by default and
+  has the tooltip **Include subfolders**. Uncheck it to search only files directly in the
   selected folder the next time you click **Search**. Input fields and toggles
   are remembered when the dialog is closed and reopened during the session.
   A short single-line selection in the editor pre-populates the query.

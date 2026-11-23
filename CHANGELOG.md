@@ -10,8 +10,8 @@ versioning.
 
 - **Find in Files…** (**Ctrl+Shift+F**, also in the main menu) searches UTF-8
   files in the selected folder and, by default, its subfolders. Uncheck
-  **Recursive** to search only the selected folder. The search supports
-  **Match Case** (`Aa`), **Whole Word** (`W`), optional file and
+  **Recursive** in the filters row to search only the selected folder.
+  The search supports **Match Case** (`Aa`), **Whole Word** (`W`), optional file and
   exclude globs, session-persisted inputs, collapsible per-file result groups
   (collapsed by default) with match counts, live in-memory searching of dirty
   open buffers, and cancellable background execution. Each matching line

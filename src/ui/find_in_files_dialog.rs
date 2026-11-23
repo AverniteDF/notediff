@@ -167,11 +167,20 @@ impl DialogState {
         options_box.append(&match_case);
         options_box.append(&whole_word);
 
+        // Align the entry edges by reserving only the widest control's width.
+        let trailing_column = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
+        let append_trailing = |row: &gtk::Box, control: &gtk::Widget| {
+            let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            slot.append(control);
+            trailing_column.add_widget(&slot);
+            row.append(&slot);
+        };
+
         let query_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         query_row.append(&query_entry);
-        query_row.append(&options_box);
+        append_trailing(&query_row, options_box.upcast_ref());
 
-        // Row 2: Folder entry + Recursive checkbox + Browse button.
+        // Row 2: Folder entry + Browse button.
         let folder_label = gtk::Label::new(Some("Folder:"));
         folder_label.add_css_class("dim-label");
         folder_label.set_width_chars(7);
@@ -187,18 +196,14 @@ impl DialogState {
             folder_entry.set_text(&display_path(&initial_folder, &glib::home_dir()));
         }
 
-        let recursive = gtk::CheckButton::with_label("Recursive");
-        recursive.set_tooltip_text(Some("Include subfolders"));
-        recursive.set_active(saved.as_ref().is_none_or(|s| s.recursive));
         let browse_button = gtk::Button::with_label("Browse…");
 
         let folder_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         folder_row.append(&folder_label);
         folder_row.append(&folder_entry);
-        folder_row.append(&recursive);
-        folder_row.append(&browse_button);
+        append_trailing(&folder_row, browse_button.upcast_ref());
 
-        // Row 3: Include / Exclude glob filters.
+        // Row 3: Include / Exclude glob filters + Recursive checkbox.
         let include_label = gtk::Label::new(Some("Files:"));
         include_label.add_css_class("dim-label");
         include_label.set_width_chars(7);
@@ -221,11 +226,16 @@ impl DialogState {
             exclude_entry.set_text(&s.exclude);
         }
 
+        let recursive = gtk::CheckButton::with_label("Recursive");
+        recursive.set_tooltip_text(Some("Include subfolders"));
+        recursive.set_active(saved.as_ref().is_none_or(|s| s.recursive));
+
         let filter_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         filter_row.append(&include_label);
         filter_row.append(&include_entry);
         filter_row.append(&exclude_label);
         filter_row.append(&exclude_entry);
+        append_trailing(&filter_row, recursive.upcast_ref());
 
         let controls = gtk::Box::new(gtk::Orientation::Vertical, 8);
         controls.set_margin_top(12);
