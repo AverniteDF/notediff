@@ -79,7 +79,8 @@ cargo +1.92.0 check --locked
 
 On a ChromeOS/Sommelier host, the explicit `GDK_BACKEND=x11` and
 `NO_AT_BRIDGE=1` avoid the known Wayland-bridge display failure. CI also runs
-the same checks on Debian trixie.
+the same checks on Debian trixie; section 5 gates the tag on that run for the
+release commit.
 
 Install the build locally for the deployment check:
 
@@ -90,7 +91,7 @@ Install the build locally for the deployment check:
 Launch the installed build and confirm **About** shows the new version and
 release date.
 
-## 5. Commit, push and tag
+## 5. Commit, push, wait for CI, then tag
 
 Commit the release preparation with a message such as:
 
@@ -113,7 +114,26 @@ Push `main` only after the user approves:
 git push origin main
 ```
 
-Create and push an annotated tag pointing at the release commit:
+Wait for the CI run on that exact commit before creating the tag. Both jobs
+(**Test on Debian trixie** and **MSRV 1.92**) must succeed. The run appears a
+few seconds after the push, so retry the lookup if it is empty:
+
+```sh
+sha=$(git rev-parse HEAD)
+run_id=$(gh run list --commit "$sha" --workflow CI --branch main \
+  --json databaseId -q '.[0].databaseId')
+gh run watch "$run_id" --exit-status
+```
+
+Filter by `--workflow CI --branch main` so the lookup ignores the second run
+that the tag push itself starts; CI triggers on every push.
+`gh run watch --exit-status` returns non-zero when the run fails.
+
+If the run fails, push a corrective commit and wait for a fresh run. Do not
+create the tag until CI is green on `HEAD`.
+
+Once CI is green, create and push an annotated tag pointing at the release
+commit:
 
 ```sh
 git tag -a vX.Y.Z -m "notediff X.Y.Z"
@@ -205,6 +225,8 @@ Optionally redeploy locally with `./install.sh`.
 - Do not guess the remote state: inspect `git status`, `git log`,
   `git ls-remote` and `gh auth status`.
 - Do not publish a release while release checks are failing.
+- Do not tag or publish until CI is green on the release commit; missing or
+  in-progress runs are not green.
 - Do not commit `target/`, downloaded tools, release-note scratch files or
   credentials.
 - If the user asks for a hard reset or discarded work during a release, confirm
@@ -216,6 +238,8 @@ Optionally redeploy locally with `./install.sh`.
   and republish.
 - If a tag or release must be removed, ask the user first. Prefer deleting the
   GitHub release before deleting the tag.
+- If CI fails before the tag is created, push a corrective commit and wait for
+  a fresh run on the new `HEAD`. There is no tag to move yet.
 - Prefer a corrective commit and a new version over moving a public tag.
 - Never force-push `main` by default.
 
@@ -232,6 +256,7 @@ Optionally redeploy locally with `./install.sh`.
       and `### Fixed`, and the release body opens with a matching synopsis.
 - [ ] `RELEASE_DATE` is updated.
 - [ ] fmt, clippy, unit tests, the GTK smoke test and the 1.92 check pass.
+- [ ] CI is green on the release commit before the tag is created.
 - [ ] The installed build's **About** shows the new version and date.
 - [ ] The release commit is `HEAD`; the tree is clean.
 - [ ] `main` and the annotated tag are pushed after approval and point at the
