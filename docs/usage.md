@@ -617,8 +617,10 @@ affects normal line numbers only; focused Diff Mode numbers use the full
 `current-line-number` colour.
 
 The project includes four example bundles: **Cola & Cream**, **Forest Dusk**,
-**Grape Bubblegum** and **Slate Haze**. Install all of them, or replace the loop
-list with one name, from the project root:
+**Grape Bubblegum** and **Slate Haze**. `./install.sh` copies any missing
+example themes into `$XDG_DATA_HOME/notediff/themes/` automatically (without
+overwriting existing directories). To copy or restore them manually from the
+project root:
 
 ```bash
 themes="${XDG_DATA_HOME:-$HOME/.local/share}/notediff/themes"

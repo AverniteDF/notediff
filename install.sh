@@ -11,6 +11,7 @@ APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/notediff"
 SCRIPTS_DIR="$DATA_DIR/scripts"
+THEMES_DIR="$DATA_DIR/themes"
 DOCS_DIR="$DATA_DIR/docs"
 SCRIPT_STATE_FILE="$DATA_DIR/script-state"
 DESKTOP_NAME="io.github.AverniteDF.Notediff.desktop"
@@ -79,6 +80,18 @@ if [[ -d "$PROJECT_DIR/examples/scripts" ]]; then
   done
 fi
 
+if [[ -d "$PROJECT_DIR/examples/themes" ]]; then
+  mkdir -p "$THEMES_DIR"
+  for theme_dir in "$PROJECT_DIR/examples/themes"/*; do
+    [[ -d "$theme_dir" ]] || continue
+    dest="$THEMES_DIR/$(basename "$theme_dir")"
+    if [[ ! -e "$dest" ]]; then
+      mkdir -p "$dest"
+      install -m 644 "$theme_dir/theme.conf" "$theme_dir/scheme.xml" "$dest/"
+    fi
+  done
+fi
+
 if [[ -f "$PROJECT_DIR/docs/scripts.md" ]]; then
   mkdir -p "$DOCS_DIR"
   install -m 644 "$PROJECT_DIR/docs/scripts.md" "$DOCS_DIR/scripts.md"
@@ -110,3 +123,4 @@ echo "  binary:  $CARGO_BIN"
 echo "  desktop: $DESKTOP_FILE"
 echo "  icon:    $ICON_FILE"
 echo "  scripts: $SCRIPTS_DIR"
+echo "  themes:  $THEMES_DIR"

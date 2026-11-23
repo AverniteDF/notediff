@@ -20,6 +20,10 @@ versioning.
 
 - Moved the **Run** button in **Run Script** into the bottom footer bar,
   right-aligned alongside the sandbox controls.
+- `install.sh` now also installs missing example themes into
+  `$XDG_DATA_HOME/notediff/themes/`, installs `docs/scripts.md`, and seeds a
+  **Create a notediff Script** example preset for `prompt-packer.py` on a fresh
+  install.
 
 ## [1.4.0] - 2026-11-23
 
