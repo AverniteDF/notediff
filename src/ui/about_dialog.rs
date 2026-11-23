@@ -45,8 +45,7 @@ fn build_dialog() -> adw::Dialog {
     }
 
     let description = centered_label(&format!(
-        "{DESCRIPTION}. Review what has changed since your last save point, and \
-         accept changes into the baseline one hunk at a time."
+        "{DESCRIPTION}. Review and accept changes without needing a repository."
     ));
 
     let released = centered_label(&format!("Released {RELEASE_DATE}."));

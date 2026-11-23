@@ -1,12 +1,12 @@
 [package]
 name = "notediff"
 version = "1.4.0"
-authors = ["Robert Hewitt (AverniteDF)"]
+authors = ["Robert Hewitt (Avernite)"]
 # The Rust language edition (2015, 2018, 2021, 2024), not a notediff edition.
 # The app's own version is the `version` field above.
 edition = "2024"
 rust-version = "1.92"
-description = "A single-user plaintext and markdown editor with baseline comparison"
+description = "A plain-text editor with baseline comparison"
 license = "MIT"
 repository = "https://github.com/AverniteDF/notediff"
 readme = "README.md"
