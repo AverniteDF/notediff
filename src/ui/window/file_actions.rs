@@ -227,9 +227,6 @@ impl AppWindow {
         self.flags.declined_reload_mtime.set(None);
         self.show_document_text(mode);
         self.reset_cursor_to_top();
-        if let Some((line, col_char, match_chars)) = self.pending_jump.take() {
-            self.jump_to_match(line, col_char, match_chars);
-        }
         self.stack.set_visible_child_name("editor");
         *self.diff_state.borrow_mut() = None;
         self.search_bar.set_search_mode(false);
@@ -248,10 +245,20 @@ impl AppWindow {
     /// first; `after` says what happens when the user cancels that prompt, in
     /// which case nothing is loaded.
     pub(super) fn open_path_after(this: &Rc<Self>, path: &Path, after: AfterOpen) {
+        Self::open_path_then(this, path, after, |_| {});
+    }
+
+    /// Run a follow-up only after the freshly loaded editor is ready, including
+    /// after the user answers any Convert Tabs prompt.
+    pub(super) fn open_path_then(
+        this: &Rc<Self>,
+        path: &Path,
+        after: AfterOpen,
+        on_loaded: impl FnOnce(&Self) + 'static,
+    ) {
         let document = match Document::open(path) {
             Ok(document) => document,
             Err(err) => {
-                this.pending_jump.set(None);
                 this.show_error("Could not open file", &err.open_message());
                 return;
             }
@@ -262,6 +269,7 @@ impl AppWindow {
 
         if !tabs::contains_tab(document.text()) {
             this.finish_open(document, OpenMode::Normal, large);
+            on_loaded(this);
             return;
         }
 
@@ -272,7 +280,10 @@ impl AppWindow {
         }
         let opener = this.clone();
         this.prompt_convert_tabs(move |mode| match mode {
-            Some(mode) => opener.finish_open(document, mode, large),
+            Some(mode) => {
+                opener.finish_open(document, mode, large);
+                on_loaded(&opener);
+            }
             None => opener.abort_open(after),
         });
     }
@@ -280,7 +291,6 @@ impl AppWindow {
     /// The user cancelled the Convert Tabs prompt of an open.
     fn abort_open(&self, after: AfterOpen) {
         self.pending_open.replace(None);
-        self.pending_jump.set(None);
         match after {
             AfterOpen::Stay => {}
             AfterOpen::CloseWindowOnCancel => {

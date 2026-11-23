@@ -171,19 +171,17 @@ notes for details and workarounds.
   file's match count beside its name. Queries are limited to 16 KiB. For files
   open with unsaved changes, a copy of the in-memory text taken at search start
   is used instead of the disk file (marked `unsaved` beside the match count).
-  Edits made after the search starts can make result positions stale; rerun the
-  search to refresh them. Searches run asynchronously and can be stopped with
-  **Cancel**. Clicking a match raises the window that already owns the file or
-  opens it in a new window. In the editor it jumps to the match; if the target
-  is in Diff Mode, notediff says **Leave Diff Mode to jump to the search
+  Searches run asynchronously and can be stopped with **Cancel**. Each
+  matching line appears once, with a bounded preview. Clicking a bold line
+  number cycles and centers that line's matches.
+  Clicking the preview opens or raises the file and checks the highlighted
+  match at its original line and column, using the original search options.
+  If it no longer matches, the selection is left alone. The toast says
+  **Aborted stale search** and the Find in Files status bar says **This match
+  is out of date. Search again to refresh results.** If the target is in Diff
+  Mode, notediff says **Leave Diff Mode to jump to the search
   match**. The dialog stays open unless the result jumps within the searching
-  window. Each matching line appears once, with a bounded preview around the
-  highlighted match. On lines with
-  multiple matches, the line number appears in bold and its segment can be
-  clicked to cycle which match is bolded, underlined and centered; on
-  single-match lines the line number segment is not clickable. Clicking a
-  result's text area jumps to the currently highlighted match. Available in
-  Diff Mode as well.
+  window. Find in Files is available in Diff Mode as well.
 - Click or drag the line-number gutter to select whole lines. The same works
   in either full Diff Mode pane.
 - Go to Line with **Ctrl+G** (out-of-range numbers are clamped). It is

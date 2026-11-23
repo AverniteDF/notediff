@@ -6747,16 +6747,35 @@ fn script_output_window_scenario(app: &adw::Application, dir: &Path, store: &Sna
 }
 
 fn find_in_files_jump_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
+    use std::cell::Cell;
+
+    use super::{MatchQuery, SearchJump};
+
     let first = dir.join("search-a.txt");
     let second = dir.join("search-b.txt");
+    let stale_file = dir.join("search-stale.txt");
+    let tabbed = dir.join("search-tabbed.txt");
     std::fs::write(&first, "alpha\nbeta needle gamma\n").unwrap();
     std::fs::write(&second, "one\ntwo\nthree needle four\n").unwrap();
+    std::fs::write(&stale_file, "unrelated text\nneedle\n").unwrap();
+    std::fs::write(&tabbed, "needle\tphrase\n").unwrap();
+
+    let stale = Rc::new(Cell::new(0));
+    let jump = |line, column, text: &str| {
+        let stale = stale.clone();
+        SearchJump {
+            line,
+            column,
+            query: Rc::new(MatchQuery::new(text.into(), true, true)),
+            on_stale: Box::new(move || stale.set(stale.get() + 1)),
+        }
+    };
 
     // Even from an empty untitled window, clicking a match opens a new window
     // (returns false -> keep dialog open) and jumps straight to the match.
     let window = AppWindow::with_store(app, store.clone());
     let before = super::WINDOWS.with_borrow(Vec::len);
-    assert!(!window.open_search_match(&first, 2, 5, 6));
+    assert!(!window.open_search_match(&first, jump(2, 5, "needle")));
     assert_eq!(super::WINDOWS.with_borrow(Vec::len), before + 1);
     let first_win = super::WINDOWS.with_borrow(|windows| windows.last().unwrap().clone());
     let (start, end) = first_win.editor_buffer.selection_bounds().unwrap();
@@ -6764,7 +6783,7 @@ fn find_in_files_jump_scenario(app: &adw::Application, dir: &Path, store: &Snaps
     assert_eq!(start.line(), 1);
 
     // Jumping to a second file opens another new window (returns false -> keep dialog open).
-    assert!(!window.open_search_match(&second, 3, 6, 6));
+    assert!(!window.open_search_match(&second, jump(3, 6, "needle")));
     assert_eq!(super::WINDOWS.with_borrow(Vec::len), before + 2);
     let second_win = super::WINDOWS.with_borrow(|windows| windows.last().unwrap().clone());
     let (start, end) = second_win.editor_buffer.selection_bounds().unwrap();
@@ -6772,13 +6791,52 @@ fn find_in_files_jump_scenario(app: &adw::Application, dir: &Path, store: &Snaps
     assert_eq!(start.line(), 2);
 
     // Jumping back to an already-open file in another window raises it (returns false -> keep dialog open).
-    assert!(!second_win.open_search_match(&first, 1, 0, 5));
+    assert!(!second_win.open_search_match(&first, jump(1, 0, "alpha")));
     assert_eq!(super::WINDOWS.with_borrow(Vec::len), before + 2);
     let (start, end) = first_win.editor_buffer.selection_bounds().unwrap();
     assert_eq!(first_win.editor_buffer.text(&start, &end, false), "alpha");
 
     // Jumping to a match in the searching window's own open document returns true (-> close dialog).
-    assert!(first_win.open_search_match(&first, 2, 5, 6));
+    assert!(first_win.open_search_match(&first, jump(2, 5, "needle")));
+    assert_eq!(stale.get(), 0);
+
+    // An edit to an open buffer can invalidate the old position. Do not
+    // move the selection or close the dialog when revalidation fails.
+    first_win
+        .editor_buffer
+        .insert(&mut first_win.editor_buffer.start_iter(), "unrelated\n");
+    let before_selection = first_win.editor_buffer.selection_bounds().unwrap();
+    assert!(!first_win.open_search_match(&first, jump(2, 5, "needle")));
+    assert_eq!(
+        first_win.editor_buffer.selection_bounds().unwrap(),
+        before_selection
+    );
+    assert_eq!(stale.get(), 1);
+
+    // Unopened files must be validated against the text actually loaded too.
+    assert!(!window.open_search_match(&stale_file, jump(1, 0, "needle")));
+    let stale_win = super::WINDOWS.with_borrow(|windows| windows.last().unwrap().clone());
+    assert_eq!(stale.get(), 2);
+    assert!(stale_win.editor_buffer.selection_bounds().is_none());
+    assert_eq!(stale_win.editor_buffer.cursor_position(), 0);
+    assert!(stale_win.open_search_match(&stale_file, jump(2, 0, "needle")));
+
+    // The bytes on disk can still match while the editor text no longer does.
+    assert!(!window.open_search_match(&tabbed, jump(1, 0, "needle\tphrase")));
+    let tabbed_win = super::WINDOWS.with_borrow(|windows| windows.last().unwrap().clone());
+    assert_eq!(stale.get(), 2);
+    wait_for(|| tabbed_win.window.visible_dialog().is_some());
+    let dialog = tabbed_win.window.visible_dialog().unwrap();
+    find_response_button(dialog.upcast_ref(), "Yes")
+        .unwrap()
+        .emit_clicked();
+    wait_for(|| tabbed_win.window.visible_dialog().is_none());
+    assert_eq!(tabbed_win.current_text(), "needle phrase\n");
+    assert_eq!(stale.get(), 3);
+    assert!(tabbed_win.editor_buffer.selection_bounds().is_none());
+
+    tabbed_win.window.destroy();
+    stale_win.window.destroy();
 
     second_win.window.destroy();
     first_win.window.destroy();

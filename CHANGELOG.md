@@ -38,6 +38,9 @@ versioning.
 
 ### Fixed
 
+- **Find in Files** checks that a clicked result still matches at its original
+  position. If not, it shows **Aborted stale search** and asks you to search
+  again instead of selecting unrelated text.
 - **Rename or Move** never replaces an existing live destination, and a move
   across filesystems no longer hides a previously unnoticed external edit.
 - Saving refuses an unavailable current path instead of silently recreating it.

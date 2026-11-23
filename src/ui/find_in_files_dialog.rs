@@ -16,13 +16,22 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 
 use crate::core::find_in_files::{
-    self, DEFAULT_MAX_MATCHES, FileMatch, SearchOptions, SearchReport,
+    self, DEFAULT_MAX_MATCHES, FileMatch, MatchQuery, SearchOptions, SearchReport,
 };
 use crate::core::textstats::format_thousands;
 use crate::ui::dialogs::{self, Response};
 use crate::ui::display_path;
 
-type MatchCallback = Box<dyn Fn(PathBuf, usize, usize, usize) -> bool>;
+const STALE_MATCH: &str = "This match is out of date. Search again to refresh results.";
+
+pub(super) struct SearchJump {
+    pub line: usize,
+    pub column: usize,
+    pub query: Rc<MatchQuery>,
+    pub on_stale: Box<dyn FnOnce()>,
+}
+
+type MatchCallback = Box<dyn Fn(&Path, SearchJump) -> bool>;
 type DirtyBuffersCallback = Box<dyn Fn() -> HashMap<PathBuf, String>>;
 
 #[derive(Clone, Debug)]
@@ -41,12 +50,12 @@ thread_local! {
 }
 
 /// Present the Find in Files dialog over `parent`.
-pub fn present(
+pub(super) fn present(
     parent: &adw::ApplicationWindow,
     initial_folder: PathBuf,
     initial_query: Option<String>,
     snapshot_dirty: impl Fn() -> HashMap<PathBuf, String> + 'static,
-    on_open_match: impl Fn(PathBuf, usize, usize, usize) -> bool + 'static,
+    on_open_match: impl Fn(&Path, SearchJump) -> bool + 'static,
 ) {
     let state = Rc::new(DialogState::new(
         parent,
@@ -70,7 +79,7 @@ pub(super) fn close_for_smoke(parent: &adw::ApplicationWindow) -> impl Fn() -> b
         glib::home_dir(),
         None,
         Box::new(HashMap::new),
-        Box::new(|_, _, _, _| false),
+        Box::new(|_, _| false),
     ));
     let weak = Rc::downgrade(&state);
     state.wire_signals();
@@ -472,15 +481,18 @@ impl DialogState {
 
         let options = SearchOptions {
             root,
-            query,
-            match_case: self.match_case.is_active(),
-            whole_word: self.whole_word.is_active(),
+            query: MatchQuery::new(
+                query,
+                self.match_case.is_active(),
+                self.whole_word.is_active(),
+            ),
             include_globs: find_in_files::parse_globs(self.include_entry.text().as_str()),
             exclude_globs: find_in_files::parse_globs(self.exclude_entry.text().as_str()),
             max_matches: DEFAULT_MAX_MATCHES,
             open_buffers: (self.snapshot_dirty)(),
         };
 
+        let query = Rc::new(options.query.clone());
         let cancel = Arc::new(AtomicBool::new(false));
         self.set_running(Some(cancel.clone()));
         let (tx, rx) = mpsc::channel();
@@ -493,7 +505,7 @@ impl DialogState {
         glib::timeout_add_local(Duration::from_millis(25), move || match rx.try_recv() {
             Ok(result) => {
                 if let Some(this) = weak.upgrade() {
-                    this.finish_search(result);
+                    this.finish_search(result, &query);
                 }
                 glib::ControlFlow::Break
             }
@@ -508,7 +520,11 @@ impl DialogState {
         });
     }
 
-    fn finish_search(self: &Rc<Self>, result: Result<SearchReport, String>) {
+    fn finish_search(
+        self: &Rc<Self>,
+        result: Result<SearchReport, String>,
+        query: &Rc<MatchQuery>,
+    ) {
         self.set_running(None);
         match result {
             Err(err) => {
@@ -528,12 +544,12 @@ impl DialogState {
                     self.status_label.set_text("Search cancelled");
                     return;
                 }
-                self.populate_results(&report);
+                self.populate_results(&report, query);
             }
         }
     }
 
-    fn populate_results(self: &Rc<Self>, report: &SearchReport) {
+    fn populate_results(self: &Rc<Self>, report: &SearchReport, query: &Rc<MatchQuery>) {
         while let Some(child) = self.results_box.first_child() {
             self.results_box.remove(&child);
         }
@@ -557,7 +573,8 @@ impl DialogState {
                 end += 1;
             }
             let group = &report.matches[start..end];
-            self.results_box.append(&self.build_file_group(group));
+            self.results_box
+                .append(&self.build_file_group(group, query));
             start = end;
         }
         self.results_stack.set_visible_child_name("results");
@@ -587,7 +604,11 @@ impl DialogState {
         self.status_label.set_text(&summary);
     }
 
-    fn build_file_group(self: &Rc<Self>, hits: &[FileMatch]) -> gtk::Expander {
+    fn build_file_group(
+        self: &Rc<Self>,
+        hits: &[FileMatch],
+        query: &Rc<MatchQuery>,
+    ) -> gtk::Expander {
         let first = &hits[0];
         let file_match_count: usize = hits.iter().map(|h| h.hits.len()).sum();
         let mut count_text = if file_match_count == 1 {
@@ -623,7 +644,7 @@ impl DialogState {
         let mut pre_scroll_targets: Vec<(glib::WeakRef<gtk::Adjustment>, f64)> =
             Vec::with_capacity(hits.len());
         for hit in hits {
-            let (row_widget, hadj_weak, center_ratio) = self.build_match_row(hit);
+            let (row_widget, hadj_weak, center_ratio) = self.build_match_row(hit, query);
             let list_row = gtk::ListBoxRow::new();
             list_row.set_activatable(false);
             list_row.set_selectable(false);
@@ -663,6 +684,7 @@ impl DialogState {
     fn build_match_row(
         self: &Rc<Self>,
         hit: &FileMatch,
+        query: &Rc<MatchQuery>,
     ) -> (gtk::Box, glib::WeakRef<gtk::Adjustment>, Option<f64>) {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
@@ -784,6 +806,7 @@ impl DialogState {
         let hit_path = hit.path.clone();
         let hit_line = hit.line;
         let line_hits = hit.hits.clone();
+        let query = query.clone();
         text_click.connect_released(move |_, _, _, _| {
             let Some(this) = weak.upgrade() else {
                 return;
@@ -792,11 +815,19 @@ impl DialogState {
             let Some(target) = line_hits.get(idx).or_else(|| line_hits.first()) else {
                 return;
             };
+            let status = this.status_label.downgrade();
             let close_dialog = (this.on_open_match)(
-                hit_path.clone(),
-                hit_line,
-                target.column_char,
-                target.match_chars,
+                &hit_path,
+                SearchJump {
+                    line: hit_line,
+                    column: target.column_char,
+                    query: query.clone(),
+                    on_stale: Box::new(move || {
+                        if let Some(status) = status.upgrade() {
+                            status.set_text(STALE_MATCH);
+                        }
+                    }),
+                },
             );
             if close_dialog {
                 this.dialog.close();

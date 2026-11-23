@@ -172,9 +172,10 @@ editor plus all four diff buffers. Ordinary unit tests cover descriptor parsing,
 discovery, colour fallback, contrast and stylesheet substitution, regular-file
 read rejection, atomic-write fallback policy and permissions, save-size limits,
 and the undo byte budget. The smoke test checks that closing Find in Files and
-Run Script releases their state. Core tests cover search cancellation and
-bounded previews, private baselines, non-overwriting moves, and cancelling and
-finishing scripts with inherited output pipes.
+Run Script releases their state, and that stale search results don't change
+the selection in an open or newly loaded editor. Core tests cover search
+cancellation and bounded previews, private baselines, non-overwriting moves,
+and cancelling and finishing scripts with inherited output pipes.
 
 ```sh
 cargo test gtk_window_smoke -- --ignored

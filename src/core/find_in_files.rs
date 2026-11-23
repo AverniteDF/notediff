@@ -35,9 +35,7 @@ const MAX_PREVIEW_CHARS: usize = 240;
 #[derive(Clone, Debug)]
 pub struct SearchOptions {
     pub root: PathBuf,
-    pub query: String,
-    pub match_case: bool,
-    pub whole_word: bool,
+    pub query: MatchQuery,
     pub include_globs: Vec<String>,
     pub exclude_globs: Vec<String>,
     pub max_matches: usize,
@@ -46,12 +44,53 @@ pub struct SearchOptions {
     pub open_buffers: HashMap<PathBuf, String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct MatchQuery {
+    text: String,
+    match_case: bool,
+    whole_word: bool,
+}
+
+impl MatchQuery {
+    pub fn new(text: String, match_case: bool, whole_word: bool) -> Self {
+        Self {
+            text,
+            match_case,
+            whole_word,
+        }
+    }
+
+    /// Validate a result at its original character column in the current line.
+    /// Return the exclusive end column only if the original query still matches.
+    pub fn match_end_at(&self, line: &str, column: usize) -> Option<usize> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let mut chars = line.chars();
+        if column > 0 {
+            let before = chars.nth(column - 1)?;
+            if self.whole_word && is_word_char(before) {
+                return None;
+            }
+        }
+        let mut end = column;
+        for expected in self.text.chars() {
+            if char_key(chars.next()?, self.match_case) != char_key(expected, self.match_case) {
+                return None;
+            }
+            end += 1;
+        }
+        if self.whole_word && chars.next().is_some_and(is_word_char) {
+            return None;
+        }
+        Some(end)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LineHit {
     /// 0-based character offset of the match on the raw line.
     pub column_char: usize,
-    /// Character length of the matched query.
-    pub match_chars: usize,
     /// Bounded snippet around this match, with tabs displayed as spaces.
     pub preview: String,
     /// Byte range `(start, end)` of the visible match within `preview`.
@@ -228,7 +267,7 @@ fn char_key(ch: char, match_case: bool) -> [char; 3] {
     key
 }
 
-fn make_preview(line: &str, hit: RawHit, match_chars: usize) -> LineHit {
+fn make_preview(line: &str, hit: RawHit) -> LineHit {
     let mut start = hit.start;
     let mut before = 0;
     for ch in line[..hit.start].chars().rev().take(MAX_PREVIEW_CHARS / 3) {
@@ -254,7 +293,6 @@ fn make_preview(line: &str, hit: RawHit, match_chars: usize) -> LineHit {
     }
     LineHit {
         column_char: hit.column,
-        match_chars,
         preview,
         byte_range,
     }
@@ -262,10 +300,10 @@ fn make_preview(line: &str, hit: RawHit, match_chars: usize) -> LineHit {
 
 /// Recursively search `options.root` for `options.query`.
 pub fn search(options: &SearchOptions, cancel: &Arc<AtomicBool>) -> Result<SearchReport, String> {
-    if options.query.is_empty() {
+    if options.query.text.is_empty() {
         return Err("Search query cannot be empty.".to_string());
     }
-    if options.query.len() > MAX_QUERY_BYTES {
+    if options.query.text.len() > MAX_QUERY_BYTES {
         return Err("Search query exceeds the 16 KiB limit.".to_string());
     }
     if !options.root.is_dir() {
@@ -278,9 +316,9 @@ pub fn search(options: &SearchOptions, cancel: &Arc<AtomicBool>) -> Result<Searc
     let mut report = SearchReport::default();
     let max_matches = options.max_matches.max(1);
     let mut matcher = Matcher::new(
-        &options.query,
-        options.match_case,
-        options.whole_word,
+        &options.query.text,
+        options.query.match_case,
+        options.query.whole_word,
         cancel,
     );
     walk_dir(
@@ -433,7 +471,7 @@ fn search_file(
         }
         let line_hits: Vec<_> = hits
             .into_iter()
-            .map(|hit| make_preview(line, hit, matcher.query.len()))
+            .map(|hit| make_preview(line, hit))
             .collect();
         report.total_matches += line_hits.len();
         report.matches.push(FileMatch {
@@ -505,6 +543,21 @@ mod tests {
     }
 
     #[test]
+    fn revalidation_requires_the_original_column_case_and_word_boundaries() {
+        let word = MatchQuery::new("café".into(), false, true);
+        assert_eq!(word.match_end_at("▶ CAFÉ!", 2), Some(6));
+        assert_eq!(word.match_end_at("▶ CAFÉ!", 1), None);
+        assert_eq!(word.match_end_at("▶ CAFÉ!", 40), None);
+        assert_eq!(word.match_end_at("▶ CAFÉ_suffix", 2), None);
+        assert_eq!(word.match_end_at("▶xCAFÉ!", 2), None);
+        assert_eq!(word.match_end_at("▶ CAF", 2), None);
+
+        let exact = MatchQuery::new("café".into(), true, false);
+        assert_eq!(exact.match_end_at("▶ CAFÉ!", 2), None);
+        assert_eq!(exact.match_end_at("▶xcafé_suffix", 2), Some(6));
+    }
+
+    #[test]
     fn searches_recursively_with_filters_and_skips_ignored_dirs() {
         let dir = temp_dir("recursive");
         fs::create_dir_all(dir.join("sub")).unwrap();
@@ -519,9 +572,7 @@ mod tests {
         let report = search(
             &SearchOptions {
                 root: dir.clone(),
-                query: "world".into(),
-                match_case: false,
-                whole_word: true,
+                query: MatchQuery::new("world".into(), false, true),
                 include_globs: vec![],
                 exclude_globs: vec!["*.log".into()],
                 max_matches: 100,
@@ -545,9 +596,7 @@ mod tests {
         let rs_only = search(
             &SearchOptions {
                 root: dir.clone(),
-                query: "world".into(),
-                match_case: false,
-                whole_word: false,
+                query: MatchQuery::new("world".into(), false, false),
                 include_globs: vec!["*.rs".into()],
                 exclude_globs: vec![],
                 max_matches: 100,
@@ -568,9 +617,7 @@ mod tests {
         let dirty_found = search(
             &SearchOptions {
                 root: dir.clone(),
-                query: "fresh_token".into(),
-                match_case: false,
-                whole_word: true,
+                query: MatchQuery::new("fresh_token".into(), false, true),
                 include_globs: vec![],
                 exclude_globs: vec![],
                 max_matches: 100,
@@ -588,9 +635,7 @@ mod tests {
         let disk_removed = search(
             &SearchOptions {
                 root: dir.clone(),
-                query: "world".into(),
-                match_case: false,
-                whole_word: true,
+                query: MatchQuery::new("world".into(), false, true),
                 include_globs: vec![],
                 exclude_globs: vec!["*.log".into()],
                 max_matches: 100,
@@ -615,9 +660,7 @@ mod tests {
         let long_report = search(
             &SearchOptions {
                 root: dir.clone(),
-                query: "needle".into(),
-                match_case: true,
-                whole_word: false,
+                query: MatchQuery::new("needle".into(), true, false),
                 include_globs: vec!["long.txt".into()],
                 exclude_globs: vec![],
                 max_matches: 10,

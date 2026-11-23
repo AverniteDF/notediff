@@ -68,6 +68,7 @@ use sourceview5::prelude::*;
 
 use crate::core::LARGE_FILE_WARNING_BYTES;
 use crate::core::document::Document;
+use crate::core::find_in_files::MatchQuery;
 use crate::core::pending::AfterOpen;
 use crate::core::recent::RecentDocuments;
 use crate::core::scripts::{self, ScriptOutput};
@@ -78,6 +79,7 @@ use crate::core::textstats::detect_line_ending;
 use crate::ui::app_dialog::snapshots_tab::LinkTarget;
 use crate::ui::dialogs::{self, Response};
 use crate::ui::diff_page::DiffPage;
+use crate::ui::find_in_files_dialog::SearchJump;
 use crate::ui::gutter_selection;
 use crate::ui::status_bar::{EditMode, StatusBar};
 use crate::ui::theme;
@@ -200,9 +202,6 @@ pub struct AppWindow {
     /// Canonical path reserved while the asynchronous Convert Tabs prompt is
     /// open, before the document itself is loaded into `doc`.
     pending_open: RefCell<Option<PathBuf>>,
-    /// One-shot `(1-based line, 0-based char col, match char len)` jump applied
-    /// after `load_document` completes (used by Find in Files).
-    pending_jump: Cell<Option<(usize, usize, usize)>>,
     /// Cached baseline text of the open document (see `BaselineCache`).
     baseline: RefCell<BaselineCache>,
     /// Whether the editor text currently differs from that baseline.
@@ -394,7 +393,6 @@ impl AppWindow {
             doc: RefCell::new(Document::new()),
             untitled_name: RefCell::new(None),
             pending_open: RefCell::new(None),
-            pending_jump: Cell::new(None),
             baseline: RefCell::new(BaselineCache::default()),
             baseline_differs: Cell::new(false),
             flags: flags::DocumentFlags::default(),
@@ -1137,24 +1135,39 @@ impl AppWindow {
         Some(s.to_string())
     }
 
-    /// Scroll to 1-based `line` and select `[col_char .. col_char + match_chars]`.
-    pub(super) fn jump_to_match(&self, line: usize, col_char: usize, match_chars: usize) {
-        let line_count = self.editor_buffer.line_count().max(1);
-        let line_idx = (line.saturating_sub(1) as i32).clamp(0, line_count - 1);
-        let Some(line_start) = self.editor_buffer.iter_at_line(line_idx) else {
-            return;
-        };
-        let line_chars = line_start.chars_in_line().max(0) as usize;
-        let start_col = col_char.min(line_chars) as i32;
-        let end_col = (col_char + match_chars).min(line_chars) as i32;
-        if let (Some(start), Some(end)) = (
-            self.editor_buffer.iter_at_line_offset(line_idx, start_col),
-            self.editor_buffer.iter_at_line_offset(line_idx, end_col),
-        ) {
-            self.editor_buffer.select_range(&end, &start);
-        } else {
-            self.editor_buffer.place_cursor(&line_start);
+    fn current_match_range(
+        &self,
+        line: usize,
+        column: usize,
+        query: &MatchQuery,
+    ) -> Option<(gtk::TextIter, gtk::TextIter)> {
+        let line_idx = i32::try_from(line.checked_sub(1)?).ok()?;
+        let buffer = &self.editor_buffer;
+        if line_idx >= buffer.line_count() {
+            return None;
         }
+        let start = buffer.iter_at_line(line_idx)?;
+        let mut end = start;
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        let line_text = buffer.text(&start, &end, false);
+        let end_column = query.match_end_at(&line_text, column)?;
+        Some((
+            buffer.iter_at_line_offset(line_idx, column as i32)?,
+            buffer.iter_at_line_offset(line_idx, end_column as i32)?,
+        ))
+    }
+
+    /// Revalidate against the editor buffer before changing its selection.
+    fn finish_search_jump(&self, jump: SearchJump) -> bool {
+        let Some((start, end)) = self.current_match_range(jump.line, jump.column, &jump.query)
+        else {
+            (jump.on_stale)();
+            self.toast(ToastKind::Warning, "Aborted stale search");
+            return false;
+        };
+        self.editor_buffer.select_range(&end, &start);
         let mark = self.editor_buffer.get_insert();
         self.editor_view.scroll_to_mark(&mark, 0.2, true, 0.0, 0.35);
         // For a freshly opened window whose TextView has not yet completed its
@@ -1168,20 +1181,22 @@ impl AppWindow {
                 view.scroll_to_mark(&mark, 0.2, true, 0.0, 0.35);
             }
         });
+        true
     }
 
     /// Open a Find in Files match: raise the owner or open a new window,
     /// then jump to the match when the target editor is available.
-    pub(super) fn open_search_match(
-        self: &Rc<Self>,
-        path: &Path,
-        line: usize,
-        col_char: usize,
-        match_chars: usize,
-    ) -> bool {
-        if let Some(target) = window_for_open_path(path) {
+    pub(super) fn open_search_match(self: &Rc<Self>, path: &Path, jump: SearchJump) -> bool {
+        if let Ok(canonical) = path.canonicalize()
+            && let Some(target) = window_for_canonical_path(&canonical)
+        {
             let same_window = Rc::ptr_eq(&target, self);
             target.window.present();
+            // The registry can also return a reservation while the target
+            // file is waiting for a Convert Tabs response.
+            if target.doc.borrow().path() != Some(canonical.as_path()) {
+                return false;
+            }
             if target.diff_active() {
                 target.toast(
                     ToastKind::Info,
@@ -1189,9 +1204,11 @@ impl AppWindow {
                 );
                 return false;
             }
-            target.jump_to_match(line, col_char, match_chars);
-            target.editor_view.grab_focus();
-            return same_window;
+            let jumped = target.finish_search_jump(jump);
+            if jumped {
+                target.editor_view.grab_focus();
+            }
+            return jumped && same_window;
         }
         if let Some(app) = self
             .window
@@ -1204,9 +1221,15 @@ impl AppWindow {
                 self.persist_settings,
                 self.recent.clone(),
             );
-            window.pending_jump.set(Some((line, col_char, match_chars)));
             window.window.present();
-            AppWindow::open_path_after(&window, path, AfterOpen::CloseWindowOnCancel);
+            AppWindow::open_path_then(
+                &window,
+                path,
+                AfterOpen::CloseWindowOnCancel,
+                move |window| {
+                    window.finish_search_jump(jump);
+                },
+            );
         }
         false
     }
