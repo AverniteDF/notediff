@@ -36,6 +36,12 @@ Day-to-day builds use the default release profile with thin LTO. Apply the
 fat-LTO, stripped production overrides in `docs/development.md` only for an
 explicit distribution or release build.
 
+## Commit reports
+
+After every successful Git commit you create, include a three-line, 5–7–5
+haiku about the change in your reply to the user. Keep it out of the commit
+message.
+
 ## Invariants
 
 - The live file is the source of truth. A baseline is disposable and never the
