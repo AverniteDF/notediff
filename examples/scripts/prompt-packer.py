@@ -12,6 +12,12 @@
 # positional = true
 # help = Select one or more files or folders to include
 #
+# [field.prompt]
+# label = Prompt Text
+# type = multiline
+# arg = --prompt=
+# placeholder = Placed above attachments (optional)
+#
 # [field.exclude]
 # label = Exclude Patterns
 # type = list
@@ -543,7 +549,7 @@ class ToolError(Exception):
     pass
 
 
-def build_prompt(col, budget):
+def build_prompt(col, budget, prompt_text=''):
     attachments = list(col.files)
 
     if not attachments:
@@ -552,7 +558,7 @@ def build_prompt(col, budget):
     strip_common_folder_prefix(attachments)
     attachments.sort(key=lambda e: path_sort_key(e.rel))
 
-    prompt_text = '(Insert your prompt here)'
+    prompt_text = normalize_newlines(prompt_text).strip() or '(Insert your prompt here)'
 
     n = len(attachments)
     lines = [
@@ -645,6 +651,8 @@ def build_parser():
     p.add_argument('paths', nargs='*', metavar='PATH', help='files and/or folders to include')
 
     out = p.add_argument_group('output')
+    out.add_argument('--prompt', default='', metavar='TEXT',
+                     help='prompt text to place above the attachments')
     out.add_argument('-q', '--quiet', action='store_true', help='suppress the status summary on stderr')
     out.add_argument('-v', '--verbose', action='store_true',
                      help='list every skipped/omitted file and note on stderr')
@@ -676,7 +684,7 @@ def run(args, console):
                         if col.skipped else 'No readable files found in the selection.')
 
     budget = Budget(args.max_file_size, args.max_total_size)
-    output, n = build_prompt(col, budget)
+    output, n = build_prompt(col, budget, args.prompt)
 
     chars = len(output)
     tokens = (chars + 2) // 4   # round(chars / 4), halves rounded up

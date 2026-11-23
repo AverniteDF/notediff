@@ -800,12 +800,12 @@ or edited scripts appear immediately without restarting. Click **Browse…** in
 the dialog header to pick any executable script elsewhere on disk.
 
 The last-selected script, each script's parameter drafts, any overridden
-**Safety Setting**, and the chosen writable folder are saved automatically when
+sandbox mode, and the chosen writable folder are saved automatically when
 you switch scripts, close the dialog, or click **Run**. They are kept in
 `$XDG_DATA_HOME/notediff/script-state` (normally
 `~/.local/share/notediff/script-state`) and restored across restarts. Click
-**Presets** beside a script's title to save the current parameters and Safety
-Setting as a named preset for that script (saving with an existing name
+**Presets** beside a script's title to save the current parameters and sandbox
+mode as a named preset for that script (saving with an existing name
 overwrites it), load a saved preset, delete a preset immediately with its
 trashcan icon, or choose **Reset to Defaults**. **No Sandbox** still asks for
 confirmation before every run even when remembered or loaded from a preset.
@@ -885,7 +885,7 @@ and `NOTEDIFF_WRITABLE_DIR` (when applicable).
 
 ### Sandboxing
 
-When `bwrap` (bubblewrap) is installed and usable, the **Safety Setting** selector in the footer
+When `bwrap` (bubblewrap) is installed and usable, the sandbox selector in the footer
 offers three modes:
 
 - **Read-Only Sandbox** (default): mounts the host filesystem read-only with a

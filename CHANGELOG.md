@@ -9,7 +9,7 @@ versioning.
 ### Added
 
 - **Run Script** (`F6`) now remembers the last-selected script, per-script
-  parameter drafts, overridden **Safety Setting**, and chosen writable folder
+  parameter drafts, overridden sandbox mode, and chosen writable folder
   across restarts (stored in `$XDG_DATA_HOME/notediff/script-state`, saved on
   script switch, dialog close, and **Run**). A **Presets** menu beside the
   script title lets you save, overwrite, load, and delete named per-script
@@ -19,7 +19,7 @@ versioning.
 ### Changed
 
 - Moved the **Run** button in **Run Script** into the bottom footer bar,
-  right-aligned alongside the **Safety Setting** controls.
+  right-aligned alongside the sandbox controls.
 
 ## [1.4.0] - 2026-11-23
 

@@ -452,9 +452,6 @@ impl DialogState {
         spacer.set_hexpand(true);
         footer.append(&spacer);
 
-        let sandbox_label = gtk::Label::new(Some("Safety Setting:"));
-        sandbox_label.add_css_class("dim-label");
-
         let sandbox_dropdown = gtk::DropDown::from_strings(&[
             "Read-Only Sandbox",
             "Allow Writing to Folder…",
@@ -470,7 +467,6 @@ impl DialogState {
         writable_dir_button.set_tooltip_text(Some(&default_writable.display().to_string()));
         writable_dir_button.set_visible(false);
 
-        footer.append(&sandbox_label);
         footer.append(&sandbox_dropdown);
         footer.append(&writable_dir_button);
         footer.append(&run_button);

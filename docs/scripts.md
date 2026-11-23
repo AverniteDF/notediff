@@ -91,7 +91,7 @@ Header keys appear before the first `[field.<id>]` section. All are optional:
 | --- | --- | --- |
 | `name` | File name stem | Display name shown in the sidebar and form header |
 | `description` | *(empty)* | Short description shown under the script title |
-| `sandbox` | `read-only` | Initial **Safety Setting** mode: `read-only`, `writable-dir`, or `none` (user overrides, field drafts, and named per-script presets are remembered across sessions in `$XDG_DATA_HOME/notediff/script-state` via the **Presets** menu) |
+| `sandbox` | `read-only` | Initial sandbox mode: `read-only`, `writable-dir`, or `none` (user overrides, field drafts, and named per-script presets are remembered across sessions in `$XDG_DATA_HOME/notediff/script-state` via the **Presets** menu) |
 | `output_ext` | `txt` | Extension for the timestamped output window title (`<stem>-YYYY-MM-DD-HHMMSS.<ext>`) and **Save As** initial name. ASCII alphanumeric, up to 16 characters (leading `.` stripped) |
 
 ---
@@ -195,7 +195,7 @@ is set to `NOTEDIFF_CURRENT_DIR`. `stdin` is always connected to `/dev/null`.
 ## 5. Safety & Sandboxing
 
 When `bwrap` (bubblewrap) is installed and user/mount namespaces are permitted
-by the host, the **Safety Setting** selector in the dialog footer offers three modes:
+by the host, the sandbox selector in the dialog footer offers three modes:
 
 - **Read-Only Sandbox** (`sandbox = read-only`):
   ```text
