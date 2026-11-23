@@ -41,7 +41,7 @@ The baseline is a save point, not a history. There is at most one per canonical 
 | Text widget | GtkSourceView 5 | Via the `sourceview5` crate; plain-text editing with undo, search, line numbers, current-line highlighting and bracket matching |
 | Diff engine | `similar` crate | Line diffs plus inline (word-level) refinement |
 | File I/O | `std::fs`, `libc` | Atomic temp-then-rename; baselines never use a direct-write fallback. Linux no-replace rename protects destinations for live-file moves and baseline links |
-| Persistence | Plain files only | No database; an app-written state file (`$XDG_DATA_HOME/notediff/appearance`) holds the validated content font family and size; another (`$XDG_DATA_HOME/notediff/theme`, written by the app) remembers the chosen theme; `$XDG_DATA_HOME/notediff/recent` holds the recent-document paths |
+| Persistence | Plain files only | No database; an app-written state file (`$XDG_DATA_HOME/notediff/appearance`) holds the validated content font family and size; another (`$XDG_DATA_HOME/notediff/theme`, written by the app) remembers the chosen theme; `$XDG_DATA_HOME/notediff/recent` holds the recent-document paths; `$XDG_DATA_HOME/notediff/script-state` remembers the Run Script selection and per-script parameter drafts |
 
 ### 3.3 Module layout
 
@@ -130,6 +130,7 @@ notediff/
                       content similarity, modification time (no GTK)
     rename            planning a rename or move (name or path) and moving the open file together
                       with its baseline (no GTK)
+    script_state      persistent Run Script selection, per-script parameter drafts and sandbox overrides (no GTK)
     scripts           script metadata comment parser, discovery, CLI/env invocation builder and
                        runner with bounded output and process-group cancellation (no GTK)
     textstats         status-bar numbers: byte and character counts, GTK line count, line-ending style,

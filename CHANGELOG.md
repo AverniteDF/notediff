@@ -6,6 +6,15 @@ versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Run Script** (`F6`) now remembers the last-selected script, per-script
+  parameter drafts, overridden **Safety** mode, and chosen writable folder
+  across restarts (stored in `$XDG_DATA_HOME/notediff/script-state`, saved on
+  script switch, dialog close, and **Run**), with a per-script **Reset** button
+  to restore defaults. **No Sandbox** still requires confirmation before every
+  run.
+
 ## [1.4.0] - 2026-11-23
 
 ### Added

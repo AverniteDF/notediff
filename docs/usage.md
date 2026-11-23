@@ -799,6 +799,15 @@ notediff scans `$XDG_DATA_HOME/notediff/scripts/` (normally
 or edited scripts appear immediately without restarting. Click **Browse…** in
 the dialog header to pick any executable script elsewhere on disk.
 
+The last-selected script, each script's parameter drafts, any overridden
+**Safety** mode, and the chosen writable folder are saved automatically when
+you switch scripts, close the dialog, or click **Run**. They are kept in
+`$XDG_DATA_HOME/notediff/script-state` (normally
+`~/.local/share/notediff/script-state`) and restored across restarts; click
+**Reset** beside a script's title to restore its parameters and Safety mode to
+their declared defaults. **No Sandbox** still asks for confirmation before
+every run even when remembered.
+
 The repository includes three example scripts under `examples/scripts/`:
 
 - `prompt-packer.py` — packs selected files and project folders (with
@@ -874,7 +883,7 @@ and `NOTEDIFF_WRITABLE_DIR` (when applicable).
 
 ### Sandboxing
 
-When `bwrap` (bubblewrap) is installed and usable, the **Safety** selector in the footer
+When `bwrap` (bubblewrap) is installed and usable, the **Safety Setting** selector in the footer
 offers three modes:
 
 - **Read-Only Sandbox** (default): mounts the host filesystem read-only with a

@@ -59,6 +59,8 @@ src/
     relink.rs           ranking of baselines that could be linked
     rename.rs           plan a rename or move (name or path); move a file
                         with its baseline
+    script_state.rs     persistent Run Script selection, per-script parameter
+                        drafts and sandbox overrides (`script-state`)
     scripts.rs          script metadata header parsing, discovery, CLI/env
                         invocation building and process-group execution
     session.rs          Diff Mode session: focus, inspection, accept, accept all,

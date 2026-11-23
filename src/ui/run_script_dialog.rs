@@ -12,6 +12,9 @@ use std::time::Duration;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
+use crate::core::script_state::{
+    self, SavedFieldValue, ScriptDialogState, ScriptParams, ScriptStateStore,
+};
 use crate::core::scripts::{
     self, CancelHandle, DiscoveredScript, FieldSpec, FieldType, FieldValue, InvocationContext,
     SandboxDefault, SandboxMode, ScriptMetadata, ScriptOutput, ScriptRunError,
@@ -37,6 +40,7 @@ pub fn present(
     let state = Rc::new(DialogState::new(
         parent,
         current_file,
+        ScriptStateStore::default(),
         Box::new(on_open_docs),
         Box::new(on_output),
     ));
@@ -47,16 +51,103 @@ pub fn present(
 
 #[cfg(test)]
 pub(super) fn close_for_smoke(parent: &adw::ApplicationWindow) -> impl Fn() -> bool + use<> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_root =
+        std::env::temp_dir().join(format!("notediff-run-script-smoke-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_root);
+    let scripts_dir = temp_root.join("scripts");
+    fs::create_dir_all(&scripts_dir).unwrap();
+    let state_path = temp_root.join("script-state");
+
+    let script_a = scripts_dir.join("alpha.sh");
+    fs::write(
+        &script_a,
+        "#!/bin/sh\n# --- notediff-script ---\n# name = Alpha\n# [field.query]\n# type = text\n# default = init\n# [field.flag]\n# type = bool\n# default = false\n# --- end-notediff-script ---\necho ok\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script_a, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let script_b = scripts_dir.join("beta.sh");
+    fs::write(
+        &script_b,
+        "#!/bin/sh\n# --- notediff-script ---\n# name = Beta\n# [field.count]\n# type = int\n# default = 5\n# min = 1\n# max = 20\n# --- end-notediff-script ---\necho ok\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script_b, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // First session: edit fields on Alpha, switch to Beta, edit Beta, then close.
+    let state1 = Rc::new(DialogState::new(
+        parent,
+        None,
+        ScriptStateStore::at(state_path.clone()),
+        Box::new(|| {}),
+        Box::new(|_, _| {}),
+    ));
+    state1.wire_signals();
+    state1.load_scripts_from(&scripts_dir);
+    assert_eq!(state1.selected_index.get(), Some(0));
+    assert!(!state1.has_non_default_state());
+    {
+        let controls = state1.controls.borrow();
+        if let FieldWidget::Text(ref entry) = controls[0].widget {
+            entry.set_text("saved-query");
+        }
+        if let FieldWidget::Bool(ref check) = controls[1].widget {
+            check.set_active(true);
+        }
+    }
+    assert!(state1.has_non_default_state());
+
+    // Switch to Beta and modify its int field.
+    if let Some(row) = state1.sidebar_list.row_at_index(1) {
+        state1.sidebar_list.select_row(Some(&row));
+    }
+    assert_eq!(state1.selected_index.get(), Some(1));
+    {
+        let controls = state1.controls.borrow();
+        if let FieldWidget::Int(ref spin) = controls[0].widget {
+            spin.set_value(12.0);
+        }
+    }
+    state1.capture_current_script_state();
+    state1.flush_state();
+    drop(state1);
+
+    // Second session: Beta should be selected with count=12, and switching to Alpha restores its edits.
     let state = Rc::new(DialogState::new(
         parent,
         None,
+        ScriptStateStore::at(state_path),
         Box::new(|| {}),
         Box::new(|_, _| {}),
     ));
     let weak = Rc::downgrade(&state);
     state.wire_signals();
+    state.load_scripts_from(&scripts_dir);
+    assert_eq!(state.selected_index.get(), Some(1));
+    assert_eq!(state.controls.borrow()[0].value(), FieldValue::Int(12));
+    assert!(state.has_non_default_state());
+
+    // Resetting Beta restores default (5).
+    state.reset_current_script();
+    assert_eq!(state.controls.borrow()[0].value(), FieldValue::Int(5));
+    assert!(!state.has_non_default_state());
+
+    // Switching to Alpha restores saved-query and true.
+    if let Some(row) = state.sidebar_list.row_at_index(0) {
+        state.sidebar_list.select_row(Some(&row));
+    }
+    assert_eq!(
+        state.controls.borrow()[0].value(),
+        FieldValue::Text("saved-query".into())
+    );
+    assert_eq!(state.controls.borrow()[1].value(), FieldValue::Bool(true));
+
     state.dialog.present(Some(parent));
     state.dialog.close();
+    let _ = fs::remove_dir_all(&temp_root);
     move || weak.upgrade().is_none()
 }
 
@@ -123,6 +214,86 @@ impl FieldControl {
     fn is_satisfied(&self) -> bool {
         !self.spec.required || !self.value().is_empty()
     }
+
+    fn raw_saved_value(&self) -> SavedFieldValue {
+        match &self.widget {
+            FieldWidget::Text(entry) | FieldWidget::PathEntry(entry) => {
+                SavedFieldValue::Text(entry.text().to_string())
+            }
+            FieldWidget::Multiline(buffer) | FieldWidget::List(buffer) => {
+                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
+                SavedFieldValue::Text(text.to_string())
+            }
+            FieldWidget::Int(spin) => {
+                SavedFieldValue::Text((spin.value_as_int() as i64).to_string())
+            }
+            FieldWidget::Bool(check) => {
+                SavedFieldValue::Text(if check.is_active() { "true" } else { "false" }.to_string())
+            }
+            FieldWidget::Choice { dropdown, options } => {
+                let idx = dropdown.selected() as usize;
+                SavedFieldValue::Text(options.get(idx).cloned().unwrap_or_default())
+            }
+            FieldWidget::Slider { scale, options } => {
+                let max_idx = options.len().saturating_sub(1);
+                let idx = (scale.value().round().max(0.0) as usize).min(max_idx);
+                SavedFieldValue::Text(options.get(idx).cloned().unwrap_or_default())
+            }
+            FieldWidget::Paths(paths) => SavedFieldValue::List(
+                paths
+                    .borrow()
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect(),
+            ),
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        match &self.widget {
+            FieldWidget::Text(entry) | FieldWidget::PathEntry(entry) => {
+                entry.text().as_str() == self.spec.default.as_deref().unwrap_or("")
+            }
+            FieldWidget::Multiline(buffer) | FieldWidget::List(buffer) => {
+                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
+                text.as_str() == self.spec.default.as_deref().unwrap_or("")
+            }
+            FieldWidget::Int(spin) => (spin.value_as_int() as i64) == default_int_value(&self.spec),
+            FieldWidget::Bool(check) => check.is_active() == default_bool_value(&self.spec),
+            FieldWidget::Choice { dropdown, options } => {
+                dropdown.selected() as usize == default_option_index(&self.spec, options)
+            }
+            FieldWidget::Slider { scale, options } => {
+                let max_idx = options.len().saturating_sub(1);
+                let idx = (scale.value().round().max(0.0) as usize).min(max_idx);
+                idx == default_option_index(&self.spec, options)
+            }
+            FieldWidget::Paths(paths) => paths.borrow().is_empty(),
+        }
+    }
+}
+
+fn default_int_value(spec: &FieldSpec) -> i64 {
+    let lo = spec.min.unwrap_or(i32::MIN as i64);
+    let hi = spec.max.unwrap_or(i32::MAX as i64);
+    spec.default
+        .as_deref()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0)
+        .clamp(lo, hi)
+}
+
+fn default_bool_value(spec: &FieldSpec) -> bool {
+    matches!(spec.default.as_deref(), Some("true" | "1"))
+}
+
+fn default_option_index(spec: &FieldSpec, options: &[String]) -> usize {
+    let max_idx = options.len().saturating_sub(1);
+    spec.default
+        .as_deref()
+        .and_then(|def| options.iter().position(|o| o == def))
+        .unwrap_or(0)
+        .min(max_idx)
 }
 
 struct DialogState {
@@ -140,11 +311,16 @@ struct DialogState {
     spinner: gtk::Spinner,
     current_file: Option<PathBuf>,
     current_dir: Option<PathBuf>,
-    writable_dir: RefCell<PathBuf>,
+    writable_dir_override: RefCell<Option<PathBuf>>,
     bwrap_ok: bool,
     scripts: RefCell<Vec<DiscoveredScript>>,
     selected_index: Cell<Option<usize>>,
     controls: RefCell<Vec<FieldControl>>,
+    reset_button: RefCell<Option<gtk::Button>>,
+    state_store: ScriptStateStore,
+    saved_state: RefCell<ScriptDialogState>,
+    rebuilding_sidebar: Cell<bool>,
+    suppress_state_events: Cell<bool>,
     running_cancel: RefCell<Option<CancelHandle>>,
     on_open_docs: OpenDocsCallback,
     on_output: OutputCallback,
@@ -154,6 +330,7 @@ impl DialogState {
     fn new(
         parent: &adw::ApplicationWindow,
         current_file: Option<PathBuf>,
+        state_store: ScriptStateStore,
         on_open_docs: OpenDocsCallback,
         on_output: OutputCallback,
     ) -> Self {
@@ -163,6 +340,7 @@ impl DialogState {
             .map(Path::to_path_buf);
         let default_writable = current_dir.clone().unwrap_or_else(glib::home_dir);
         let bwrap_ok = scripts::bwrap_available();
+        let saved_state = state_store.load();
 
         let dialog = adw::Dialog::builder()
             .title("Run Script")
@@ -231,7 +409,7 @@ impl DialogState {
         footer.set_margin_start(12);
         footer.set_margin_end(12);
 
-        let sandbox_label = gtk::Label::new(Some("Safety:"));
+        let sandbox_label = gtk::Label::new(Some("Safety Setting:"));
         sandbox_label.add_css_class("dim-label");
 
         let sandbox_dropdown = gtk::DropDown::from_strings(&[
@@ -300,11 +478,16 @@ impl DialogState {
             spinner,
             current_file,
             current_dir,
-            writable_dir: RefCell::new(default_writable),
+            writable_dir_override: RefCell::new(None),
             bwrap_ok,
             scripts: RefCell::new(Vec::new()),
             selected_index: Cell::new(None),
             controls: RefCell::new(Vec::new()),
+            reset_button: RefCell::new(None),
+            state_store,
+            saved_state: RefCell::new(saved_state),
+            rebuilding_sidebar: Cell::new(false),
+            suppress_state_events: Cell::new(false),
             running_cancel: RefCell::new(None),
             on_open_docs,
             on_output,
@@ -312,10 +495,29 @@ impl DialogState {
     }
 
     fn load_initial_scripts(self: &Rc<Self>) {
-        let dir = scripts::scripts_directory();
-        let (found, _diags) = scripts::discover(&dir);
+        self.load_scripts_from(&scripts::scripts_directory());
+    }
+
+    fn load_scripts_from(self: &Rc<Self>, dir: &Path) {
+        let (mut found, _diags) = scripts::discover(dir);
+        let saved_selected = self.saved_state.borrow().selected_script.clone();
+        let initial_idx = if let Some(ref target) = saved_selected {
+            if let Some(pos) = found
+                .iter()
+                .position(|s| script_state::canonical_script_key(&s.path) == *target)
+            {
+                Some(pos)
+            } else if target.is_file() {
+                found.push(scripts::inspect_script(target));
+                Some(found.len() - 1)
+            } else {
+                (!found.is_empty()).then_some(0)
+            }
+        } else {
+            (!found.is_empty()).then_some(0)
+        };
         *self.scripts.borrow_mut() = found;
-        self.rebuild_sidebar(Some(0));
+        self.rebuild_sidebar(initial_idx);
     }
 
     fn wire_signals(self: &Rc<Self>) {
@@ -359,6 +561,9 @@ impl DialogState {
                     if let Some(this) = weak.upgrade() {
                         this.writable_dir_button
                             .set_visible(this.bwrap_ok && dropdown.selected() == SANDBOX_WRITABLE);
+                        if !this.suppress_state_events.get() {
+                            this.update_reset_sensitivity();
+                        }
                     }
                 });
         }
@@ -393,6 +598,8 @@ impl DialogState {
             let Some(keep_alive) = keep_alive.take() else {
                 return;
             };
+            keep_alive.capture_current_script_state();
+            keep_alive.flush_state();
             if let Some(cancel) = keep_alive.running_cancel.borrow().as_ref() {
                 cancel.cancel();
             };
@@ -400,6 +607,8 @@ impl DialogState {
     }
 
     fn rebuild_sidebar(self: &Rc<Self>, select_idx: Option<usize>) {
+        self.rebuilding_sidebar.set(true);
+        self.selected_index.set(None);
         while let Some(child) = self.sidebar_list.first_child() {
             self.sidebar_list.remove(&child);
         }
@@ -407,6 +616,7 @@ impl DialogState {
         let scripts = self.scripts.borrow();
         if scripts.is_empty() {
             drop(scripts);
+            self.rebuilding_sidebar.set(false);
             self.select_script(None);
             return;
         }
@@ -442,6 +652,7 @@ impl DialogState {
         }
         let count = scripts.len();
         drop(scripts);
+        self.rebuilding_sidebar.set(false);
 
         if let Some(idx) = select_idx.filter(|&i| i < count)
             && let Some(row) = self.sidebar_list.row_at_index(idx as i32)
@@ -452,16 +663,25 @@ impl DialogState {
 
     fn clear_form(&self) {
         self.controls.borrow_mut().clear();
+        *self.reset_button.borrow_mut() = None;
         while let Some(child) = self.form_box.first_child() {
             self.form_box.remove(&child);
         }
     }
 
     fn select_script(self: &Rc<Self>, index: Option<usize>) {
+        if self.rebuilding_sidebar.get() {
+            return;
+        }
+        self.capture_current_script_state();
         self.selected_index.set(index);
         self.clear_form();
 
         let Some(idx) = index else {
+            if self.scripts.borrow().is_empty() {
+                self.saved_state.borrow_mut().selected_script = None;
+                self.flush_state();
+            }
             self.show_empty_state();
             self.update_run_sensitivity();
             return;
@@ -477,12 +697,34 @@ impl DialogState {
             return;
         };
 
+        let key = script_state::canonical_script_key(&script.path);
+        self.saved_state.borrow_mut().selected_script = Some(key.clone());
+        self.flush_state();
+        let saved_params = self.saved_state.borrow().scripts.get(&key).cloned();
+
         let home = glib::home_dir();
+        let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let heading = gtk::Label::new(Some(&script.display_name()));
         heading.set_xalign(0.0);
+        heading.set_hexpand(true);
         heading.set_wrap(true);
         heading.add_css_class("title-2");
-        self.form_box.append(&heading);
+        title_row.append(&heading);
+
+        if script.metadata.is_ok() {
+            let reset_btn = gtk::Button::with_label("Reset");
+            reset_btn.set_valign(gtk::Align::Center);
+            reset_btn.set_tooltip_text(Some("Reset parameters and safety mode to defaults"));
+            let weak = Rc::downgrade(self);
+            reset_btn.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.reset_current_script();
+                }
+            });
+            title_row.append(&reset_btn);
+            *self.reset_button.borrow_mut() = Some(reset_btn);
+        }
+        self.form_box.append(&title_row);
 
         let path_label = gtk::Label::new(Some(&display_path(&script.path, &home)));
         path_label.set_xalign(0.0);
@@ -519,13 +761,23 @@ impl DialogState {
                     self.form_box.append(&desc);
                 }
 
+                *self.writable_dir_override.borrow_mut() =
+                    saved_params.as_ref().and_then(|p| p.writable_dir.clone());
+                self.refresh_writable_dir_button();
+
                 if self.bwrap_ok {
-                    let sandbox_idx = match meta.sandbox {
+                    let effective_sandbox = saved_params
+                        .as_ref()
+                        .and_then(|p| p.sandbox)
+                        .unwrap_or(meta.sandbox);
+                    let sandbox_idx = match effective_sandbox {
                         SandboxDefault::ReadOnly => SANDBOX_RO,
                         SandboxDefault::WritableDir => SANDBOX_WRITABLE,
                         SandboxDefault::None => SANDBOX_NONE,
                     };
+                    self.suppress_state_events.set(true);
                     self.sandbox_dropdown.set_selected(sandbox_idx);
+                    self.suppress_state_events.set(false);
                     self.writable_dir_button
                         .set_visible(sandbox_idx == SANDBOX_WRITABLE);
                 }
@@ -543,7 +795,8 @@ impl DialogState {
                         .append(&gtk::Separator::new(gtk::Orientation::Horizontal));
                     let mut controls = Vec::with_capacity(meta.fields.len());
                     for spec in &meta.fields {
-                        let control = self.build_field_row(spec);
+                        let saved = saved_params.as_ref().and_then(|p| p.fields.get(&spec.id));
+                        let control = self.build_field_row(spec, saved);
                         controls.push(control);
                     }
                     *self.controls.borrow_mut() = controls;
@@ -552,6 +805,7 @@ impl DialogState {
         }
 
         self.update_run_sensitivity();
+        self.update_reset_sensitivity();
     }
 
     fn show_empty_state(&self) {
@@ -567,7 +821,11 @@ impl DialogState {
         self.form_box.append(&status);
     }
 
-    fn build_field_row(self: &Rc<Self>, spec: &FieldSpec) -> FieldControl {
+    fn build_field_row(
+        self: &Rc<Self>,
+        spec: &FieldSpec,
+        saved: Option<&SavedFieldValue>,
+    ) -> FieldControl {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 4);
 
         if spec.field_type != FieldType::Bool {
@@ -582,11 +840,16 @@ impl DialogState {
             container.append(&label);
         }
 
+        let saved_text = match saved {
+            Some(SavedFieldValue::Text(s)) => Some(s.as_str()),
+            _ => None,
+        };
+
         let widget = match spec.field_type {
             FieldType::Text => {
                 let entry = gtk::Entry::new();
-                if let Some(ref def) = spec.default {
-                    entry.set_text(def);
+                if let Some(val) = saved_text.or(spec.default.as_deref()) {
+                    entry.set_text(val);
                 }
                 if let Some(ref ph) = spec.placeholder {
                     entry.set_placeholder_text(Some(ph));
@@ -595,6 +858,7 @@ impl DialogState {
                 entry.connect_changed(move |_| {
                     if let Some(this) = weak.upgrade() {
                         this.update_run_sensitivity();
+                        this.update_reset_sensitivity();
                     }
                 });
                 container.append(&entry);
@@ -602,8 +866,8 @@ impl DialogState {
             }
             FieldType::Multiline | FieldType::List => {
                 let buffer = gtk::TextBuffer::new(None);
-                if let Some(ref def) = spec.default {
-                    buffer.set_text(def);
+                if let Some(val) = saved_text.or(spec.default.as_deref()) {
+                    buffer.set_text(val);
                 }
                 let view = gtk::TextView::with_buffer(&buffer);
                 view.set_wrap_mode(gtk::WrapMode::WordChar);
@@ -625,6 +889,7 @@ impl DialogState {
                 buffer.connect_changed(move |_| {
                     if let Some(this) = weak.upgrade() {
                         this.update_run_sensitivity();
+                        this.update_reset_sensitivity();
                     }
                 });
                 container.append(&scroll);
@@ -643,24 +908,40 @@ impl DialogState {
                 }
             }
             FieldType::Int => {
-                let lo = spec.min.unwrap_or(i32::MIN as i64) as f64;
-                let hi = spec.max.unwrap_or(i32::MAX as i64) as f64;
-                let initial = spec
-                    .default
-                    .as_deref()
+                let lo = spec.min.unwrap_or(i32::MIN as i64);
+                let hi = spec.max.unwrap_or(i32::MAX as i64);
+                let initial = saved_text
                     .and_then(|s| s.parse::<i64>().ok())
-                    .unwrap_or(0) as f64;
-                let adj = gtk::Adjustment::new(initial.clamp(lo, hi), lo, hi, 1.0, 10.0, 0.0);
+                    .map(|n| n.clamp(lo, hi))
+                    .unwrap_or_else(|| default_int_value(spec))
+                    as f64;
+                let adj = gtk::Adjustment::new(initial, lo as f64, hi as f64, 1.0, 10.0, 0.0);
                 let spin = gtk::SpinButton::new(Some(&adj), 1.0, 0);
                 spin.set_halign(gtk::Align::Start);
+                let weak = Rc::downgrade(self);
+                spin.connect_value_changed(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.update_reset_sensitivity();
+                    }
+                });
                 container.append(&spin);
                 FieldWidget::Int(spin)
             }
             FieldType::Bool => {
                 let check = gtk::CheckButton::with_label(&spec.label);
                 check.add_css_class("notediff-labeled-check");
-                let active = matches!(spec.default.as_deref(), Some("true" | "1"));
+                let active = match saved_text {
+                    Some("true" | "1") => true,
+                    Some("false" | "0") => false,
+                    _ => default_bool_value(spec),
+                };
                 check.set_active(active);
+                let weak = Rc::downgrade(self);
+                check.connect_toggled(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.update_reset_sensitivity();
+                    }
+                });
                 container.append(&check);
                 FieldWidget::Bool(check)
             }
@@ -668,11 +949,18 @@ impl DialogState {
                 let refs: Vec<&str> = spec.options.iter().map(String::as_str).collect();
                 let dropdown = gtk::DropDown::from_strings(&refs);
                 dropdown.set_halign(gtk::Align::Start);
-                if let Some(ref def) = spec.default
-                    && let Some(pos) = spec.options.iter().position(|o| o == def)
-                {
-                    dropdown.set_selected(pos as u32);
+                let initial = saved_text
+                    .and_then(|val| spec.options.iter().position(|o| o == val))
+                    .unwrap_or_else(|| default_option_index(spec, &spec.options));
+                if !spec.options.is_empty() {
+                    dropdown.set_selected(initial as u32);
                 }
+                let weak = Rc::downgrade(self);
+                dropdown.connect_selected_notify(move |_| {
+                    if let Some(this) = weak.upgrade() {
+                        this.update_reset_sensitivity();
+                    }
+                });
                 container.append(&dropdown);
                 FieldWidget::Choice {
                     dropdown,
@@ -682,11 +970,9 @@ impl DialogState {
             FieldType::Slider => {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
                 let max_idx = spec.options.len().saturating_sub(1);
-                let initial = spec
-                    .default
-                    .as_deref()
-                    .and_then(|def| spec.options.iter().position(|o| o == def))
-                    .unwrap_or(0)
+                let initial = saved_text
+                    .and_then(|val| spec.options.iter().position(|o| o == val))
+                    .unwrap_or_else(|| default_option_index(spec, &spec.options))
                     .min(max_idx);
                 let scale = gtk::Scale::with_range(
                     gtk::Orientation::Horizontal,
@@ -740,11 +1026,15 @@ impl DialogState {
 
                 let options_for_label = spec.options.clone();
                 let label_ref = value_label.clone();
+                let weak = Rc::downgrade(self);
                 scale.connect_value_changed(move |scale| {
                     let idx = (scale.value().round().max(0.0) as usize)
                         .min(options_for_label.len().saturating_sub(1));
                     if let Some(text) = options_for_label.get(idx) {
                         label_ref.set_text(text);
+                    }
+                    if let Some(this) = weak.upgrade() {
+                        this.update_reset_sensitivity();
                     }
                 });
 
@@ -760,8 +1050,8 @@ impl DialogState {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                 let entry = gtk::Entry::new();
                 entry.set_hexpand(true);
-                if let Some(ref def) = spec.default {
-                    entry.set_text(def);
+                if let Some(val) = saved_text.or(spec.default.as_deref()) {
+                    entry.set_text(val);
                 }
                 if let Some(ref ph) = spec.placeholder {
                     entry.set_placeholder_text(Some(ph));
@@ -770,6 +1060,7 @@ impl DialogState {
                 entry.connect_changed(move |_| {
                     if let Some(this) = weak.upgrade() {
                         this.update_run_sensitivity();
+                        this.update_reset_sensitivity();
                     }
                 });
 
@@ -789,11 +1080,23 @@ impl DialogState {
                 FieldWidget::PathEntry(entry)
             }
             FieldType::Paths => {
-                let paths = Rc::new(RefCell::new(Vec::<PathBuf>::new()));
+                let mut initial_paths = Vec::<PathBuf>::new();
+                if let Some(SavedFieldValue::List(items)) = saved {
+                    for item in items {
+                        let p = PathBuf::from(item);
+                        if !initial_paths.contains(&p) {
+                            initial_paths.push(p);
+                        }
+                    }
+                }
+                let paths = Rc::new(RefCell::new(initial_paths));
                 let list = gtk::ListBox::new();
                 list.set_selection_mode(gtk::SelectionMode::None);
                 list.add_css_class("boxed-list");
                 list.set_visible(false);
+                if !paths.borrow().is_empty() {
+                    self.rebuild_paths_list(&paths, &list);
+                }
 
                 let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                 let add_files = gtk::Button::with_label("+ File…");
@@ -886,6 +1189,7 @@ impl DialogState {
         }
         self.rebuild_paths_list(paths, list);
         self.update_run_sensitivity();
+        self.update_reset_sensitivity();
     }
 
     fn rebuild_paths_list(self: &Rc<Self>, paths: &Rc<RefCell<Vec<PathBuf>>>, list: &gtk::ListBox) {
@@ -921,6 +1225,7 @@ impl DialogState {
                     }
                     this.rebuild_paths_list(&paths_ref, &list_ref);
                     this.update_run_sensitivity();
+                    this.update_reset_sensitivity();
                 }
             });
 
@@ -1044,6 +1349,7 @@ impl DialogState {
                 let Some(path) = file.path() else {
                     return;
                 };
+                this.capture_current_script_state();
                 let inspected = scripts::inspect_script(&path);
                 let idx = {
                     let mut scripts = this.scripts.borrow_mut();
@@ -1060,8 +1366,24 @@ impl DialogState {
         );
     }
 
+    fn effective_writable_dir(&self) -> PathBuf {
+        self.writable_dir_override
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| self.initial_folder())
+    }
+
+    fn refresh_writable_dir_button(&self) {
+        let dir = self.effective_writable_dir();
+        let home = glib::home_dir();
+        self.writable_dir_button
+            .set_label(&display_path(&dir, &home));
+        self.writable_dir_button
+            .set_tooltip_text(Some(&dir.display().to_string()));
+    }
+
     fn choose_writable_dir(self: &Rc<Self>) {
-        let current = self.writable_dir.borrow().clone();
+        let current = self.effective_writable_dir();
         let dialog = gtk::FileDialog::builder()
             .title("Allow Writing to Folder")
             .modal(true)
@@ -1075,15 +1397,95 @@ impl DialogState {
                 if let (Some(this), Ok(file)) = (weak.upgrade(), result)
                     && let Some(path) = file.path()
                 {
-                    let home = glib::home_dir();
-                    this.writable_dir_button
-                        .set_label(&display_path(&path, &home));
-                    this.writable_dir_button
-                        .set_tooltip_text(Some(&path.display().to_string()));
-                    *this.writable_dir.borrow_mut() = path;
+                    *this.writable_dir_override.borrow_mut() = Some(path);
+                    this.refresh_writable_dir_button();
+                    this.update_reset_sensitivity();
                 }
             },
         );
+    }
+
+    fn selected_sandbox_default(&self) -> SandboxDefault {
+        match self.sandbox_dropdown.selected() {
+            SANDBOX_RO => SandboxDefault::ReadOnly,
+            SANDBOX_WRITABLE => SandboxDefault::WritableDir,
+            _ => SandboxDefault::None,
+        }
+    }
+
+    fn capture_current_script_state(&self) {
+        let Some(script) = self.selected_script() else {
+            return;
+        };
+        let Ok(meta) = &script.metadata else {
+            return;
+        };
+        let key = script_state::canonical_script_key(&script.path);
+        let mut params = ScriptParams::default();
+
+        if self.bwrap_ok {
+            let selected = self.selected_sandbox_default();
+            if selected != meta.sandbox {
+                params.sandbox = Some(selected);
+            }
+        } else if let Some(prev) = self.saved_state.borrow().scripts.get(&key) {
+            params.sandbox = prev.sandbox;
+        }
+
+        if let Some(ref dir) = *self.writable_dir_override.borrow() {
+            params.writable_dir = Some(dir.clone());
+        }
+
+        for control in self.controls.borrow().iter() {
+            if !control.is_default() {
+                params
+                    .fields
+                    .insert(control.spec.id.clone(), control.raw_saved_value());
+            }
+        }
+
+        self.saved_state.borrow_mut().set_script_params(key, params);
+    }
+
+    fn flush_state(&self) {
+        self.state_store.save(&self.saved_state.borrow());
+    }
+
+    fn has_non_default_state(&self) -> bool {
+        let Some(script) = self.selected_script() else {
+            return false;
+        };
+        let Ok(meta) = &script.metadata else {
+            return false;
+        };
+        if self.bwrap_ok && self.selected_sandbox_default() != meta.sandbox {
+            return true;
+        }
+        if self.writable_dir_override.borrow().is_some() {
+            return true;
+        }
+        self.controls.borrow().iter().any(|c| !c.is_default())
+    }
+
+    fn update_reset_sensitivity(&self) {
+        if let Some(ref btn) = *self.reset_button.borrow() {
+            let running = self.running_cancel.borrow().is_some();
+            btn.set_sensitive(!running && self.has_non_default_state());
+        }
+    }
+
+    fn reset_current_script(self: &Rc<Self>) {
+        let Some(idx) = self.selected_index.get() else {
+            return;
+        };
+        let Some(script) = self.selected_script() else {
+            return;
+        };
+        let key = script_state::canonical_script_key(&script.path);
+        self.saved_state.borrow_mut().scripts.remove(&key);
+        self.flush_state();
+        self.selected_index.set(None);
+        self.select_script(Some(idx));
     }
 
     fn update_run_sensitivity(&self) {
@@ -1114,7 +1516,7 @@ impl DialogState {
         }
         match self.sandbox_dropdown.selected() {
             SANDBOX_RO => SandboxMode::ReadOnly,
-            SANDBOX_WRITABLE => SandboxMode::WritableDir(self.writable_dir.borrow().clone()),
+            SANDBOX_WRITABLE => SandboxMode::WritableDir(self.effective_writable_dir()),
             _ => SandboxMode::None,
         }
     }
@@ -1142,6 +1544,7 @@ impl DialogState {
             self.run_button.add_css_class("suggested-action");
             self.update_run_sensitivity();
         }
+        self.update_reset_sensitivity();
     }
 
     fn start_run(self: &Rc<Self>) {
@@ -1151,6 +1554,9 @@ impl DialogState {
         let Ok(meta): Result<ScriptMetadata, _> = script.metadata.clone() else {
             return;
         };
+
+        self.capture_current_script_state();
+        self.flush_state();
 
         let values: Vec<(String, FieldValue)> = self
             .controls

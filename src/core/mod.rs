@@ -18,6 +18,7 @@ pub mod pending;
 pub mod recent;
 pub mod relink;
 pub mod rename;
+pub mod script_state;
 pub mod scripts;
 pub mod session;
 pub mod snapshot_store;
