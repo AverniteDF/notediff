@@ -48,6 +48,7 @@ impl AppWindow {
                 &this.window,
                 folder,
                 query,
+                super::dirty_open_buffers,
                 move |path, line, col_char, match_chars| {
                     weak.upgrade().is_some_and(|this| {
                         this.open_search_match(&path, line, col_char, match_chars)

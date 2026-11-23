@@ -166,8 +166,11 @@ notes for details and workarounds.
   `target`, `dist`, `build`, `venv`, `__pycache__`) and binary or oversized
   (>16 MiB) files are skipped automatically; up to 1,000 matches are shown,
   grouped into collapsible per-file sections (collapsed by default) with each
-  file's match count beside its name. Searches run asynchronously and can be
-  stopped with **Cancel**. Clicking a match raises the window that already owns
+  file's match count beside its name. For files currently open with unsaved
+  changes in any notediff window, the live in-memory buffer is searched instead
+  of the older on-disk copy (marked `unsaved` beside the match count) so line
+  numbers and selections always match what is on screen. Searches run
+  asynchronously and can be stopped with **Cancel**. Clicking a match raises the window that already owns
   that file or opens it in a new window, and jumps directly to the matching
   line and selection; the dialog stays open unless the match targets the
   searching window's own open document. Available in Diff Mode as well.

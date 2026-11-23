@@ -1,5 +1,6 @@
 //! Pure-Rust recursive Find in Files engine (no GTK).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,6 +40,9 @@ pub struct SearchOptions {
     pub include_globs: Vec<String>,
     pub exclude_globs: Vec<String>,
     pub max_matches: usize,
+    /// Live in-memory text of dirty open documents keyed by canonical path.
+    /// Searched instead of the on-disk file so unsaved edits are reflected.
+    pub open_buffers: HashMap<PathBuf, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +59,8 @@ pub struct FileMatch {
     pub preview: String,
     /// Byte range `(start, end)` of the match within `preview` for highlighting.
     pub preview_highlight: Option<(usize, usize)>,
+    /// True when this match came from an unsaved in-memory buffer rather than disk.
+    pub from_unsaved_buffer: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -320,13 +326,30 @@ fn search_file(
     max_matches: usize,
     report: &mut SearchReport,
 ) {
-    let Ok(text) = read_utf8_limited(path, MAX_OPEN_BYTES) else {
-        return;
+    let live_text = if options.open_buffers.is_empty() {
+        None
+    } else {
+        fs::canonicalize(path)
+            .ok()
+            .and_then(|canonical| options.open_buffers.get(&canonical))
+            .map(String::as_str)
+    };
+
+    let owned_disk;
+    let (text, from_unsaved_buffer) = match live_text {
+        Some(buf) => (buf, true),
+        None => {
+            let Ok(disk) = read_utf8_limited(path, MAX_OPEN_BYTES) else {
+                return;
+            };
+            owned_disk = disk;
+            (owned_disk.as_str(), false)
+        }
     };
     report.files_searched += 1;
 
     let mut matched_this_file = false;
-    for (idx, line_slice) in textlines::iter_inclusive(&text).enumerate() {
+    for (idx, line_slice) in textlines::iter_inclusive(text).enumerate() {
         let line_no = idx + 1;
         let line = line_slice.trim_end_matches(['\n', '\r', '\u{2029}']);
         let hits = find_line_matches(line, &options.query, options.match_case, options.whole_word);
@@ -351,6 +374,7 @@ fn search_file(
                 match_chars,
                 preview,
                 preview_highlight,
+                from_unsaved_buffer,
             });
         }
     }
@@ -420,6 +444,7 @@ mod tests {
                 include_globs: vec![],
                 exclude_globs: vec!["*.log".into()],
                 max_matches: 100,
+                open_buffers: HashMap::new(),
             },
             &cancel,
         )
@@ -444,12 +469,57 @@ mod tests {
                 include_globs: vec!["*.rs".into()],
                 exclude_globs: vec![],
                 max_matches: 100,
+                open_buffers: HashMap::new(),
             },
             &cancel,
         )
         .unwrap();
         assert_eq!(rs_only.matches.len(), 1);
         assert_eq!(rs_only.matches[0].rel_path, "sub/b.rs");
+
+        // Dirty open buffer overrides on-disk content.
+        let mut open_buffers = HashMap::new();
+        open_buffers.insert(
+            fs::canonicalize(dir.join("a.md")).unwrap(),
+            "line1\nunsaved fresh_token here\n".to_string(),
+        );
+        let dirty_found = search(
+            &SearchOptions {
+                root: dir.clone(),
+                query: "fresh_token".into(),
+                match_case: false,
+                whole_word: true,
+                include_globs: vec![],
+                exclude_globs: vec![],
+                max_matches: 100,
+                open_buffers: open_buffers.clone(),
+            },
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(dirty_found.matches.len(), 1);
+        assert_eq!(dirty_found.matches[0].rel_path, "a.md");
+        assert_eq!(dirty_found.matches[0].line, 2);
+        assert!(dirty_found.matches[0].from_unsaved_buffer);
+
+        // Text deleted in the dirty buffer no longer matches on-disk "world" in a.md.
+        let disk_removed = search(
+            &SearchOptions {
+                root: dir.clone(),
+                query: "world".into(),
+                match_case: false,
+                whole_word: true,
+                include_globs: vec![],
+                exclude_globs: vec!["*.log".into()],
+                max_matches: 100,
+                open_buffers,
+            },
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(disk_removed.matches.len(), 1);
+        assert_eq!(disk_removed.matches[0].rel_path, "sub/b.rs");
+        assert!(!disk_removed.matches[0].from_unsaved_buffer);
 
         let _ = fs::remove_dir_all(&dir);
     }

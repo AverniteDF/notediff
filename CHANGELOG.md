@@ -12,8 +12,8 @@ versioning.
   searches UTF-8 files in a chosen folder (defaulting to the current document's
   folder) with **Match Case** (`Aa`), **Whole Word** (`W`), optional file and
   exclude globs, session-persisted inputs, collapsible per-file result groups
-  (collapsed by default) with match counts, and cancellable background
-  execution. Clicking a result raises an already-open window or opens a new
+  (collapsed by default) with match counts, live in-memory searching of dirty
+  open buffers, and cancellable background execution. Clicking a result raises an already-open window or opens a new
   window and jumps straight to the matching line and selection (keeping the
   dialog open unless the match targets the searching window's current document).
 - **Run Script…** (**F6**, also in its own section of the main menu) discovers

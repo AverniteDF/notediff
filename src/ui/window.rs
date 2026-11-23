@@ -1307,6 +1307,23 @@ fn window_for_open_path(path: &Path) -> Option<Rc<AppWindow>> {
     window_for_canonical_path(&canonical)
 }
 
+/// Snapshot the live in-memory text of every dirty file-backed window, keyed
+/// by canonical path, so Find in Files searches unsaved edits instead of stale
+/// on-disk content.
+pub(super) fn dirty_open_buffers() -> std::collections::HashMap<PathBuf, String> {
+    let mut map = std::collections::HashMap::new();
+    WINDOWS.with_borrow(|windows| {
+        for window in windows {
+            if window.flags.dirty.get()
+                && let Some(path) = window.doc.borrow().path()
+            {
+                map.insert(path.to_path_buf(), window.current_text());
+            }
+        }
+    });
+    map
+}
+
 /// Return the window that owns an already-canonical path. Save As uses this
 /// so a path that does not exist yet can be compared without requiring it to
 /// exist first.

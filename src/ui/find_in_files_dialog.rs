@@ -3,6 +3,7 @@
 //! with cancellation, and click-to-jump into the matching file and line.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use crate::ui::dialogs::{self, Response};
 use crate::ui::display_path;
 
 type MatchCallback = Box<dyn Fn(PathBuf, usize, usize, usize) -> bool>;
+type DirtyBuffersCallback = Box<dyn Fn() -> HashMap<PathBuf, String>>;
 
 #[derive(Clone, Debug)]
 struct SavedInputs {
@@ -43,12 +45,14 @@ pub fn present(
     parent: &adw::ApplicationWindow,
     initial_folder: PathBuf,
     initial_query: Option<String>,
+    snapshot_dirty: impl Fn() -> HashMap<PathBuf, String> + 'static,
     on_open_match: impl Fn(PathBuf, usize, usize, usize) -> bool + 'static,
 ) {
     let state = Rc::new(DialogState::new(
         parent,
         initial_folder,
         initial_query,
+        Box::new(snapshot_dirty),
         Box::new(on_open_match),
     ));
     state.wire_signals();
@@ -75,6 +79,7 @@ struct DialogState {
     status_label: gtk::Label,
     spinner: gtk::Spinner,
     running_cancel: RefCell<Option<Arc<AtomicBool>>>,
+    snapshot_dirty: DirtyBuffersCallback,
     on_open_match: MatchCallback,
 }
 
@@ -83,6 +88,7 @@ impl DialogState {
         parent: &adw::ApplicationWindow,
         initial_folder: PathBuf,
         initial_query: Option<String>,
+        snapshot_dirty: DirtyBuffersCallback,
         on_open_match: MatchCallback,
     ) -> Self {
         let dialog = adw::Dialog::builder()
@@ -267,6 +273,7 @@ impl DialogState {
             status_label,
             spinner,
             running_cancel: RefCell::new(None),
+            snapshot_dirty,
             on_open_match,
         }
     }
@@ -450,6 +457,7 @@ impl DialogState {
             include_globs: find_in_files::parse_globs(self.include_entry.text().as_str()),
             exclude_globs: find_in_files::parse_globs(self.exclude_entry.text().as_str()),
             max_matches: DEFAULT_MAX_MATCHES,
+            open_buffers: (self.snapshot_dirty)(),
         };
 
         let cancel = Arc::new(AtomicBool::new(false));
@@ -560,11 +568,14 @@ impl DialogState {
 
     fn build_file_group(self: &Rc<Self>, hits: &[FileMatch]) -> gtk::Expander {
         let first = &hits[0];
-        let count_text = if hits.len() == 1 {
+        let mut count_text = if hits.len() == 1 {
             "1 match".to_string()
         } else {
             format!("{} matches", format_thousands(hits.len()))
         };
+        if first.from_unsaved_buffer {
+            count_text.push_str(" · unsaved");
+        }
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let path_label = gtk::Label::new(Some(&first.rel_path));
