@@ -821,7 +821,10 @@ The repository includes three example scripts under `examples/scripts/`:
 
 `./install.sh` copies any missing example scripts into
 `$XDG_DATA_HOME/notediff/scripts/` automatically (without overwriting existing
-files). To copy or restore them manually from the project root:
+files), installs `docs/scripts.md` into `$XDG_DATA_HOME/notediff/docs/`, and
+seeds a **Create a notediff Script** example preset for `prompt-packer.py` on a
+fresh install. To copy or restore the example scripts manually from the project
+root:
 
 ```bash
 scripts="${XDG_DATA_HOME:-$HOME/.local/share}/notediff/scripts"

@@ -9,7 +9,10 @@ else
 fi
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
-SCRIPTS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/notediff/scripts"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/notediff"
+SCRIPTS_DIR="$DATA_DIR/scripts"
+DOCS_DIR="$DATA_DIR/docs"
+SCRIPT_STATE_FILE="$DATA_DIR/script-state"
 DESKTOP_NAME="io.github.AverniteDF.Notediff.desktop"
 DESKTOP_FILE="$APPLICATIONS_DIR/$DESKTOP_NAME"
 ICON_NAME="io.github.AverniteDF.Notediff"
@@ -74,6 +77,24 @@ if [[ -d "$PROJECT_DIR/examples/scripts" ]]; then
       install -m 755 "$script" "$dest"
     fi
   done
+fi
+
+if [[ -f "$PROJECT_DIR/docs/scripts.md" ]]; then
+  mkdir -p "$DOCS_DIR"
+  install -m 644 "$PROJECT_DIR/docs/scripts.md" "$DOCS_DIR/scripts.md"
+fi
+
+if [[ ! -e "$SCRIPT_STATE_FILE" && -f "$SCRIPTS_DIR/prompt-packer.py" && -f "$DOCS_DIR/scripts.md" ]]; then
+  packer_path="$(cd "$SCRIPTS_DIR" && pwd -P)/prompt-packer.py"
+  guide_path="$(cd "$DOCS_DIR" && pwd -P)/scripts.md"
+  cat > "$SCRIPT_STATE_FILE" <<EOF
+# notediff script state (written by notediff)
+
+[preset $packer_path]
+name = Create a notediff Script
+field.prompt = (Enter description of a notediff script you'd like an LLM to create)
+item.paths = $guide_path
+EOF
 fi
 
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
