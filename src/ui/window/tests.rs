@@ -150,6 +150,7 @@ fn gtk_window_smoke() {
         ["<Shift><Control>n"]
     );
     assert_eq!(app.accels_for_action("win.enter-diff").as_slice(), ["F5"]);
+    assert_eq!(app.accels_for_action("win.manage-app").as_slice(), ["F4"]);
     assert_eq!(
         app.accels_for_action("win.indent-increase-include-empty")
             .as_slice(),

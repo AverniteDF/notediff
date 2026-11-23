@@ -120,6 +120,7 @@ cargo run --release -- /path/to/notes.md
 | `Ctrl+O` | Open file in this window |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / Save As |
 | `F2` | Rename or Move |
+| `F4` | Manage App… |
 | `F5` | Review Changes (Diff Mode) |
 | `F6` | Run Script… |
 | `Ctrl+F` / `Ctrl+H` | Find / Replace |

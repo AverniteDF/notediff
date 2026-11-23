@@ -538,7 +538,8 @@ navigation and accept buttons disabled.
 
 ## Appearance settings
 
-Open **Manage App… → Appearance** to choose a theme and edit the content font.
+Open **Manage App…** from the menu or with **F4**, then choose **Appearance**
+to select a theme or edit the content font.
 Theme changes apply immediately. Font fields are drafts until **Apply Font** is
 clicked or Enter is pressed in either field; closing the dialog discards
 unapplied font edits. Applied settings affect
@@ -743,7 +744,8 @@ if you have an existing store, make sure its root is accessible only to your
 user rather than waiting for another write. Also check any backups or copies
 of the store.
 
-**Manage App…** (menu), **Baseline Snapshots** tab, walks the store and lists:
+The **Baseline Snapshots** tab in **Manage App…** (menu or **F4**) walks the
+store and lists:
 
 - snapshots whose live file no longer exists (orphans), with a checkbox and
   last-modified date;

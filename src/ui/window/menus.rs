@@ -462,6 +462,7 @@ pub(super) fn install_accels(app: &adw::Application) {
     app.set_accels_for_action("win.save-as", &["<Ctrl><Shift>s"]);
     app.set_accels_for_action("win.rename", &["F2"]);
     app.set_accels_for_action("win.enter-diff", &["F5"]);
+    app.set_accels_for_action("win.manage-app", &["F4"]);
     app.set_accels_for_action("win.run-script", &["F6"]);
     app.set_accels_for_action("win.find", &["<Ctrl>f"]);
     app.set_accels_for_action("win.find-in-files", &["<Ctrl><Shift>f"]);
