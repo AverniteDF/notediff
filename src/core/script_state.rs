@@ -18,6 +18,12 @@ const MAX_STATE_BYTES: u64 = 1024 * 1024;
 /// Maximum number of scripts retained in the state file.
 pub const MAX_SAVED_SCRIPTS: usize = 64;
 
+/// Maximum number of named presets retained per script.
+pub const MAX_PRESETS_PER_SCRIPT: usize = 32;
+
+/// Maximum length of a preset name in Unicode scalar values.
+pub const MAX_PRESET_NAME_CHARS: usize = 64;
+
 /// A persisted field value.
 ///
 /// Scalar, multiline, list, integer, boolean, choice and slider fields are
@@ -49,12 +55,15 @@ impl ScriptParams {
 pub struct ScriptDialogState {
     pub selected_script: Option<PathBuf>,
     pub scripts: BTreeMap<PathBuf, ScriptParams>,
+    pub presets: BTreeMap<PathBuf, BTreeMap<String, ScriptParams>>,
 }
 
 impl ScriptDialogState {
-    /// Remove any script entries that hold no overrides.
+    /// Remove any script draft entries that hold no overrides, and any empty
+    /// per-script preset maps.
     pub fn prune_empty(&mut self) {
         self.scripts.retain(|_, params| !params.is_empty());
+        self.presets.retain(|_, map| !map.is_empty());
     }
 
     /// True when nothing remains to persist.
@@ -63,6 +72,7 @@ impl ScriptDialogState {
             .as_deref()
             .is_none_or(|p| !rememberable_path(p))
             && self.scripts.values().all(ScriptParams::is_empty)
+            && self.presets.values().all(BTreeMap::is_empty)
     }
 
     /// Update or remove a script's saved parameters while keeping the map bounded.
@@ -84,6 +94,59 @@ impl ScriptDialogState {
         }
         self.scripts.insert(key, params);
     }
+
+    /// Named presets saved for `key`, sorted alphabetically by name.
+    pub fn presets_for(&self, key: &Path) -> Option<&BTreeMap<String, ScriptParams>> {
+        self.presets.get(key).filter(|m| !m.is_empty())
+    }
+
+    /// Save (or overwrite) a named preset for `key`.
+    /// Returns `Ok(true)` if an existing preset with the same name was overwritten,
+    /// or `Ok(false)` if a new preset was created.
+    pub fn save_preset(
+        &mut self,
+        key: PathBuf,
+        raw_name: &str,
+        params: ScriptParams,
+    ) -> Result<bool, &'static str> {
+        let Some(name) = validate_preset_name(raw_name) else {
+            return Err("Enter a preset name (up to 64 characters).");
+        };
+        if !rememberable_path(&key) {
+            return Err("Could not save preset for this script path.");
+        }
+        let map = self.presets.entry(key).or_default();
+        let existed = map.contains_key(&name);
+        if !existed && map.len() >= MAX_PRESETS_PER_SCRIPT {
+            return Err("A script can have at most 32 saved presets.");
+        }
+        map.insert(name, params);
+        Ok(existed)
+    }
+
+    /// Delete a named preset for `key`. Returns `true` if one was removed.
+    pub fn delete_preset(&mut self, key: &Path, name: &str) -> bool {
+        let Some(map) = self.presets.get_mut(key) else {
+            return false;
+        };
+        let removed = map.remove(name).is_some();
+        if map.is_empty() {
+            self.presets.remove(key);
+        }
+        removed
+    }
+}
+
+/// Normalize and validate a user-supplied preset name.
+pub fn validate_preset_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.chars().count() > MAX_PRESET_NAME_CHARS
+        || trimmed.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 /// Resolve a script path to its canonical key, falling back to the original path
@@ -212,9 +275,65 @@ fn split_key_value(line: &str) -> Option<(&str, &str)> {
     Some((key, val))
 }
 
+enum ParseSection {
+    Top,
+    Ignored,
+    Draft(PathBuf),
+    Preset {
+        script: PathBuf,
+        name: Option<String>,
+        params: ScriptParams,
+    },
+}
+
+fn apply_param_entry(entry: &mut ScriptParams, key: &str, val: &str) {
+    if key == "sandbox" {
+        if let Some(mode) = parse_sandbox(val.trim()) {
+            entry.sandbox = Some(mode);
+        }
+    } else if key == "writable_dir" {
+        let path = PathBuf::from(val);
+        if rememberable_path(&path) {
+            entry.writable_dir = Some(path);
+        }
+    } else if let Some(field_id) = key.strip_prefix("field.")
+        && !field_id.is_empty()
+    {
+        entry.fields.insert(
+            field_id.to_string(),
+            SavedFieldValue::Text(unescape_value(val)),
+        );
+    } else if let Some(field_id) = key.strip_prefix("item.")
+        && !field_id.is_empty()
+    {
+        let item = unescape_value(val);
+        if !item.is_empty() {
+            match entry.fields.get_mut(field_id) {
+                Some(SavedFieldValue::List(items)) => items.push(item),
+                _ => {
+                    entry
+                        .fields
+                        .insert(field_id.to_string(), SavedFieldValue::List(vec![item]));
+                }
+            }
+        }
+    }
+}
+
+fn flush_preset_section(state: &mut ScriptDialogState, section: ParseSection) {
+    if let ParseSection::Preset {
+        script,
+        name: Some(name),
+        params,
+    } = section
+    {
+        let _ = state.save_preset(script, &name, params);
+    }
+}
+
 pub fn parse(text: &str) -> ScriptDialogState {
     let mut state = ScriptDialogState::default();
-    let mut current_script: Option<PathBuf> = None;
+    let mut section = ParseSection::Top;
 
     for raw_line in text.lines() {
         let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
@@ -227,13 +346,32 @@ pub fn parse(text: &str) -> ScriptDialogState {
             .strip_prefix("[script ")
             .and_then(|rest| rest.strip_suffix(']'))
         {
+            flush_preset_section(&mut state, section);
             let path = PathBuf::from(script_str);
             if rememberable_path(&path)
                 && (state.scripts.contains_key(&path) || state.scripts.len() < MAX_SAVED_SCRIPTS)
             {
-                current_script = Some(path);
+                section = ParseSection::Draft(path);
             } else {
-                current_script = None;
+                section = ParseSection::Ignored;
+            }
+            continue;
+        }
+
+        if let Some(script_str) = line
+            .strip_prefix("[preset ")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            flush_preset_section(&mut state, section);
+            let path = PathBuf::from(script_str);
+            if rememberable_path(&path) {
+                section = ParseSection::Preset {
+                    script: path,
+                    name: None,
+                    params: ScriptParams::default(),
+                };
+            } else {
+                section = ParseSection::Ignored;
             }
             continue;
         }
@@ -242,52 +380,73 @@ pub fn parse(text: &str) -> ScriptDialogState {
             continue;
         };
 
-        let Some(ref script_path) = current_script else {
-            if key == "selected" {
-                let path = PathBuf::from(val);
-                if rememberable_path(&path) {
-                    state.selected_script = Some(path);
+        match &mut section {
+            ParseSection::Top => {
+                if key == "selected" {
+                    let path = PathBuf::from(val);
+                    if rememberable_path(&path) {
+                        state.selected_script = Some(path);
+                    }
                 }
             }
-            continue;
-        };
-
-        let entry = state.scripts.entry(script_path.clone()).or_default();
-        if key == "sandbox" {
-            if let Some(mode) = parse_sandbox(val.trim()) {
-                entry.sandbox = Some(mode);
+            ParseSection::Ignored => {}
+            ParseSection::Draft(script_path) => {
+                let entry = state.scripts.entry(script_path.clone()).or_default();
+                apply_param_entry(entry, key, val);
             }
-        } else if key == "writable_dir" {
-            let path = PathBuf::from(val);
-            if rememberable_path(&path) {
-                entry.writable_dir = Some(path);
-            }
-        } else if let Some(field_id) = key.strip_prefix("field.")
-            && !field_id.is_empty()
-        {
-            entry.fields.insert(
-                field_id.to_string(),
-                SavedFieldValue::Text(unescape_value(val)),
-            );
-        } else if let Some(field_id) = key.strip_prefix("item.")
-            && !field_id.is_empty()
-        {
-            let item = unescape_value(val);
-            if !item.is_empty() {
-                match entry.fields.get_mut(field_id) {
-                    Some(SavedFieldValue::List(items)) => items.push(item),
-                    _ => {
-                        entry
-                            .fields
-                            .insert(field_id.to_string(), SavedFieldValue::List(vec![item]));
+            ParseSection::Preset { name, params, .. } => {
+                if key == "name" {
+                    if let Some(valid) = validate_preset_name(&unescape_value(val)) {
+                        *name = Some(valid);
                     }
+                } else {
+                    apply_param_entry(params, key, val);
                 }
             }
         }
     }
 
+    flush_preset_section(&mut state, section);
     state.prune_empty();
     state
+}
+
+fn render_params(out: &mut String, params: &ScriptParams) {
+    if let Some(sandbox) = params.sandbox {
+        out.push_str("sandbox = ");
+        out.push_str(sandbox_to_str(sandbox));
+        out.push('\n');
+    }
+    if let Some(ref dir) = params.writable_dir
+        && rememberable_path(dir)
+        && let Some(dir_str) = dir.to_str()
+    {
+        out.push_str("writable_dir = ");
+        out.push_str(dir_str);
+        out.push('\n');
+    }
+    for (id, value) in &params.fields {
+        match value {
+            SavedFieldValue::Text(text) => {
+                out.push_str("field.");
+                out.push_str(id);
+                out.push_str(" = ");
+                out.push_str(&escape_value(text));
+                out.push('\n');
+            }
+            SavedFieldValue::List(items) => {
+                for item in items {
+                    if !item.is_empty() {
+                        out.push_str("item.");
+                        out.push_str(id);
+                        out.push_str(" = ");
+                        out.push_str(&escape_value(item));
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn render(state: &ScriptDialogState) -> String {
@@ -316,43 +475,30 @@ pub fn render(state: &ScriptDialogState) -> String {
         out.push_str("[script ");
         out.push_str(path_str);
         out.push_str("]\n");
-
-        if let Some(sandbox) = params.sandbox {
-            out.push_str("sandbox = ");
-            out.push_str(sandbox_to_str(sandbox));
-            out.push('\n');
-        }
-        if let Some(ref dir) = params.writable_dir
-            && rememberable_path(dir)
-            && let Some(dir_str) = dir.to_str()
-        {
-            out.push_str("writable_dir = ");
-            out.push_str(dir_str);
-            out.push('\n');
-        }
-        for (id, value) in &params.fields {
-            match value {
-                SavedFieldValue::Text(text) => {
-                    out.push_str("field.");
-                    out.push_str(id);
-                    out.push_str(" = ");
-                    out.push_str(&escape_value(text));
-                    out.push('\n');
-                }
-                SavedFieldValue::List(items) => {
-                    for item in items {
-                        if !item.is_empty() {
-                            out.push_str("item.");
-                            out.push_str(id);
-                            out.push_str(" = ");
-                            out.push_str(&escape_value(item));
-                            out.push('\n');
-                        }
-                    }
-                }
-            }
-        }
+        render_params(&mut out, params);
         written += 1;
+    }
+
+    for (path, preset_map) in &state.presets {
+        if preset_map.is_empty() || !rememberable_path(path) {
+            continue;
+        }
+        let Some(path_str) = path.to_str() else {
+            continue;
+        };
+        for (name, params) in preset_map.iter().take(MAX_PRESETS_PER_SCRIPT) {
+            let Some(valid_name) = validate_preset_name(name) else {
+                continue;
+            };
+            out.push('\n');
+            out.push_str("[preset ");
+            out.push_str(path_str);
+            out.push_str("]\n");
+            out.push_str("name = ");
+            out.push_str(&escape_value(&valid_name));
+            out.push('\n');
+            render_params(&mut out, params);
+        }
     }
 
     out
@@ -381,6 +527,7 @@ mod tests {
         let mut state = ScriptDialogState {
             selected_script: Some(PathBuf::from("/home/user/scripts/prompt [v2].py")),
             scripts: BTreeMap::new(),
+            presets: BTreeMap::new(),
         };
 
         let mut params = ScriptParams {
@@ -470,6 +617,7 @@ item.paths = /two
         let mut state = ScriptDialogState {
             selected_script: Some(PathBuf::from("/tmp/a.py")),
             scripts: BTreeMap::new(),
+            presets: BTreeMap::new(),
         };
         let mut params = ScriptParams::default();
         params
@@ -503,5 +651,85 @@ item.paths = /two
             state.set_script_params(PathBuf::from(format!("/scripts/s-{i:03}.py")), params);
         }
         assert_eq!(state.scripts.len(), MAX_SAVED_SCRIPTS);
+    }
+
+    #[test]
+    fn presets_roundtrip_isolate_per_script_overwrite_and_delete() {
+        let mut state = ScriptDialogState::default();
+        let script_a = PathBuf::from("/scripts/a.py");
+        let script_b = PathBuf::from("/scripts/b.py");
+
+        let mut p1 = ScriptParams::default();
+        p1.fields
+            .insert("q".into(), SavedFieldValue::Text("alpha".into()));
+        assert_eq!(
+            state.save_preset(script_a.clone(), "Work | [1]", p1.clone()),
+            Ok(false)
+        );
+        // Empty (all-defaults) preset is preserved.
+        assert_eq!(
+            state.save_preset(script_a.clone(), "Defaults", ScriptParams::default()),
+            Ok(false)
+        );
+        // Same preset name on another script is independent.
+        let mut p2 = ScriptParams::default();
+        p2.fields
+            .insert("q".into(), SavedFieldValue::Text("beta".into()));
+        assert_eq!(
+            state.save_preset(script_b.clone(), "Work | [1]", p2.clone()),
+            Ok(false)
+        );
+
+        let parsed = parse(&render(&state));
+        assert_eq!(parsed, state);
+        assert!(!parsed.is_empty());
+
+        // Overwrite existing preset on script_a without touching script_b.
+        let mut p1_updated = ScriptParams::default();
+        p1_updated
+            .fields
+            .insert("q".into(), SavedFieldValue::Text("alpha-2".into()));
+        assert_eq!(
+            state.save_preset(script_a.clone(), "  Work | [1] ", p1_updated.clone()),
+            Ok(true)
+        );
+        assert_eq!(
+            state.presets_for(&script_a).unwrap().get("Work | [1]"),
+            Some(&p1_updated)
+        );
+        assert_eq!(
+            state.presets_for(&script_b).unwrap().get("Work | [1]"),
+            Some(&p2)
+        );
+
+        // Delete presets and verify empty outer map is pruned.
+        assert!(state.delete_preset(&script_b, "Work | [1]"));
+        assert!(!state.delete_preset(&script_b, "Work | [1]"));
+        assert!(state.presets_for(&script_b).is_none());
+        assert!(!state.presets.contains_key(&script_b));
+
+        // Invalid names and cap enforcement.
+        assert!(
+            state
+                .save_preset(script_a.clone(), "   ", ScriptParams::default())
+                .is_err()
+        );
+        assert!(
+            state
+                .save_preset(script_a.clone(), "bad\nname", ScriptParams::default())
+                .is_err()
+        );
+        for i in 0..MAX_PRESETS_PER_SCRIPT {
+            let _ = state.save_preset(
+                script_b.clone(),
+                &format!("preset-{i:02}"),
+                ScriptParams::default(),
+            );
+        }
+        assert!(
+            state
+                .save_preset(script_b.clone(), "overflow", ScriptParams::default())
+                .is_err()
+        );
     }
 }

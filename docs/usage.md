@@ -800,13 +800,15 @@ or edited scripts appear immediately without restarting. Click **Browse…** in
 the dialog header to pick any executable script elsewhere on disk.
 
 The last-selected script, each script's parameter drafts, any overridden
-**Safety** mode, and the chosen writable folder are saved automatically when
+**Safety Setting**, and the chosen writable folder are saved automatically when
 you switch scripts, close the dialog, or click **Run**. They are kept in
 `$XDG_DATA_HOME/notediff/script-state` (normally
-`~/.local/share/notediff/script-state`) and restored across restarts; click
-**Reset** beside a script's title to restore its parameters and Safety mode to
-their declared defaults. **No Sandbox** still asks for confirmation before
-every run even when remembered.
+`~/.local/share/notediff/script-state`) and restored across restarts. Click
+**Presets** beside a script's title to save the current parameters and Safety
+Setting as a named preset for that script (saving with an existing name
+overwrites it), load a saved preset, delete a preset immediately with its
+trashcan icon, or choose **Reset to Defaults**. **No Sandbox** still asks for
+confirmation before every run even when remembered or loaded from a preset.
 
 The repository includes three example scripts under `examples/scripts/`:
 

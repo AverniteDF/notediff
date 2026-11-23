@@ -91,7 +91,7 @@ Header keys appear before the first `[field.<id>]` section. All are optional:
 | --- | --- | --- |
 | `name` | File name stem | Display name shown in the sidebar and form header |
 | `description` | *(empty)* | Short description shown under the script title |
-| `sandbox` | `read-only` | Initial **Safety** mode: `read-only`, `writable-dir`, or `none` (user overrides and field drafts are remembered across sessions in `$XDG_DATA_HOME/notediff/script-state` and can be cleared per script with **Reset**) |
+| `sandbox` | `read-only` | Initial **Safety Setting** mode: `read-only`, `writable-dir`, or `none` (user overrides, field drafts, and named per-script presets are remembered across sessions in `$XDG_DATA_HOME/notediff/script-state` via the **Presets** menu) |
 | `output_ext` | `txt` | Extension for the timestamped output window title (`<stem>-YYYY-MM-DD-HHMMSS.<ext>`) and **Save As** initial name. ASCII alphanumeric, up to 16 characters (leading `.` stripped) |
 
 ---

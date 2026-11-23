@@ -3,6 +3,7 @@
 //! (optionally inside a bubblewrap sandbox), and delivers stdout to a new window.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, TryRecvError};
@@ -144,6 +145,29 @@ pub(super) fn close_for_smoke(parent: &adw::ApplicationWindow) -> impl Fn() -> b
         FieldValue::Text("saved-query".into())
     );
     assert_eq!(state.controls.borrow()[1].value(), FieldValue::Bool(true));
+
+    // Save a preset on Alpha, reset Alpha, then reload the preset and delete it.
+    assert!(state.save_preset_from_current("My Setup"));
+    state.reset_current_script();
+    assert_eq!(
+        state.controls.borrow()[0].value(),
+        FieldValue::Text("init".into())
+    );
+    assert_eq!(state.controls.borrow()[1].value(), FieldValue::Bool(false));
+    state.apply_preset("My Setup");
+    assert_eq!(
+        state.controls.borrow()[0].value(),
+        FieldValue::Text("saved-query".into())
+    );
+    assert_eq!(state.controls.borrow()[1].value(), FieldValue::Bool(true));
+    state.delete_preset("My Setup");
+    assert!(
+        state
+            .saved_state
+            .borrow()
+            .presets_for(&script_state::canonical_script_key(&script_a))
+            .is_none()
+    );
 
     state.dialog.present(Some(parent));
     state.dialog.close();
@@ -316,11 +340,11 @@ struct DialogState {
     scripts: RefCell<Vec<DiscoveredScript>>,
     selected_index: Cell<Option<usize>>,
     controls: RefCell<Vec<FieldControl>>,
-    reset_button: RefCell<Option<gtk::Button>>,
+    presets_button: RefCell<Option<gtk::MenuButton>>,
     state_store: ScriptStateStore,
     saved_state: RefCell<ScriptDialogState>,
+    active_presets: RefCell<HashMap<PathBuf, String>>,
     rebuilding_sidebar: Cell<bool>,
-    suppress_state_events: Cell<bool>,
     running_cancel: RefCell<Option<CancelHandle>>,
     on_open_docs: OpenDocsCallback,
     on_output: OutputCallback,
@@ -483,11 +507,11 @@ impl DialogState {
             scripts: RefCell::new(Vec::new()),
             selected_index: Cell::new(None),
             controls: RefCell::new(Vec::new()),
-            reset_button: RefCell::new(None),
+            presets_button: RefCell::new(None),
             state_store,
             saved_state: RefCell::new(saved_state),
+            active_presets: RefCell::new(HashMap::new()),
             rebuilding_sidebar: Cell::new(false),
-            suppress_state_events: Cell::new(false),
             running_cancel: RefCell::new(None),
             on_open_docs,
             on_output,
@@ -561,9 +585,6 @@ impl DialogState {
                     if let Some(this) = weak.upgrade() {
                         this.writable_dir_button
                             .set_visible(this.bwrap_ok && dropdown.selected() == SANDBOX_WRITABLE);
-                        if !this.suppress_state_events.get() {
-                            this.update_reset_sensitivity();
-                        }
                     }
                 });
         }
@@ -663,7 +684,7 @@ impl DialogState {
 
     fn clear_form(&self) {
         self.controls.borrow_mut().clear();
-        *self.reset_button.borrow_mut() = None;
+        *self.presets_button.borrow_mut() = None;
         while let Some(child) = self.form_box.first_child() {
             self.form_box.remove(&child);
         }
@@ -712,17 +733,26 @@ impl DialogState {
         title_row.append(&heading);
 
         if script.metadata.is_ok() {
-            let reset_btn = gtk::Button::with_label("Reset");
-            reset_btn.set_valign(gtk::Align::Center);
-            reset_btn.set_tooltip_text(Some("Reset parameters and safety mode to defaults"));
+            let presets_btn = gtk::MenuButton::builder().label("Presets").build();
+            presets_btn.set_valign(gtk::Align::Center);
+            presets_btn.set_tooltip_text(Some("Save, load, or reset parameter presets"));
+            let popover = gtk::Popover::new();
+            let popover_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            popover_box.set_margin_top(8);
+            popover_box.set_margin_bottom(8);
+            popover_box.set_margin_start(8);
+            popover_box.set_margin_end(8);
+            popover.set_child(Some(&popover_box));
             let weak = Rc::downgrade(self);
-            reset_btn.connect_clicked(move |_| {
+            let box_ref = popover_box.clone();
+            popover.connect_show(move |pop| {
                 if let Some(this) = weak.upgrade() {
-                    this.reset_current_script();
+                    this.populate_presets_popover(pop, &box_ref);
                 }
             });
-            title_row.append(&reset_btn);
-            *self.reset_button.borrow_mut() = Some(reset_btn);
+            presets_btn.set_popover(Some(&popover));
+            title_row.append(&presets_btn);
+            *self.presets_button.borrow_mut() = Some(presets_btn);
         }
         self.form_box.append(&title_row);
 
@@ -775,9 +805,7 @@ impl DialogState {
                         SandboxDefault::WritableDir => SANDBOX_WRITABLE,
                         SandboxDefault::None => SANDBOX_NONE,
                     };
-                    self.suppress_state_events.set(true);
                     self.sandbox_dropdown.set_selected(sandbox_idx);
-                    self.suppress_state_events.set(false);
                     self.writable_dir_button
                         .set_visible(sandbox_idx == SANDBOX_WRITABLE);
                 }
@@ -805,7 +833,6 @@ impl DialogState {
         }
 
         self.update_run_sensitivity();
-        self.update_reset_sensitivity();
     }
 
     fn show_empty_state(&self) {
@@ -858,7 +885,6 @@ impl DialogState {
                 entry.connect_changed(move |_| {
                     if let Some(this) = weak.upgrade() {
                         this.update_run_sensitivity();
-                        this.update_reset_sensitivity();
                     }
                 });
                 container.append(&entry);
@@ -889,7 +915,6 @@ impl DialogState {
                 buffer.connect_changed(move |_| {
                     if let Some(this) = weak.upgrade() {
                         this.update_run_sensitivity();
-                        this.update_reset_sensitivity();
                     }
                 });
                 container.append(&scroll);
@@ -918,12 +943,6 @@ impl DialogState {
                 let adj = gtk::Adjustment::new(initial, lo as f64, hi as f64, 1.0, 10.0, 0.0);
                 let spin = gtk::SpinButton::new(Some(&adj), 1.0, 0);
                 spin.set_halign(gtk::Align::Start);
-                let weak = Rc::downgrade(self);
-                spin.connect_value_changed(move |_| {
-                    if let Some(this) = weak.upgrade() {
-                        this.update_reset_sensitivity();
-                    }
-                });
                 container.append(&spin);
                 FieldWidget::Int(spin)
             }
@@ -936,12 +955,6 @@ impl DialogState {
                     _ => default_bool_value(spec),
                 };
                 check.set_active(active);
-                let weak = Rc::downgrade(self);
-                check.connect_toggled(move |_| {
-                    if let Some(this) = weak.upgrade() {
-                        this.update_reset_sensitivity();
-                    }
-                });
                 container.append(&check);
                 FieldWidget::Bool(check)
             }
@@ -955,12 +968,6 @@ impl DialogState {
                 if !spec.options.is_empty() {
                     dropdown.set_selected(initial as u32);
                 }
-                let weak = Rc::downgrade(self);
-                dropdown.connect_selected_notify(move |_| {
-                    if let Some(this) = weak.upgrade() {
-                        this.update_reset_sensitivity();
-                    }
-                });
                 container.append(&dropdown);
                 FieldWidget::Choice {
                     dropdown,
@@ -1026,15 +1033,11 @@ impl DialogState {
 
                 let options_for_label = spec.options.clone();
                 let label_ref = value_label.clone();
-                let weak = Rc::downgrade(self);
                 scale.connect_value_changed(move |scale| {
                     let idx = (scale.value().round().max(0.0) as usize)
                         .min(options_for_label.len().saturating_sub(1));
                     if let Some(text) = options_for_label.get(idx) {
                         label_ref.set_text(text);
-                    }
-                    if let Some(this) = weak.upgrade() {
-                        this.update_reset_sensitivity();
                     }
                 });
 
@@ -1060,7 +1063,6 @@ impl DialogState {
                 entry.connect_changed(move |_| {
                     if let Some(this) = weak.upgrade() {
                         this.update_run_sensitivity();
-                        this.update_reset_sensitivity();
                     }
                 });
 
@@ -1189,7 +1191,6 @@ impl DialogState {
         }
         self.rebuild_paths_list(paths, list);
         self.update_run_sensitivity();
-        self.update_reset_sensitivity();
     }
 
     fn rebuild_paths_list(self: &Rc<Self>, paths: &Rc<RefCell<Vec<PathBuf>>>, list: &gtk::ListBox) {
@@ -1225,7 +1226,6 @@ impl DialogState {
                     }
                     this.rebuild_paths_list(&paths_ref, &list_ref);
                     this.update_run_sensitivity();
-                    this.update_reset_sensitivity();
                 }
             });
 
@@ -1399,7 +1399,6 @@ impl DialogState {
                 {
                     *this.writable_dir_override.borrow_mut() = Some(path);
                     this.refresh_writable_dir_button();
-                    this.update_reset_sensitivity();
                 }
             },
         );
@@ -1413,12 +1412,10 @@ impl DialogState {
         }
     }
 
-    fn capture_current_script_state(&self) {
-        let Some(script) = self.selected_script() else {
-            return;
-        };
+    fn snapshot_current_script_params(&self) -> Option<(PathBuf, ScriptParams)> {
+        let script = self.selected_script()?;
         let Ok(meta) = &script.metadata else {
-            return;
+            return None;
         };
         let key = script_state::canonical_script_key(&script.path);
         let mut params = ScriptParams::default();
@@ -1444,7 +1441,13 @@ impl DialogState {
             }
         }
 
-        self.saved_state.borrow_mut().set_script_params(key, params);
+        Some((key, params))
+    }
+
+    fn capture_current_script_state(&self) {
+        if let Some((key, params)) = self.snapshot_current_script_params() {
+            self.saved_state.borrow_mut().set_script_params(key, params);
+        }
     }
 
     fn flush_state(&self) {
@@ -1467,10 +1470,290 @@ impl DialogState {
         self.controls.borrow().iter().any(|c| !c.is_default())
     }
 
-    fn update_reset_sensitivity(&self) {
-        if let Some(ref btn) = *self.reset_button.borrow() {
-            let running = self.running_cancel.borrow().is_some();
-            btn.set_sensitive(!running && self.has_non_default_state());
+    fn populate_presets_popover(self: &Rc<Self>, popover: &gtk::Popover, container: &gtk::Box) {
+        while let Some(child) = container.first_child() {
+            container.remove(&child);
+        }
+
+        // Saved presets for the currently selected script.
+        let snapshot = self.snapshot_current_script_params();
+        let presets: Vec<(String, ScriptParams)> = snapshot
+            .as_ref()
+            .and_then(|(key, _)| {
+                self.saved_state
+                    .borrow()
+                    .presets_for(key)
+                    .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            })
+            .unwrap_or_default();
+
+        // Pre-fill the preset name field with the last-loaded/saved preset for
+        // this script, or fall back to an exact-matching preset.
+        let prefill_name: Option<String> = snapshot.as_ref().and_then(|(key, cur)| {
+            let tracked = self.active_presets.borrow().get(key).cloned();
+            if let Some(ref name) = tracked
+                && presets.iter().any(|(n, _)| n == name)
+            {
+                return Some(name.clone());
+            }
+            presets
+                .iter()
+                .find(|(_, params)| params == cur)
+                .map(|(name, _)| name.clone())
+        });
+
+        // Inline save row: [ Preset name… ] [ 💾 ]
+        let save_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let name_entry = gtk::Entry::new();
+        name_entry.set_placeholder_text(Some("Preset name…"));
+        name_entry.set_width_chars(18);
+        name_entry.set_max_length(script_state::MAX_PRESET_NAME_CHARS as i32);
+        name_entry.set_hexpand(true);
+
+        let save_btn = gtk::Button::from_icon_name("document-save-symbolic");
+        save_btn.add_css_class("flat");
+        save_btn.set_valign(gtk::Align::Center);
+
+        let current_params_for_save = snapshot.as_ref().map(|(_, p)| p.clone());
+        let presets_for_save = presets.clone();
+        let can_save = move |raw: &str| -> bool {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            if let Some(ref cur) = current_params_for_save
+                && let Some((_, existing)) = presets_for_save.iter().find(|(n, _)| n == trimmed)
+                && existing == cur
+            {
+                return false;
+            }
+            true
+        };
+
+        if let Some(ref prefill) = prefill_name {
+            name_entry.set_text(prefill);
+            save_btn.set_sensitive(can_save(prefill));
+        } else {
+            save_btn.set_sensitive(false);
+        }
+
+        {
+            let save_ref = save_btn.clone();
+            name_entry.connect_changed(move |entry| {
+                save_ref.set_sensitive(can_save(entry.text().as_str()));
+            });
+        }
+        {
+            let weak = Rc::downgrade(self);
+            let entry_ref = name_entry.clone();
+            let pop_ref = popover.downgrade();
+            save_btn.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade()
+                    && this.save_preset_from_current(entry_ref.text().as_str())
+                    && let Some(pop) = pop_ref.upgrade()
+                {
+                    pop.popdown();
+                }
+            });
+        }
+        {
+            let weak = Rc::downgrade(self);
+            let save_ref = save_btn.clone();
+            let pop_ref = popover.downgrade();
+            name_entry.connect_activate(move |entry| {
+                if !save_ref.is_sensitive() {
+                    return;
+                }
+                if let Some(this) = weak.upgrade()
+                    && this.save_preset_from_current(entry.text().as_str())
+                    && let Some(pop) = pop_ref.upgrade()
+                {
+                    pop.popdown();
+                }
+            });
+        }
+
+        save_row.append(&name_entry);
+        save_row.append(&save_btn);
+        container.append(&save_row);
+
+        let entry_for_focus = name_entry.downgrade();
+        glib::idle_add_local_once(move || {
+            if let Some(entry) = entry_for_focus.upgrade() {
+                entry.grab_focus();
+                if !entry.text().is_empty() {
+                    entry.select_region(0, -1);
+                }
+            }
+        });
+
+        if !presets.is_empty() {
+            container.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+            let preset_count = presets.len();
+            let list_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+
+            for (name, _) in presets {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+
+                let label = gtk::Label::new(Some(&name));
+                label.set_xalign(0.0);
+                label.set_hexpand(true);
+                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
+                let load_btn = gtk::Button::new();
+                load_btn.add_css_class("flat");
+                load_btn.set_hexpand(true);
+                load_btn.set_child(Some(&label));
+                {
+                    let weak = Rc::downgrade(self);
+                    let pop_ref = popover.downgrade();
+                    let preset_name = name.clone();
+                    load_btn.connect_clicked(move |_| {
+                        if let Some(pop) = pop_ref.upgrade() {
+                            pop.popdown();
+                        }
+                        if let Some(this) = weak.upgrade() {
+                            this.apply_preset(&preset_name);
+                        }
+                    });
+                }
+
+                let delete_btn = gtk::Button::from_icon_name("user-trash-symbolic");
+                delete_btn.add_css_class("flat");
+                delete_btn.set_valign(gtk::Align::Center);
+                {
+                    let weak = Rc::downgrade(self);
+                    let pop_ref = popover.downgrade();
+                    let box_ref = container.clone();
+                    let preset_name = name.clone();
+                    delete_btn.connect_clicked(move |_| {
+                        if let Some(this) = weak.upgrade() {
+                            this.delete_preset(&preset_name);
+                            if let Some(pop) = pop_ref.upgrade() {
+                                this.populate_presets_popover(&pop, &box_ref);
+                            }
+                        }
+                    });
+                }
+
+                row.append(&load_btn);
+                row.append(&delete_btn);
+                list_box.append(&row);
+            }
+
+            if preset_count > 6 {
+                let scroll = gtk::ScrolledWindow::builder()
+                    .hscrollbar_policy(gtk::PolicyType::Never)
+                    .propagate_natural_height(true)
+                    .max_content_height(240)
+                    .child(&list_box)
+                    .build();
+                container.append(&scroll);
+            } else {
+                container.append(&list_box);
+            }
+        }
+
+        // Bottom row: Reset to Defaults.
+        container.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        let reset_label = gtk::Label::new(Some("Reset to Defaults"));
+        reset_label.set_xalign(0.0);
+        let reset_btn = gtk::Button::new();
+        reset_btn.add_css_class("flat");
+        reset_btn.set_hexpand(true);
+        reset_btn.set_child(Some(&reset_label));
+        reset_btn.set_sensitive(self.has_non_default_state());
+        {
+            let weak = Rc::downgrade(self);
+            let pop_ref = popover.downgrade();
+            reset_btn.connect_clicked(move |_| {
+                if let Some(pop) = pop_ref.upgrade() {
+                    pop.popdown();
+                }
+                if let Some(this) = weak.upgrade() {
+                    this.reset_current_script();
+                }
+            });
+        }
+        container.append(&reset_btn);
+    }
+
+    fn save_preset_from_current(&self, raw_name: &str) -> bool {
+        let Some((key, params)) = self.snapshot_current_script_params() else {
+            return false;
+        };
+        let display_name = raw_name.trim().to_string();
+        let result = self
+            .saved_state
+            .borrow_mut()
+            .save_preset(key.clone(), raw_name, params);
+        match result {
+            Ok(replaced) => {
+                self.active_presets
+                    .borrow_mut()
+                    .insert(key, display_name.clone());
+                self.flush_state();
+                let msg = if replaced {
+                    format!("Updated preset \"{display_name}\"")
+                } else {
+                    format!("Saved preset \"{display_name}\"")
+                };
+                let t = toast::new(ToastKind::Success, &msg);
+                t.set_timeout(2);
+                self.toasts.add_toast(t);
+                true
+            }
+            Err(err) => {
+                let t = toast::new(ToastKind::Warning, err);
+                t.set_timeout(3);
+                self.toasts.add_toast(t);
+                false
+            }
+        }
+    }
+
+    fn apply_preset(self: &Rc<Self>, name: &str) {
+        let Some(idx) = self.selected_index.get() else {
+            return;
+        };
+        let Some(script) = self.selected_script() else {
+            return;
+        };
+        let key = script_state::canonical_script_key(&script.path);
+        let Some(params) = self
+            .saved_state
+            .borrow()
+            .presets_for(&key)
+            .and_then(|m| m.get(name))
+            .cloned()
+        else {
+            return;
+        };
+        self.saved_state
+            .borrow_mut()
+            .set_script_params(key.clone(), params);
+        self.active_presets
+            .borrow_mut()
+            .insert(key, name.to_string());
+        self.flush_state();
+        self.selected_index.set(None);
+        self.select_script(Some(idx));
+    }
+
+    fn delete_preset(&self, name: &str) {
+        let Some(script) = self.selected_script() else {
+            return;
+        };
+        let key = script_state::canonical_script_key(&script.path);
+        let removed = self.saved_state.borrow_mut().delete_preset(&key, name);
+        if removed {
+            if self.active_presets.borrow().get(&key).map(String::as_str) == Some(name) {
+                self.active_presets.borrow_mut().remove(&key);
+            }
+            self.flush_state();
+            let t = toast::new(ToastKind::Info, &format!("Deleted preset \"{name}\""));
+            t.set_timeout(2);
+            self.toasts.add_toast(t);
         }
     }
 
@@ -1483,6 +1766,7 @@ impl DialogState {
         };
         let key = script_state::canonical_script_key(&script.path);
         self.saved_state.borrow_mut().scripts.remove(&key);
+        self.active_presets.borrow_mut().remove(&key);
         self.flush_state();
         self.selected_index.set(None);
         self.select_script(Some(idx));
@@ -1544,7 +1828,12 @@ impl DialogState {
             self.run_button.add_css_class("suggested-action");
             self.update_run_sensitivity();
         }
-        self.update_reset_sensitivity();
+        if let Some(ref btn) = *self.presets_button.borrow() {
+            if running {
+                btn.popdown();
+            }
+            btn.set_sensitive(!running);
+        }
     }
 
     fn start_run(self: &Rc<Self>) {
