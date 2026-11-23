@@ -543,7 +543,7 @@ impl DialogState {
         }
         self.results_stack.set_visible_child_name("results");
 
-        let match_word = if report.matches.len() == 1 {
+        let match_word = if report.total_matches == 1 {
             "match"
         } else {
             "matches"
@@ -555,7 +555,7 @@ impl DialogState {
         };
         let mut summary = format!(
             "{} {match_word} in {} {file_word} ({} searched)",
-            format_thousands(report.matches.len()),
+            format_thousands(report.total_matches),
             format_thousands(report.files_matched),
             format_thousands(report.files_searched),
         );
@@ -570,10 +570,11 @@ impl DialogState {
 
     fn build_file_group(self: &Rc<Self>, hits: &[FileMatch]) -> gtk::Expander {
         let first = &hits[0];
-        let mut count_text = if hits.len() == 1 {
+        let file_match_count: usize = hits.iter().map(|h| h.hits.len()).sum();
+        let mut count_text = if file_match_count == 1 {
             "1 match".to_string()
         } else {
-            format!("{} matches", format_thousands(hits.len()))
+            format!("{} matches", format_thousands(file_match_count))
         };
         if first.from_unsaved_buffer {
             count_text.push_str(" · unsaved");
@@ -596,51 +597,31 @@ impl DialogState {
 
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
-        list.set_activate_on_single_click(true);
         list.add_css_class("boxed-list");
         list.set_margin_top(4);
         list.set_margin_start(16);
 
-        let suppress_activate = Rc::new(Cell::new(false));
         let mut pre_scroll_targets: Vec<(glib::WeakRef<gtk::Adjustment>, f64)> =
             Vec::with_capacity(hits.len());
         for hit in hits {
-            let (row, hadj_weak, center_ratio) = self.build_match_row(hit, &suppress_activate);
-            list.append(&row);
+            let (row_widget, hadj_weak, center_ratio) = self.build_match_row(hit);
+            let list_row = gtk::ListBoxRow::new();
+            list_row.set_activatable(false);
+            list_row.set_selectable(false);
+            list_row.add_css_class("find-result-row");
+            list_row.set_child(Some(&row_widget));
+            list.append(&list_row);
             if let Some(ratio) = center_ratio {
                 pre_scroll_targets.push((hadj_weak, ratio));
             }
         }
-
-        let group_hits: Vec<FileMatch> = hits.to_vec();
-        let weak = Rc::downgrade(self);
-        list.connect_row_activated(move |_, row| {
-            if suppress_activate.replace(false) {
-                return;
-            }
-            let Some(this) = weak.upgrade() else {
-                return;
-            };
-            let idx = row.index() as usize;
-            if let Some(hit) = group_hits.get(idx) {
-                let close_dialog = (this.on_open_match)(
-                    hit.path.clone(),
-                    hit.line,
-                    hit.column_char,
-                    hit.match_chars,
-                );
-                if close_dialog {
-                    this.dialog.close();
-                }
-            }
-        });
 
         let expander = gtk::Expander::new(None);
         expander.set_label_widget(Some(&header));
         expander.set_expanded(false);
         expander.set_child(Some(&list));
 
-        // Pre-scroll each result preview to center its underscored match the
+        // Pre-scroll each result preview to center its highlighted match the
         // first time this file group is expanded and laid out.
         let centered_once = Cell::new(false);
         expander.connect_expanded_notify(move |exp| {
@@ -663,32 +644,49 @@ impl DialogState {
     fn build_match_row(
         self: &Rc<Self>,
         hit: &FileMatch,
-        suppress_activate: &Rc<Cell<bool>>,
     ) -> (gtk::Box, glib::WeakRef<gtk::Adjustment>, Option<f64>) {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        row.set_margin_top(4);
-        row.set_margin_bottom(4);
-        row.set_margin_start(8);
-        row.set_margin_end(8);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
 
-        let line_label = gtk::Label::new(Some(&hit.line.to_string()));
+        let active_idx = Rc::new(Cell::new(0usize));
+        let multi_match = hit.hits.len() > 1;
+
+        let line_label = gtk::Label::new(None);
+        if multi_match {
+            line_label.set_markup(&format!("<b>{}</b>", hit.line));
+        } else {
+            line_label.set_text(&hit.line.to_string());
+            line_label.add_css_class("dim-label");
+        }
         line_label.set_width_chars(5);
         line_label.set_xalign(1.0);
+        line_label.set_valign(gtk::Align::Center);
+        line_label.set_margin_top(4);
+        line_label.set_margin_bottom(4);
+        line_label.set_margin_start(8);
+        line_label.set_margin_end(10);
         line_label.add_css_class("monospace");
         line_label.add_css_class("caption");
-        line_label.add_css_class("dim-label");
         line_label.add_css_class("script-slider-value");
 
+        // Wrap the line number in its own full-height segment so clicks across
+        // the number and its entire background stay isolated from the text area.
+        let line_segment = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        line_segment.set_vexpand(true);
+        line_segment.append(&line_label);
+
+        let first_highlight = hit.hits.first().map(|h| h.byte_range);
         let preview_label = gtk::Label::new(None);
-        preview_label.set_markup(&format_preview_markup(&hit.preview, hit.preview_highlight));
+        preview_label.set_markup(&format_preview_markup(&hit.line_text, first_highlight));
         preview_label.set_xalign(0.0);
         preview_label.set_halign(gtk::Align::Start);
+        preview_label.set_margin_top(4);
+        preview_label.set_margin_bottom(4);
+        preview_label.set_margin_end(8);
         preview_label.add_css_class("monospace");
         preview_label.add_css_class("caption");
 
-        // Use `ScrolledWindow` with `propagate_natural_width(false)` so long
-        // lines never expand the dialog horizontally, and forward vertical
-        // wheel/touchpad scroll events to the outer `results_scroll`.
+        // Keep each result strictly single-line without widening the dialog,
+        // and forward vertical mouse-wheel scrolling to the outer results list.
         let preview_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::External)
             .vscrollbar_policy(gtk::PolicyType::Never)
@@ -718,158 +716,70 @@ impl DialogState {
         });
         preview_scroll.add_controller(vscroll);
 
-        let grab_cursor = gtk::gdk::Cursor::from_name("grab", None);
-        let grabbing_cursor = gtk::gdk::Cursor::from_name("grabbing", grab_cursor.as_ref());
-        preview_scroll.set_cursor(grab_cursor.as_ref());
+        // Multi-match line number segment cycles which match is highlighted and
+        // pans the single-line preview to center it. Single-match segments are
+        // intentionally non-clickable.
+        if multi_match {
+            let pointer_cursor = gtk::gdk::Cursor::from_name("pointer", None);
+            line_segment.set_cursor(pointer_cursor.as_ref());
 
-        let drag = gtk::GestureDrag::new();
-        drag.set_button(1);
-        let start_x = Rc::new(Cell::new(0.0f64));
-        let did_drag = Rc::new(Cell::new(false));
-        let expanded = Rc::new(Cell::new(!hit.preview_truncated));
-
-        let set_dragging_cursor = |sw: &gtk::ScrolledWindow,
-                                   dialog: &adw::Dialog,
-                                   cursor: Option<&gtk::gdk::Cursor>,
-                                   active: bool| {
-            sw.set_cursor(cursor);
-            dialog.set_cursor(if active { cursor } else { None });
-            if let Some(surface) = sw.native().and_then(|n| n.surface()) {
-                surface.set_cursor(if active { cursor } else { None });
-            }
-        };
-
-        {
-            let scroll_ref = preview_scroll.downgrade();
-            let dialog_ref = self.dialog.downgrade();
-            let hadj_ref = hadj.downgrade();
-            let start_x = start_x.clone();
-            let did_drag = did_drag.clone();
-            let grabbing_cursor = grabbing_cursor.clone();
-            drag.connect_drag_begin(move |_, _, _| {
-                did_drag.set(false);
-                if let Some(hadj) = hadj_ref.upgrade() {
-                    start_x.set(hadj.value());
-                }
-                if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
-                    set_dragging_cursor(&sw, &dialog, grabbing_cursor.as_ref(), true);
-                }
-            });
-        }
-        // `(delta_chars, full_chars, latest_offset_x)` waiting for GTK's layout
-        // pass to update `hadj.upper()` after lazily replacing a truncated
-        // preview with the full line.
-        let pending_expand: Rc<Cell<Option<(usize, usize, f64)>>> = Rc::new(Cell::new(None));
-        {
-            let pending = pending_expand.clone();
-            let start_x = start_x.clone();
-            hadj.connect_upper_notify(move |adj| {
-                if let Some((delta_chars, full_chars, offset_x)) = pending.take() {
-                    if delta_chars > 0 && full_chars > 0 && adj.upper() > 0.0 {
-                        let char_width = adj.upper() / full_chars as f64;
-                        start_x.set(start_x.get() + delta_chars as f64 * char_width);
-                    }
-                    let max_scroll = (adj.upper() - adj.page_size()).max(0.0);
-                    let target = (start_x.get() - offset_x).clamp(adj.lower(), max_scroll);
-                    adj.set_value(target);
-                }
-            });
-        }
-        let preview_chars = hit.preview.chars().count();
-        let preview_match_char = hit
-            .preview_highlight
-            .and_then(|(s, _)| hit.preview.get(..s))
-            .map(|prefix| prefix.chars().count());
-
-        {
-            let scroll_ref = preview_scroll.downgrade();
-            let dialog_ref = self.dialog.downgrade();
-            let hadj_ref = hadj.downgrade();
+            let line_click = gtk::GestureClick::new();
+            line_click.set_button(1);
+            let line_text = hit.line_text.clone();
+            let line_hits = hit.hits.clone();
+            let active = active_idx.clone();
             let label_ref = preview_label.downgrade();
-            let start_x = start_x.clone();
-            let did_drag = did_drag.clone();
-            let suppress = suppress_activate.clone();
-            let expanded = expanded.clone();
-            let pending = pending_expand.clone();
-            let weak = Rc::downgrade(self);
-            let hit_path = hit.path.clone();
-            let hit_line = hit.line;
-            let hit_col = hit.column_char;
-            let hit_len = hit.match_chars;
-            let grabbing_cursor = grabbing_cursor.clone();
-            drag.connect_drag_update(move |gesture, offset_x, _| {
-                if offset_x.abs() <= 4.0 && !did_drag.get() {
-                    return;
+            let hadj_ref = hadj.downgrade();
+            line_click.connect_released(move |_, _, _, _| {
+                let next = (active.get() + 1) % line_hits.len();
+                active.set(next);
+                let range = line_hits[next].byte_range;
+                if let Some(label) = label_ref.upgrade() {
+                    label.set_markup(&format_preview_markup(&line_text, Some(range)));
                 }
-                if !did_drag.replace(true) {
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                    if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
-                        set_dragging_cursor(&sw, &dialog, grabbing_cursor.as_ref(), true);
-                    }
-                }
-                suppress.set(true);
-                if !expanded.replace(true)
-                    && let (Some(this), Some(label)) = (weak.upgrade(), label_ref.upgrade())
-                {
-                    let buffers = (this.snapshot_dirty)();
-                    if let Some((full_text, hl)) = find_in_files::read_full_line(
-                        &hit_path, hit_line, hit_col, hit_len, &buffers,
-                    ) {
-                        let full_chars = full_text.chars().count();
-                        let new_match_char = hl
-                            .and_then(|(s, _)| full_text.get(..s))
-                            .map(|prefix| prefix.chars().count());
-                        let delta_chars = match (preview_match_char, new_match_char) {
-                            (Some(old_c), Some(new_c)) => new_c.saturating_sub(old_c),
-                            _ => 0,
-                        };
-                        if full_chars != preview_chars {
-                            pending.set(Some((delta_chars, full_chars, offset_x)));
-                        }
-                        label.set_markup(&format_preview_markup(&full_text, hl));
-                    }
-                }
-                if let Some((delta_chars, full_chars, _)) = pending.get() {
-                    pending.set(Some((delta_chars, full_chars, offset_x)));
-                } else if let Some(hadj) = hadj_ref.upgrade() {
-                    let max_scroll = (hadj.upper() - hadj.page_size()).max(0.0);
-                    let target = (start_x.get() - offset_x).clamp(hadj.lower(), max_scroll);
-                    hadj.set_value(target);
+                if let (Some(hadj), Some(ratio)) = (
+                    hadj_ref.upgrade(),
+                    match_center_ratio(&line_text, Some(range)),
+                ) {
+                    center_preview(&hadj, ratio);
                 }
             });
+            line_segment.add_controller(line_click);
         }
-        {
-            let scroll_ref = preview_scroll.downgrade();
-            let dialog_ref = self.dialog.downgrade();
-            let did_drag = did_drag.clone();
-            let suppress = suppress_activate.clone();
-            let grab_cursor = grab_cursor.clone();
-            drag.connect_drag_end(move |gesture, _, _| {
-                if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
-                    set_dragging_cursor(&sw, &dialog, grab_cursor.as_ref(), false);
-                }
-                if did_drag.get() {
-                    suppress.set(true);
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                }
-            });
-        }
-        {
-            let scroll_ref = preview_scroll.downgrade();
-            let dialog_ref = self.dialog.downgrade();
-            let grab_cursor = grab_cursor.clone();
-            drag.connect_cancel(move |_, _| {
-                if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
-                    set_dragging_cursor(&sw, &dialog, grab_cursor.as_ref(), false);
-                }
-            });
-        }
-        preview_scroll.add_controller(drag);
 
-        let ratio = match_center_ratio(&hit.preview, hit.preview_highlight);
+        // Only clicking the text area opens the currently highlighted match.
+        let pointer_cursor = gtk::gdk::Cursor::from_name("pointer", None);
+        preview_scroll.set_cursor(pointer_cursor.as_ref());
+        let text_click = gtk::GestureClick::new();
+        text_click.set_button(1);
+        let weak = Rc::downgrade(self);
+        let hit_path = hit.path.clone();
+        let hit_line = hit.line;
+        let line_hits = hit.hits.clone();
+        text_click.connect_released(move |_, _, _, _| {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            let idx = active_idx.get();
+            let Some(target) = line_hits.get(idx).or_else(|| line_hits.first()) else {
+                return;
+            };
+            let close_dialog = (this.on_open_match)(
+                hit_path.clone(),
+                hit_line,
+                target.column_char,
+                target.match_chars,
+            );
+            if close_dialog {
+                this.dialog.close();
+            }
+        });
+        preview_scroll.add_controller(text_click);
+
+        let ratio = match_center_ratio(&hit.line_text, first_highlight);
         let hadj_weak = hadj.downgrade();
 
-        row.append(&line_label);
+        row.append(&line_segment);
         row.append(&preview_scroll);
         (row, hadj_weak, ratio)
     }
@@ -888,8 +798,8 @@ fn match_center_ratio(preview: &str, highlight: Option<(usize, usize)>) -> Optio
     Some(((start_c + end_c) as f64 / 2.0) / total_chars as f64)
 }
 
-/// Pre-scroll a result preview so its underscored match is centered when the
-/// line overflows the visible viewport.
+/// Pan a single-line result preview so its highlighted match is centered when
+/// the line overflows the visible viewport.
 fn center_preview(hadj: &gtk::Adjustment, match_ratio: f64) {
     let page = hadj.page_size();
     let upper = hadj.upper();

@@ -28,7 +28,8 @@ const DEFAULT_IGNORED_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
-/// Maximum preview line length (in characters) stored per match.
+/// Default preview window (in characters) when truncating long lines.
+/// Lines with multiple matches extend past this as needed to cover every match.
 const MAX_PREVIEW_CHARS: usize = 240;
 
 #[derive(Clone, Debug)]
@@ -46,21 +47,26 @@ pub struct SearchOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineHit {
+    /// 0-based character offset of the match on the raw line.
+    pub column_char: usize,
+    /// Character length of the matched query.
+    pub match_chars: usize,
+    /// Byte range `(start, end)` of this match within `FileMatch::line_text`.
+    pub byte_range: (usize, usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileMatch {
     pub path: PathBuf,
     pub rel_path: String,
     /// 1-based line number matching GTK and `core::textlines`.
     pub line: usize,
-    /// 0-based character offset of the match on `line`.
-    pub column_char: usize,
-    /// Character length of the matched query.
-    pub match_chars: usize,
-    /// Trimmed preview snippet of the line.
-    pub preview: String,
-    /// Byte range `(start, end)` of the match within `preview` for highlighting.
-    pub preview_highlight: Option<(usize, usize)>,
-    /// True when `preview` was truncated from a longer line and can be expanded lazily.
-    pub preview_truncated: bool,
+    /// Trimmed line preview (tabs replaced with spaces), truncated on long
+    /// lines while staying long enough to cover every match in `hits`.
+    pub line_text: String,
+    /// All non-overlapping matches on this line, in left-to-right order.
+    pub hits: Vec<LineHit>,
     /// True when this match came from an unsaved in-memory buffer rather than disk.
     pub from_unsaved_buffer: bool,
 }
@@ -68,6 +74,7 @@ pub struct FileMatch {
 #[derive(Clone, Debug, Default)]
 pub struct SearchReport {
     pub matches: Vec<FileMatch>,
+    pub total_matches: usize,
     pub files_searched: usize,
     pub files_matched: usize,
     pub truncated: bool,
@@ -166,15 +173,13 @@ pub fn find_line_matches(
     out
 }
 
-/// Build a compact preview snippet around the match at `[col_char .. col_char + match_chars]`,
-/// returning `(preview_text, Some((hl_start_byte, hl_end_byte)), was_truncated)`.
-fn build_preview(
-    line: &str,
-    col_char: usize,
-    match_chars: usize,
-) -> (String, Option<(usize, usize)>, bool) {
+/// Build a trimmed display snippet for `line` (with tabs replaced by spaces)
+/// and map every `(col_char, match_chars)` hit to its byte range inside the
+/// returned string. Long lines are truncated with `…`, while always spanning
+/// from the first match through the last match on the line.
+fn build_line_hits(line: &str, raw_hits: &[(usize, usize)]) -> (String, Vec<LineHit>) {
     let chars: Vec<char> = line.chars().collect();
-    let lead_trim = chars
+    let mut lead_trim = chars
         .iter()
         .take_while(|c| **c == ' ' || **c == '\t')
         .count();
@@ -183,113 +188,64 @@ fn build_preview(
         .rev()
         .take_while(|c| **c == ' ' || **c == '\t')
         .count();
-    let trim_end = chars.len().saturating_sub(tail_trim).max(lead_trim);
+    let mut trim_end = chars.len().saturating_sub(tail_trim).max(lead_trim);
+
+    // Ensure any match on leading/trailing whitespace stays inside the slice.
+    let first_col = raw_hits.first().map(|&(c, _)| c).unwrap_or(lead_trim);
+    let last_end = raw_hits
+        .last()
+        .map(|&(c, l)| (c + l).min(chars.len()))
+        .unwrap_or(trim_end);
+    lead_trim = lead_trim.min(first_col);
+    trim_end = trim_end.max(last_end);
 
     let (slice_start, slice_end, prefix_ellipsis, suffix_ellipsis) =
         if trim_end - lead_trim <= MAX_PREVIEW_CHARS {
             (lead_trim, trim_end, false, false)
         } else {
-            let center_start = col_char.saturating_sub(MAX_PREVIEW_CHARS / 3);
-            let start = center_start.max(lead_trim);
-            let end = (start + MAX_PREVIEW_CHARS).min(trim_end);
+            let start = first_col
+                .saturating_sub(MAX_PREVIEW_CHARS / 3)
+                .max(lead_trim);
+            let min_end = (last_end + 40).min(trim_end);
+            let end = (start + MAX_PREVIEW_CHARS).max(min_end).min(trim_end);
             (start, end, start > lead_trim, end < trim_end)
         };
 
-    let mut preview = String::new();
+    let slice = &chars[slice_start..slice_end];
+    let mut text = String::with_capacity(slice.len() + 6);
     if prefix_ellipsis {
-        preview.push('…');
+        text.push('…');
     }
-    let mut hl_start = None;
-    let mut hl_end = None;
-    let match_end = col_char + match_chars;
-    for (idx, &ch) in chars[slice_start..slice_end].iter().enumerate() {
-        let abs = slice_start + idx;
-        if abs == col_char {
-            hl_start = Some(preview.len());
-        }
+    let mut byte_offsets = Vec::with_capacity(slice.len() + 1);
+    for &ch in slice {
+        byte_offsets.push(text.len());
         if ch == '\t' {
-            preview.push(' ');
+            text.push(' ');
         } else {
-            preview.push(ch);
-        }
-        if abs + 1 == match_end {
-            hl_end = Some(preview.len());
+            text.push(ch);
         }
     }
+    byte_offsets.push(text.len());
     if suffix_ellipsis {
-        preview.push('…');
+        text.push('…');
     }
 
-    let highlight = match (hl_start, hl_end) {
-        (Some(s), Some(e)) if s < e => Some((s, e)),
-        _ => None,
-    };
-    (preview, highlight, prefix_ellipsis || suffix_ellipsis)
-}
-
-/// Lazily load the full (untruncated) trimmed text of 1-based `line` for
-/// horizontal drag-panning, returning `(full_text, highlight_byte_range)`.
-pub fn read_full_line(
-    path: &Path,
-    line: usize,
-    col_char: usize,
-    match_chars: usize,
-    open_buffers: &HashMap<PathBuf, String>,
-) -> Option<(String, Option<(usize, usize)>)> {
-    let live_text = if open_buffers.is_empty() {
-        None
-    } else {
-        fs::canonicalize(path)
-            .ok()
-            .and_then(|canonical| open_buffers.get(&canonical))
-            .map(String::as_str)
-    };
-    let owned_disk;
-    let text = match live_text {
-        Some(buf) => buf,
-        None => {
-            owned_disk = read_utf8_limited(path, MAX_OPEN_BYTES).ok()?;
-            owned_disk.as_str()
-        }
-    };
-    let raw_line = textlines::iter_inclusive(text)
-        .nth(line.saturating_sub(1))?
-        .trim_end_matches(['\n', '\r', '\u{2029}']);
-    let chars: Vec<char> = raw_line.chars().collect();
-    let lead_trim = chars
+    let hits = raw_hits
         .iter()
-        .take_while(|c| **c == ' ' || **c == '\t')
-        .count();
-    let tail_trim = chars
-        .iter()
-        .rev()
-        .take_while(|c| **c == ' ' || **c == '\t')
-        .count();
-    let trim_end = chars.len().saturating_sub(tail_trim).max(lead_trim);
+        .filter_map(|&(col_char, match_chars)| {
+            let rel_start = col_char.checked_sub(slice_start)?;
+            let rel_end = rel_start.checked_add(match_chars)?;
+            let byte_start = *byte_offsets.get(rel_start)?;
+            let byte_end = *byte_offsets.get(rel_end)?;
+            Some(LineHit {
+                column_char: col_char,
+                match_chars,
+                byte_range: (byte_start, byte_end),
+            })
+        })
+        .collect();
 
-    let mut out = String::new();
-    let mut hl_start = None;
-    let mut hl_end = None;
-    let match_end = col_char + match_chars;
-    for (idx, &ch) in chars[lead_trim..trim_end].iter().enumerate() {
-        let abs = lead_trim + idx;
-        if abs == col_char {
-            hl_start = Some(out.len());
-        }
-        if ch == '\t' {
-            out.push(' ');
-        } else {
-            out.push(ch);
-        }
-        if abs + 1 == match_end {
-            hl_end = Some(out.len());
-        }
-    }
-    let highlight = match (hl_start, hl_end) {
-        (Some(s), Some(e)) if s < e => Some((s, e)),
-        _ => None,
-    };
-    Some((out, highlight))
+    (text, hits)
 }
 
 /// Recursively search `options.root` for `options.query`.
@@ -419,32 +375,36 @@ fn search_file(
     for (idx, line_slice) in textlines::iter_inclusive(text).enumerate() {
         let line_no = idx + 1;
         let line = line_slice.trim_end_matches(['\n', '\r', '\u{2029}']);
-        let hits = find_line_matches(line, &options.query, options.match_case, options.whole_word);
+        let mut hits =
+            find_line_matches(line, &options.query, options.match_case, options.whole_word);
         if hits.is_empty() {
             continue;
+        }
+        let remaining = max_matches.saturating_sub(report.total_matches);
+        if remaining == 0 {
+            report.truncated = true;
+            return;
+        }
+        if hits.len() > remaining {
+            hits.truncate(remaining);
+            report.truncated = true;
         }
         if !matched_this_file {
             matched_this_file = true;
             report.files_matched += 1;
         }
-        for (col_char, match_chars) in hits {
-            if report.matches.len() >= max_matches {
-                report.truncated = true;
-                return;
-            }
-            let (preview, preview_highlight, preview_truncated) =
-                build_preview(line, col_char, match_chars);
-            report.matches.push(FileMatch {
-                path: path.to_path_buf(),
-                rel_path: rel_path.to_string(),
-                line: line_no,
-                column_char: col_char,
-                match_chars,
-                preview,
-                preview_highlight,
-                preview_truncated,
-                from_unsaved_buffer,
-            });
+        let (line_text, line_hits) = build_line_hits(line, &hits);
+        report.total_matches += line_hits.len();
+        report.matches.push(FileMatch {
+            path: path.to_path_buf(),
+            rel_path: rel_path.to_string(),
+            line: line_no,
+            line_text,
+            hits: line_hits,
+            from_unsaved_buffer,
+        });
+        if report.truncated {
+            return;
         }
     }
 }
@@ -521,12 +481,13 @@ mod tests {
 
         assert_eq!(report.files_matched, 2);
         assert_eq!(report.matches.len(), 2);
+        assert_eq!(report.total_matches, 2);
         assert_eq!(report.matches[0].rel_path, "a.md");
         assert_eq!(report.matches[0].line, 1);
-        assert_eq!(report.matches[0].column_char, 6);
+        assert_eq!(report.matches[0].hits[0].column_char, 6);
         assert_eq!(report.matches[1].rel_path, "sub/b.rs");
         assert_eq!(report.matches[1].line, 1);
-        assert_eq!(report.matches[1].column_char, 4);
+        assert_eq!(report.matches[1].hits[0].column_char, 4);
 
         // Include filter restricts to *.rs only.
         let rs_only = search(
@@ -590,8 +551,14 @@ mod tests {
         assert_eq!(disk_removed.matches[0].rel_path, "sub/b.rs");
         assert!(!disk_removed.matches[0].from_unsaved_buffer);
 
-        // Long lines mark preview_truncated and can be lazily expanded via read_full_line.
-        let long_line = format!("{}needle{}\n", "a".repeat(200), "b".repeat(200));
+        // Long lines with multiple matches produce one truncated FileMatch that still
+        // spans every match on the line.
+        let long_line = format!(
+            "{}needle{}needle{}\n",
+            "a".repeat(200),
+            "b".repeat(150),
+            "c".repeat(200)
+        );
         let long_path = dir.join("long.txt");
         fs::write(&long_path, &long_line).unwrap();
         let long_report = search(
@@ -608,19 +575,19 @@ mod tests {
             &cancel,
         )
         .unwrap();
-        let hit = &long_report.matches[0];
-        assert!(hit.preview_truncated);
-        let (full, hl) = read_full_line(
-            &hit.path,
-            hit.line,
-            hit.column_char,
-            hit.match_chars,
-            &HashMap::new(),
-        )
-        .unwrap();
-        assert_eq!(full.len(), 406);
-        let (s, e) = hl.unwrap();
-        assert_eq!(&full[s..e], "needle");
+        assert_eq!(long_report.matches.len(), 1);
+        assert_eq!(long_report.total_matches, 2);
+        let row = &long_report.matches[0];
+        assert!(row.line_text.starts_with('…'));
+        assert!(row.line_text.ends_with('…'));
+        assert!(row.line_text.len() < long_line.len());
+        assert_eq!(row.hits.len(), 2);
+        assert_eq!(row.hits[0].column_char, 200);
+        assert_eq!(row.hits[1].column_char, 356);
+        for hit in &row.hits {
+            let (s, e) = hit.byte_range;
+            assert_eq!(&row.line_text[s..e], "needle");
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }

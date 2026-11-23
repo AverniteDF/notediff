@@ -13,12 +13,17 @@ versioning.
   folder) with **Match Case** (`Aa`), **Whole Word** (`W`), optional file and
   exclude globs, session-persisted inputs, collapsible per-file result groups
   (collapsed by default) with match counts, live in-memory searching of dirty
-  open buffers, and cancellable background execution. Clicking a result raises an already-open window or opens a new
-  window and jumps straight to the matching line and selection (keeping the
-  dialog open unless the match targets the searching window's current document).
+  open buffers, and cancellable background execution. Each matching line
+  appears once as a single-line preview pre-scrolled to its highlighted match
+  (clicking a bold line number on multi-match lines cycles and centers the next
+  match). Clicking a result's text area raises an already-open window or opens
+  a new window and jumps straight to the matching line and selection (keeping
+  the dialog open unless the match targets the searching window's current
+  document).
 - **Run Script…** (**F6**, also in its own section of the main menu) discovers
   executable scripts in `$XDG_DATA_HOME/notediff/scripts/` (or any script
-  chosen with **Browse…**), renders a parameter form from an embedded
+  chosen with **Browse…**), includes a clickable `ℹ️` header button to open the
+  embedded script authoring guide (`docs/scripts.md`), renders a parameter form from an embedded
   `--- notediff-script ---` comment block, optionally runs scripts inside a
   `bwrap` read-only or single-writable-folder sandbox, and opens `stdout` in
   the current window when empty and untitled or in a new editor window

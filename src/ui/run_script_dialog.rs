@@ -162,9 +162,7 @@ impl DialogState {
         info_button.add_css_class("flat");
         info_button.add_css_class("circular");
         info_button.set_valign(gtk::Align::Center);
-        info_button.set_tooltip_text(Some(
-            "See docs/scripts.md for the full script authoring guide.",
-        ));
+        info_button.set_tooltip_text(Some("Click to open the script authoring guide"));
         let title_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         title_box.set_valign(gtk::Align::Center);
         title_box.append(&title_label);

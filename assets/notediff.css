@@ -103,3 +103,7 @@ window.{{dirty_class}} headerbar.{{main_header_class}} {
 .script-slider-value {
     font-variant-numeric: tabular-nums;
 }
+
+list.boxed-list > row.find-result-row:hover {
+    background-color: alpha(currentColor, 0.05);
+}

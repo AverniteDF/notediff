@@ -173,10 +173,14 @@ notes for details and workarounds.
   asynchronously and can be stopped with **Cancel**. Clicking a match raises the window that already owns
   that file or opens it in a new window, and jumps directly to the matching
   line and selection; the dialog stays open unless the match targets the
-  searching window's own open document. Each result preview pre-scrolls to
-  center the matched text, and long lines can be dragged left or right to pan
-  horizontally (keeping the line number pinned, and loading the full
-  untruncated line lazily on first drag). Available in Diff Mode as well.
+  searching window's own open document. Each matching line appears once as a
+  single-line preview truncated around its matches (while spanning every match
+  on that line) and pre-scrolled to center the highlighted match. On lines with
+  multiple matches, the line number appears in bold and its segment can be
+  clicked to cycle which match is bolded, underlined and centered; on
+  single-match lines the line number segment is not clickable. Clicking a
+  result's text area jumps to the currently highlighted match. Available in
+  Diff Mode as well.
 - Click or drag the line-number gutter to select whole lines. The same works
   in either full Diff Mode pane.
 - Go to Line with **Ctrl+G** (out-of-range numbers are clamped). It is
