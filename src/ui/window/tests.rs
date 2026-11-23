@@ -194,6 +194,7 @@ fn gtk_window_smoke() {
     trim_whitespace_scenario(&app, &store);
     gutter_selection_scenario(&app, store.clone());
     editing_scenario(&app, &dir, &store);
+    read_only_warning_scenario(&app, &store);
     review_button_follows_text_scenario(&app, &dir, &store);
     indentation_scenario(&app, &dir, &store);
     trailing_whitespace_scenario(&app, &dir, &store);
@@ -280,7 +281,8 @@ fn gutter_selection_scenario(app: &adw::Application, store: SnapshotStore) {
     let controllers = view.observe_controllers();
     let click = (0..controllers.n_items())
         .filter_map(|index| controllers.item(index))
-        .find_map(|object| object.downcast::<gtk::GestureClick>().ok())
+        .filter_map(|object| object.downcast::<gtk::GestureClick>().ok())
+        .find(|gesture| gesture.button() == gtk::gdk::BUTTON_PRIMARY)
         .expect("gutter click gesture");
     let motion = (0..controllers.n_items())
         .filter_map(|index| controllers.item(index))
@@ -3569,6 +3571,86 @@ fn review_button_follows_text_scenario(app: &adw::Application, dir: &Path, store
     buffer.delete(&mut start, &mut end);
     assert_eq!(window.current_text(), "baseline\n");
     wait_for(|| !window.diff_button.is_sensitive());
+    window.window.destroy();
+}
+
+fn read_only_warning_scenario(app: &adw::Application, store: &SnapshotStore) {
+    use crate::ui::status_bar::READ_ONLY_WARNING_CLASS;
+    use gtk::gdk::{Key, ModifierType as Mod};
+    use gtk::prelude::GtkWindowExt;
+
+    let window = AppWindow::with_store(app, store.clone());
+    window.set_editor_text("plain text\n");
+    window.set_read_only(true);
+    window.window.present();
+    window.editor_view.grab_focus();
+    wait_for(|| {
+        window.editor_view.is_mapped()
+            && GtkWindowExt::focus(&window.window).as_ref() == Some(window.editor_view.upcast_ref())
+    });
+    let editor_focus = GtkWindowExt::focus(&window.window);
+    let popover = window.status.mode_popover();
+    let keys = named_key_controller(window.editor_view.upcast_ref(), "notediff-read-only-keys");
+    let press = |key: Key, modifiers: Mod| {
+        keys.emit_by_name::<bool>("key-pressed", &[&key, &0u32, &modifiers])
+    };
+    let buffer = &window.editor_buffer;
+    buffer.select_range(&buffer.start_iter(), &buffer.iter_at_offset(5));
+    let selection = buffer.selection_bounds();
+
+    assert!(!press(Key::Left, Mod::empty()));
+    assert!(!press(Key::Left, Mod::SHIFT_MASK));
+    assert!(!press(Key::Tab, Mod::empty()));
+    assert!(!press(Key::c, Mod::CONTROL_MASK));
+    window.editor_view.emit_by_name::<()>("copy-clipboard", &[]);
+    assert!(!popover.is_visible());
+
+    assert!(press(Key::a, Mod::empty()));
+    wait_for(|| popover.is_mapped());
+    assert!(popover.has_css_class(READ_ONLY_WARNING_CLASS));
+    let entry = find_widget_with_class(popover.upcast_ref(), "flat").unwrap();
+    assert_eq!(entry.css_name(), "modelbutton");
+    assert!(!popover.is_autohide());
+    assert_eq!(GtkWindowExt::focus(&window.window), editor_focus);
+    assert_eq!(window.current_text(), "plain text\n");
+    assert_eq!(buffer.selection_bounds(), selection);
+    assert!(press(Key::Return, Mod::empty()));
+    assert!(!press(Key::Escape, Mod::empty()));
+    assert!(!popover.is_visible());
+
+    // Native editing actions also report the warning before mutating text.
+    for signal in ["backspace", "cut-clipboard", "paste-clipboard"] {
+        window.editor_view.emit_by_name::<()>(signal, &[]);
+        assert!(popover.is_visible(), "{signal} did not open the warning");
+        assert_eq!(GtkWindowExt::focus(&window.window), editor_focus);
+        assert_eq!(buffer.selection_bounds(), selection);
+        popover.popdown();
+    }
+    window
+        .editor_view
+        .emit_by_name::<()>("delete-from-cursor", &[&gtk::DeleteType::Chars, &1i32]);
+    assert!(popover.is_visible());
+    wait_for(|| !popover.is_visible());
+    assert_eq!(GtkWindowExt::focus(&window.window), editor_focus);
+    assert_eq!(window.current_text(), "plain text\n");
+    assert_eq!(buffer.selection_bounds(), selection);
+
+    // Explicitly opening RO during the warning restores the normal menu.
+    assert!(press(Key::z, Mod::CONTROL_MASK));
+    let label = popover.parent().unwrap();
+    let controllers = label.observe_controllers();
+    let click = (0..controllers.n_items())
+        .filter_map(|i| controllers.item(i))
+        .find_map(|controller| controller.downcast::<gtk::GestureClick>().ok())
+        .unwrap();
+    click.emit_by_name::<()>("released", &[&1i32, &0.0f64, &0.0f64]);
+    assert!(popover.is_visible());
+    assert!(popover.is_autohide());
+    assert!(!popover.has_css_class(READ_ONLY_WARNING_CLASS));
+    popover.popdown();
+    window.set_read_only(false);
+    assert!(!press(Key::a, Mod::empty()));
+    assert!(!popover.is_visible());
     window.window.destroy();
 }
 

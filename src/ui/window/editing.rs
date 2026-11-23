@@ -28,10 +28,48 @@ enum TrimSide {
     Trailing,
 }
 
+fn read_only_edit_key(
+    key: gdk::Key,
+    state: gdk::ModifierType,
+    consumed: gdk::ModifierType,
+) -> bool {
+    use gdk::{Key, ModifierType as Mod};
+
+    let shortcuts =
+        Mod::CONTROL_MASK | Mod::ALT_MASK | Mod::SUPER_MASK | Mod::META_MASK | Mod::HYPER_MASK;
+    let modifiers = state & (shortcuts | Mod::SHIFT_MASK);
+    let ctrl = Mod::CONTROL_MASK;
+    let ctrl_shift = ctrl | Mod::SHIFT_MASK;
+    let lower = key.to_lower();
+    // These edit actions are disabled in a read-only view; their keyboard
+    // shortcuts would otherwise vanish without reaching an edit signal.
+    if (modifiers == ctrl
+        && matches!(
+            lower,
+            Key::z | Key::y | Key::bracketleft | Key::bracketright
+        ))
+        || (modifiers == ctrl_shift
+            && matches!(
+                lower,
+                Key::z | Key::bracketleft | Key::bracketright | Key::braceleft | Key::braceright
+            ))
+    {
+        return true;
+    }
+    if (state & !consumed).intersects(shortcuts) {
+        return false;
+    }
+    matches!(
+        key,
+        Key::Return | Key::KP_Enter | Key::ISO_Enter | Key::Undo | Key::Redo
+    ) || key.to_unicode().is_some_and(|ch| !ch.is_control())
+}
+
 impl AppWindow {
     /// Connect the editing signals and actions. Called once from
     /// `connect_signals`; every handler holds the window weakly.
     pub(super) fn connect_editing(this: &Rc<Self>) {
+        Self::connect_read_only_feedback(this);
         // No-tab policy and line-ending consistency. Tabs in pasted, dropped
         // or otherwise inserted text become spaces. New line breaks match the
         // document's uniform ending, so Enter in a CRLF file inserts CRLF and
@@ -223,6 +261,81 @@ impl AppWindow {
         add_action(window, this, "insert-file", |this| {
             this.request_insert_file()
         });
+    }
+
+    fn connect_read_only_feedback(this: &Rc<Self>) {
+        // GTK emits these edit action signals even when the underlying edit is
+        // blocked. Observe the attempted operation, not a buffer mutation.
+        for signal in [
+            "insert-at-cursor",
+            "backspace",
+            "delete-from-cursor",
+            "cut-clipboard",
+            "paste-clipboard",
+        ] {
+            let weak = Rc::downgrade(this);
+            this.editor_view.connect_local(signal, false, move |_| {
+                if let Some(this) = weak.upgrade()
+                    && this.reject_read_only_edit()
+                {
+                    this.editor_view.stop_signal_emission_by_name(signal);
+                }
+                None
+            });
+        }
+
+        // GtkTextView detaches its input method while read-only, so ordinary
+        // typing (including Enter) does not emit an edit action signal.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_name(Some("notediff-read-only-keys"));
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(this);
+        keys.connect_key_pressed(move |controller, key, _, state| {
+            let Some(this) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if key == gdk::Key::Escape {
+                this.status.dismiss_read_only_warning();
+            }
+            if !this.flags.read_only.get() {
+                return glib::Propagation::Proceed;
+            }
+            let consumed = controller
+                .current_event()
+                .and_then(|event| event.downcast::<gdk::KeyEvent>().ok())
+                .map_or_else(gdk::ModifierType::empty, |event| event.consumed_modifiers());
+            if read_only_edit_key(key, state, consumed) && this.reject_read_only_edit() {
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        this.editor_view.add_controller(keys);
+
+        // GTK's middle-click primary paste bypasses the regular paste signal.
+        let primary_paste = gtk::GestureClick::new();
+        primary_paste.set_button(gdk::BUTTON_MIDDLE);
+        primary_paste.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(this);
+        primary_paste.connect_pressed(move |gesture, _, _, _| {
+            if let Some(this) = weak.upgrade()
+                && this.editor_view.settings().is_gtk_enable_primary_paste()
+                && this.reject_read_only_edit()
+            {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+        this.editor_view.add_controller(primary_paste);
+    }
+
+    fn reject_read_only_edit(&self) -> bool {
+        if !self.flags.read_only.get() || self.diff_active() {
+            return false;
+        }
+        if self.window.visible_dialog().is_none() {
+            self.status.warn_read_only();
+        }
+        true
     }
 
     /// Lock or unlock the editor for the current document.

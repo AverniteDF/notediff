@@ -257,7 +257,12 @@ notes for details and workarounds.
   field (`INS`, `OVR` or `RO`) opens a checkable **Read Only** choice (unlocking a file that
   contains tabs asks the Convert Tabs question first; **Yes** converts them to spaces and
   marks the document dirty, and the conversion is not an undo step, so Ctrl+Z cannot bring
-  the tabs back—reload the file to return to the tabbed text). After the cursor
+  the tabs back—reload the file to return to the tabbed text). A blocked edit
+  in the read-only editor opens the same popover and outlines the **Read Only**
+  entry in yellow without moving keyboard focus. It closes after about two
+  seconds; another blocked edit restarts the timer. Clicking the mode field
+  opens the normal popover.
+  After the cursor
   fields, `31 seconds ago` shows how long ago your last edit was, in
   a single unit (seconds, minutes or hours), with **just now** shown during the
   first second instead of `0 seconds ago`. It appears after the first edit

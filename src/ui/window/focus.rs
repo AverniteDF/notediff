@@ -8,6 +8,8 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::glib;
 
+use crate::ui::status_bar::READ_ONLY_WARNING_CLASS;
+
 use super::AppWindow;
 
 impl AppWindow {
@@ -156,7 +158,10 @@ impl AppWindow {
         // placement has not run yet. Hidden/dismissed popovers do not block us.
         let mut widgets = vec![self.window.clone().upcast::<gtk::Widget>()];
         while let Some(widget) = widgets.pop() {
-            if widget.is::<gtk::Popover>() && widget.is_visible() {
+            if widget.is::<gtk::Popover>()
+                && widget.is_visible()
+                && !widget.has_css_class(READ_ONLY_WARNING_CLASS)
+            {
                 return false;
             }
             let mut child = widget.first_child();

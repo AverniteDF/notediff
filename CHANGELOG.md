@@ -8,6 +8,8 @@ versioning.
 
 ### Added
 
+- A blocked edit in the read-only editor briefly opens the mode popover with
+  a yellow outline around **Read Only**, without moving keyboard focus.
 - **Find in Files…** (**Ctrl+Shift+F**, also in the main menu) searches UTF-8
   files in the selected folder and, by default, its subfolders. Uncheck
   **Recursive** in the filters row to search only the selected folder.

@@ -2,15 +2,39 @@
 //!
 //! Presentation only: the numbers come from `core::textstats`.
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use gtk::prelude::*;
-use gtk::{gdk, gio};
+use gtk::{gdk, gio, glib};
 
 use crate::core::textstats::{CursorPosition, SelectionStats, TextStats};
 
 const ENCODING_LABEL: &str = "UTF-8";
+pub(super) const READ_ONLY_WARNING_CLASS: &str = "notediff-read-only-warning";
+
+#[derive(Default)]
+struct WarningTimer(RefCell<Option<glib::SourceId>>);
+
+impl WarningTimer {
+    fn cancel(&self) {
+        if let Some(source) = self.0.take() {
+            source.remove();
+        }
+    }
+}
+
+struct ModeMenu {
+    popover: gtk::PopoverMenu,
+    timer: Rc<WarningTimer>,
+}
+
+impl Drop for ModeMenu {
+    fn drop(&mut self) {
+        self.timer.cancel();
+    }
+}
 
 /// What the editor status dot is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +94,7 @@ pub struct StatusBar {
     ending: gtk::Label,
     /// Editor bar only.
     mode: Option<gtk::Label>,
+    mode_menu: OnceCell<ModeMenu>,
 }
 
 impl StatusBar {
@@ -149,6 +174,7 @@ impl StatusBar {
             alt_held: Cell::new(false),
             ending,
             mode,
+            mode_menu: OnceCell::new(),
         }
     }
 
@@ -250,6 +276,9 @@ impl StatusBar {
 
     /// Show INS, OVR or RO (no-op on a pane bar).
     pub fn set_mode(&self, mode: EditMode) {
+        if mode != EditMode::ReadOnly {
+            self.dismiss_read_only_warning();
+        }
         if let Some(label) = &self.mode {
             label.set_text(mode.label());
         }
@@ -274,11 +303,73 @@ impl StatusBar {
     /// Make the INS/OVR/RO field clickable (no-op on a pane bar).
     pub fn set_mode_menu(&self, model: &gio::Menu) {
         if let Some(label) = &self.mode {
-            Self::attach_menu(label, model, "Read-only mode");
+            let popover = Self::attach_menu(label, model, "Read-only mode");
+            let timer = Rc::new(WarningTimer::default());
+            let timer_for_close = timer.clone();
+            popover.connect_closed(move |popover| {
+                timer_for_close.cancel();
+                popover.remove_css_class(READ_ONLY_WARNING_CLASS);
+            });
+            let weak = popover.downgrade();
+            label.connect_unmap(move |_| {
+                if let Some(popover) = weak.upgrade()
+                    && popover.has_css_class(READ_ONLY_WARNING_CLASS)
+                {
+                    popover.popdown();
+                }
+            });
+            assert!(self.mode_menu.set(ModeMenu { popover, timer }).is_ok());
         }
     }
 
-    fn attach_menu(label: &gtk::Label, model: &gio::Menu, tooltip: &str) {
+    /// Briefly show the mode menu without making it modal or claiming focus.
+    pub fn warn_read_only(&self) {
+        let Some(ModeMenu { popover, timer }) = self.mode_menu.get() else {
+            return;
+        };
+        if !self.root.is_mapped() {
+            return;
+        }
+        if popover.is_visible() {
+            // Do not replace a menu the user explicitly opened.
+            if !popover.has_css_class(READ_ONLY_WARNING_CLASS) {
+                return;
+            }
+        } else {
+            popover.set_autohide(false);
+            popover.set_can_focus(false);
+            popover.add_css_class(READ_ONLY_WARNING_CLASS);
+            popover.popup();
+        }
+
+        timer.cancel();
+        let weak = popover.downgrade();
+        let timer_for_callback = timer.clone();
+        timer.0.replace(Some(glib::timeout_add_local_once(
+            Duration::from_secs(2),
+            move || {
+                timer_for_callback.0.take();
+                if let Some(popover) = weak.upgrade() {
+                    popover.popdown();
+                }
+            },
+        )));
+    }
+
+    pub fn dismiss_read_only_warning(&self) {
+        if let Some(mode) = self.mode_menu.get()
+            && mode.popover.has_css_class(READ_ONLY_WARNING_CLASS)
+        {
+            mode.popover.popdown();
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn mode_popover(&self) -> &gtk::PopoverMenu {
+        &self.mode_menu.get().unwrap().popover
+    }
+
+    fn attach_menu(label: &gtk::Label, model: &gio::Menu, tooltip: &str) -> gtk::PopoverMenu {
         let popover = gtk::PopoverMenu::from_model(Some(model));
         popover.set_parent(label);
         popover.set_has_arrow(false);
@@ -288,14 +379,29 @@ impl StatusBar {
         click.set_button(gdk::BUTTON_PRIMARY);
         {
             let popover = popover.clone();
-            click.connect_released(move |_, _, _, _| popover.popup());
+            click.connect_released(move |_, _, _, _| {
+                if popover.has_css_class(READ_ONLY_WARNING_CLASS) {
+                    popover.popdown();
+                }
+                if !popover.is_autohide() {
+                    popover.set_can_focus(true);
+                    popover.set_autohide(true);
+                }
+                popover.popup();
+            });
         }
         label.add_controller(click);
         label.set_cursor_from_name(Some("pointer"));
         label.set_tooltip_text(Some(tooltip));
 
         // A parented popover must be unparented before its parent goes away.
-        label.connect_destroy(move |_| popover.unparent());
+        let weak = popover.downgrade();
+        label.connect_destroy(move |_| {
+            if let Some(popover) = weak.upgrade() {
+                popover.unparent();
+            }
+        });
+        popover
     }
 }
 

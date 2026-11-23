@@ -60,6 +60,12 @@ searchentry.notediff-search-no-match:focus-within {
     margin: 2px 0;
 }
 
+/* Outline the only item (Read Only), without moving keyboard focus to it. */
+popover.notediff-read-only-warning modelbutton {
+    outline: 2px solid #f5c211;
+    outline-offset: -2px;
+}
+
 .status-bar .trailing-dot {
     font-size: 0.8em;
     padding: 0 1px;

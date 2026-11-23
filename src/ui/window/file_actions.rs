@@ -185,6 +185,7 @@ impl AppWindow {
     /// now differs from the file), or as is and locked read-only. Shared by
     /// open and reload.
     fn show_document_text(&self, mode: OpenMode) {
+        self.status.dismiss_read_only_warning();
         let mut text = self.doc.borrow().text().to_string();
         // Defensive re-check: a reload peeks at the disk text, then reads the
         // file again. If tabs appeared in between, never let them into an
