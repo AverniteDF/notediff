@@ -2,7 +2,7 @@
 //! folder with Match Case, Whole Word, include/exclude globs, async execution
 //! with cancellation, and click-to-jump into the matching file and line.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -75,6 +75,7 @@ struct DialogState {
     exclude_entry: gtk::Entry,
     search_button: gtk::Button,
     results_stack: gtk::Stack,
+    results_scroll: gtk::ScrolledWindow,
     results_box: gtk::Box,
     status_label: gtk::Label,
     spinner: gtk::Spinner,
@@ -269,6 +270,7 @@ impl DialogState {
             exclude_entry,
             search_button,
             results_stack,
+            results_scroll,
             results_box,
             status_label,
             spinner,
@@ -599,13 +601,23 @@ impl DialogState {
         list.set_margin_top(4);
         list.set_margin_start(16);
 
+        let suppress_activate = Rc::new(Cell::new(false));
+        let mut pre_scroll_targets: Vec<(glib::WeakRef<gtk::Adjustment>, f64)> =
+            Vec::with_capacity(hits.len());
         for hit in hits {
-            list.append(&build_match_row(hit));
+            let (row, hadj_weak, center_ratio) = self.build_match_row(hit, &suppress_activate);
+            list.append(&row);
+            if let Some(ratio) = center_ratio {
+                pre_scroll_targets.push((hadj_weak, ratio));
+            }
         }
 
         let group_hits: Vec<FileMatch> = hits.to_vec();
         let weak = Rc::downgrade(self);
         list.connect_row_activated(move |_, row| {
+            if suppress_activate.replace(false) {
+                return;
+            }
             let Some(this) = weak.upgrade() else {
                 return;
             };
@@ -627,45 +639,279 @@ impl DialogState {
         expander.set_label_widget(Some(&header));
         expander.set_expanded(false);
         expander.set_child(Some(&list));
+
+        // Pre-scroll each result preview to center its underscored match the
+        // first time this file group is expanded and laid out.
+        let centered_once = Cell::new(false);
+        expander.connect_expanded_notify(move |exp| {
+            if !exp.is_expanded() || centered_once.replace(true) {
+                return;
+            }
+            let targets = pre_scroll_targets.clone();
+            glib::idle_add_local_once(move || {
+                for (hadj_weak, ratio) in targets {
+                    if let Some(hadj) = hadj_weak.upgrade() {
+                        center_preview(&hadj, ratio);
+                    }
+                }
+            });
+        });
+
         expander
+    }
+
+    fn build_match_row(
+        self: &Rc<Self>,
+        hit: &FileMatch,
+        suppress_activate: &Rc<Cell<bool>>,
+    ) -> (gtk::Box, glib::WeakRef<gtk::Adjustment>, Option<f64>) {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        row.set_margin_top(4);
+        row.set_margin_bottom(4);
+        row.set_margin_start(8);
+        row.set_margin_end(8);
+
+        let line_label = gtk::Label::new(Some(&hit.line.to_string()));
+        line_label.set_width_chars(5);
+        line_label.set_xalign(1.0);
+        line_label.add_css_class("monospace");
+        line_label.add_css_class("caption");
+        line_label.add_css_class("dim-label");
+        line_label.add_css_class("script-slider-value");
+
+        let preview_label = gtk::Label::new(None);
+        preview_label.set_markup(&format_preview_markup(&hit.preview, hit.preview_highlight));
+        preview_label.set_xalign(0.0);
+        preview_label.set_halign(gtk::Align::Start);
+        preview_label.add_css_class("monospace");
+        preview_label.add_css_class("caption");
+
+        // Use `ScrolledWindow` with `propagate_natural_width(false)` so long
+        // lines never expand the dialog horizontally, and forward vertical
+        // wheel/touchpad scroll events to the outer `results_scroll`.
+        let preview_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_width(false)
+            .propagate_natural_height(true)
+            .hexpand(true)
+            .child(&preview_label)
+            .build();
+        let hadj = preview_scroll.hadjustment();
+
+        let vscroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        vscroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let outer_vadj = self.results_scroll.vadjustment().downgrade();
+        vscroll.connect_scroll(move |controller, _dx, dy| {
+            if dy == 0.0 {
+                return glib::Propagation::Proceed;
+            }
+            if let Some(vadj) = outer_vadj.upgrade() {
+                let delta = match controller.unit() {
+                    gtk::gdk::ScrollUnit::Surface => dy,
+                    _ => dy * vadj.page_size().max(1.0).powf(2.0 / 3.0),
+                };
+                let max_val = (vadj.upper() - vadj.page_size()).max(vadj.lower());
+                vadj.set_value((vadj.value() + delta).clamp(vadj.lower(), max_val));
+            }
+            glib::Propagation::Stop
+        });
+        preview_scroll.add_controller(vscroll);
+
+        let grab_cursor = gtk::gdk::Cursor::from_name("grab", None);
+        let grabbing_cursor = gtk::gdk::Cursor::from_name("grabbing", grab_cursor.as_ref());
+        preview_scroll.set_cursor(grab_cursor.as_ref());
+
+        let drag = gtk::GestureDrag::new();
+        drag.set_button(1);
+        let start_x = Rc::new(Cell::new(0.0f64));
+        let did_drag = Rc::new(Cell::new(false));
+        let expanded = Rc::new(Cell::new(!hit.preview_truncated));
+
+        let set_dragging_cursor = |sw: &gtk::ScrolledWindow,
+                                   dialog: &adw::Dialog,
+                                   cursor: Option<&gtk::gdk::Cursor>,
+                                   active: bool| {
+            sw.set_cursor(cursor);
+            dialog.set_cursor(if active { cursor } else { None });
+            if let Some(surface) = sw.native().and_then(|n| n.surface()) {
+                surface.set_cursor(if active { cursor } else { None });
+            }
+        };
+
+        {
+            let scroll_ref = preview_scroll.downgrade();
+            let dialog_ref = self.dialog.downgrade();
+            let hadj_ref = hadj.downgrade();
+            let start_x = start_x.clone();
+            let did_drag = did_drag.clone();
+            let grabbing_cursor = grabbing_cursor.clone();
+            drag.connect_drag_begin(move |_, _, _| {
+                did_drag.set(false);
+                if let Some(hadj) = hadj_ref.upgrade() {
+                    start_x.set(hadj.value());
+                }
+                if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
+                    set_dragging_cursor(&sw, &dialog, grabbing_cursor.as_ref(), true);
+                }
+            });
+        }
+        // `(delta_chars, full_chars, latest_offset_x)` waiting for GTK's layout
+        // pass to update `hadj.upper()` after lazily replacing a truncated
+        // preview with the full line.
+        let pending_expand: Rc<Cell<Option<(usize, usize, f64)>>> = Rc::new(Cell::new(None));
+        {
+            let pending = pending_expand.clone();
+            let start_x = start_x.clone();
+            hadj.connect_upper_notify(move |adj| {
+                if let Some((delta_chars, full_chars, offset_x)) = pending.take() {
+                    if delta_chars > 0 && full_chars > 0 && adj.upper() > 0.0 {
+                        let char_width = adj.upper() / full_chars as f64;
+                        start_x.set(start_x.get() + delta_chars as f64 * char_width);
+                    }
+                    let max_scroll = (adj.upper() - adj.page_size()).max(0.0);
+                    let target = (start_x.get() - offset_x).clamp(adj.lower(), max_scroll);
+                    adj.set_value(target);
+                }
+            });
+        }
+        let preview_chars = hit.preview.chars().count();
+        let preview_match_char = hit
+            .preview_highlight
+            .and_then(|(s, _)| hit.preview.get(..s))
+            .map(|prefix| prefix.chars().count());
+
+        {
+            let scroll_ref = preview_scroll.downgrade();
+            let dialog_ref = self.dialog.downgrade();
+            let hadj_ref = hadj.downgrade();
+            let label_ref = preview_label.downgrade();
+            let start_x = start_x.clone();
+            let did_drag = did_drag.clone();
+            let suppress = suppress_activate.clone();
+            let expanded = expanded.clone();
+            let pending = pending_expand.clone();
+            let weak = Rc::downgrade(self);
+            let hit_path = hit.path.clone();
+            let hit_line = hit.line;
+            let hit_col = hit.column_char;
+            let hit_len = hit.match_chars;
+            let grabbing_cursor = grabbing_cursor.clone();
+            drag.connect_drag_update(move |gesture, offset_x, _| {
+                if offset_x.abs() <= 4.0 && !did_drag.get() {
+                    return;
+                }
+                if !did_drag.replace(true) {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
+                        set_dragging_cursor(&sw, &dialog, grabbing_cursor.as_ref(), true);
+                    }
+                }
+                suppress.set(true);
+                if !expanded.replace(true)
+                    && let (Some(this), Some(label)) = (weak.upgrade(), label_ref.upgrade())
+                {
+                    let buffers = (this.snapshot_dirty)();
+                    if let Some((full_text, hl)) = find_in_files::read_full_line(
+                        &hit_path, hit_line, hit_col, hit_len, &buffers,
+                    ) {
+                        let full_chars = full_text.chars().count();
+                        let new_match_char = hl
+                            .and_then(|(s, _)| full_text.get(..s))
+                            .map(|prefix| prefix.chars().count());
+                        let delta_chars = match (preview_match_char, new_match_char) {
+                            (Some(old_c), Some(new_c)) => new_c.saturating_sub(old_c),
+                            _ => 0,
+                        };
+                        if full_chars != preview_chars {
+                            pending.set(Some((delta_chars, full_chars, offset_x)));
+                        }
+                        label.set_markup(&format_preview_markup(&full_text, hl));
+                    }
+                }
+                if let Some((delta_chars, full_chars, _)) = pending.get() {
+                    pending.set(Some((delta_chars, full_chars, offset_x)));
+                } else if let Some(hadj) = hadj_ref.upgrade() {
+                    let max_scroll = (hadj.upper() - hadj.page_size()).max(0.0);
+                    let target = (start_x.get() - offset_x).clamp(hadj.lower(), max_scroll);
+                    hadj.set_value(target);
+                }
+            });
+        }
+        {
+            let scroll_ref = preview_scroll.downgrade();
+            let dialog_ref = self.dialog.downgrade();
+            let did_drag = did_drag.clone();
+            let suppress = suppress_activate.clone();
+            let grab_cursor = grab_cursor.clone();
+            drag.connect_drag_end(move |gesture, _, _| {
+                if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
+                    set_dragging_cursor(&sw, &dialog, grab_cursor.as_ref(), false);
+                }
+                if did_drag.get() {
+                    suppress.set(true);
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                }
+            });
+        }
+        {
+            let scroll_ref = preview_scroll.downgrade();
+            let dialog_ref = self.dialog.downgrade();
+            let grab_cursor = grab_cursor.clone();
+            drag.connect_cancel(move |_, _| {
+                if let (Some(sw), Some(dialog)) = (scroll_ref.upgrade(), dialog_ref.upgrade()) {
+                    set_dragging_cursor(&sw, &dialog, grab_cursor.as_ref(), false);
+                }
+            });
+        }
+        preview_scroll.add_controller(drag);
+
+        let ratio = match_center_ratio(&hit.preview, hit.preview_highlight);
+        let hadj_weak = hadj.downgrade();
+
+        row.append(&line_label);
+        row.append(&preview_scroll);
+        (row, hadj_weak, ratio)
     }
 }
 
-fn build_match_row(hit: &FileMatch) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    row.set_margin_top(4);
-    row.set_margin_bottom(4);
-    row.set_margin_start(8);
-    row.set_margin_end(8);
+/// Fractional center position (`0.0..=1.0`) of the highlighted match within
+/// `preview` (accurate for the monospace preview label).
+fn match_center_ratio(preview: &str, highlight: Option<(usize, usize)>) -> Option<f64> {
+    let (start_b, end_b) = highlight?;
+    let total_chars = preview.chars().count();
+    if total_chars == 0 || start_b >= end_b || end_b > preview.len() {
+        return None;
+    }
+    let start_c = preview[..start_b].chars().count();
+    let end_c = preview[..end_b].chars().count();
+    Some(((start_c + end_c) as f64 / 2.0) / total_chars as f64)
+}
 
-    let line_label = gtk::Label::new(Some(&hit.line.to_string()));
-    line_label.set_width_chars(5);
-    line_label.set_xalign(1.0);
-    line_label.add_css_class("monospace");
-    line_label.add_css_class("caption");
-    line_label.add_css_class("dim-label");
-    line_label.add_css_class("script-slider-value");
+/// Pre-scroll a result preview so its underscored match is centered when the
+/// line overflows the visible viewport.
+fn center_preview(hadj: &gtk::Adjustment, match_ratio: f64) {
+    let page = hadj.page_size();
+    let upper = hadj.upper();
+    let max_scroll = (upper - page).max(0.0);
+    if max_scroll <= 0.0 || page <= 0.0 {
+        return;
+    }
+    let match_center = match_ratio * upper;
+    let target = (match_center - page * 0.45).clamp(hadj.lower(), max_scroll);
+    hadj.set_value(target);
+}
 
-    let preview_markup = match hit.preview_highlight {
-        Some((start, end)) if start < end && end <= hit.preview.len() => {
-            let before = glib::markup_escape_text(&hit.preview[..start]);
-            let matched = glib::markup_escape_text(&hit.preview[start..end]);
-            let after = glib::markup_escape_text(&hit.preview[end..]);
+fn format_preview_markup(text: &str, highlight: Option<(usize, usize)>) -> String {
+    match highlight {
+        Some((start, end)) if start < end && end <= text.len() => {
+            let before = glib::markup_escape_text(&text[..start]);
+            let matched = glib::markup_escape_text(&text[start..end]);
+            let after = glib::markup_escape_text(&text[end..]);
             format!("{before}<b><u>{matched}</u></b>{after}")
         }
-        _ => glib::markup_escape_text(&hit.preview).to_string(),
-    };
-    let preview_label = gtk::Label::new(None);
-    preview_label.set_markup(&preview_markup);
-    preview_label.set_xalign(0.0);
-    preview_label.set_hexpand(true);
-    preview_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    preview_label.add_css_class("monospace");
-    preview_label.add_css_class("caption");
-
-    row.append(&line_label);
-    row.append(&preview_label);
-    row
+        _ => glib::markup_escape_text(text).to_string(),
+    }
 }
 
 /// Default starting folder for Find in Files: the open document's parent

@@ -58,12 +58,25 @@ impl AppWindow {
         });
         add_action(window, this, "run-script", |this| {
             let current_file = this.doc.borrow().path().map(Path::to_path_buf);
-            let weak = Rc::downgrade(this);
-            run_script_dialog::present(&this.window, current_file, move |title, output| {
-                if let Some(this) = weak.upgrade() {
-                    this.open_script_output_window(title, output);
-                }
-            });
+            let weak_docs = Rc::downgrade(this);
+            let weak_out = Rc::downgrade(this);
+            run_script_dialog::present(
+                &this.window,
+                current_file,
+                move || {
+                    if let Some(this) = weak_docs.upgrade() {
+                        this.open_reference_window(
+                            "scripts.md",
+                            include_str!("../../../docs/scripts.md"),
+                        );
+                    }
+                },
+                move |title, output| {
+                    if let Some(this) = weak_out.upgrade() {
+                        this.open_script_output_window(title, output);
+                    }
+                },
+            );
         });
         add_action(window, this, "about", |this| {
             about_dialog::present(&this.window)

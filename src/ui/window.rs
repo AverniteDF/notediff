@@ -1207,6 +1207,39 @@ impl AppWindow {
         false
     }
 
+    /// Open a clean read-only window displaying built-in reference documentation
+    /// (such as `docs/scripts.md`). Closing it does not prompt to save.
+    pub(super) fn open_reference_window(&self, title: &str, text: &str) {
+        let Some(app) = self
+            .window
+            .application()
+            .and_then(|app| app.downcast::<adw::Application>().ok())
+        else {
+            return;
+        };
+        let window = AppWindow::with_parts(
+            &app,
+            self.store.clone(),
+            self.persist_settings,
+            self.recent.clone(),
+        );
+        window
+            .doc
+            .borrow_mut()
+            .set_line_ending(detect_line_ending(text));
+        *window.untitled_name.borrow_mut() = Some(title.to_string());
+        window.clear_edit();
+        window.set_editor_text(text);
+        window.flags.dirty.set(false);
+        window.set_read_only(true);
+        window.reset_cursor_to_top();
+        window.update_title();
+        window.update_diff_button();
+        window.update_status();
+        window.window.present();
+        window.editor_view.grab_focus();
+    }
+
     /// Show a script's stdout: reuse this window if it is empty and untitled,
     /// otherwise open a new window. Non-empty output starts dirty so closing
     /// prompts Save As, matching ordinary untitled documents.

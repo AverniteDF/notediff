@@ -25,14 +25,21 @@ const SANDBOX_WRITABLE: u32 = 1;
 const SANDBOX_NONE: u32 = 2;
 
 type OutputCallback = Box<dyn Fn(String, ScriptOutput)>;
+type OpenDocsCallback = Box<dyn Fn()>;
 
 /// Present the Run Script dialog over `parent`.
 pub fn present(
     parent: &adw::ApplicationWindow,
     current_file: Option<PathBuf>,
+    on_open_docs: impl Fn() + 'static,
     on_output: impl Fn(String, ScriptOutput) + 'static,
 ) {
-    let state = Rc::new(DialogState::new(parent, current_file, Box::new(on_output)));
+    let state = Rc::new(DialogState::new(
+        parent,
+        current_file,
+        Box::new(on_open_docs),
+        Box::new(on_output),
+    ));
     state.wire_signals();
     state.load_initial_scripts();
     state.dialog.present(Some(parent));
@@ -108,6 +115,7 @@ struct DialogState {
     dialog: adw::Dialog,
     toasts: adw::ToastOverlay,
     browse_button: gtk::Button,
+    info_button: gtk::Button,
     run_button: gtk::Button,
     sidebar_list: gtk::ListBox,
     form_box: gtk::Box,
@@ -123,6 +131,7 @@ struct DialogState {
     selected_index: Cell<Option<usize>>,
     controls: RefCell<Vec<FieldControl>>,
     running_cancel: RefCell<Option<CancelHandle>>,
+    on_open_docs: OpenDocsCallback,
     on_output: OutputCallback,
 }
 
@@ -130,6 +139,7 @@ impl DialogState {
     fn new(
         parent: &adw::ApplicationWindow,
         current_file: Option<PathBuf>,
+        on_open_docs: OpenDocsCallback,
         on_output: OutputCallback,
     ) -> Self {
         let current_dir = current_file
@@ -146,11 +156,26 @@ impl DialogState {
             .build();
 
         let browse_button = gtk::Button::with_label("Browse…");
+        let title_label = gtk::Label::new(Some("Run Script"));
+        title_label.add_css_class("title");
+        let info_button = gtk::Button::with_label("ℹ️");
+        info_button.add_css_class("flat");
+        info_button.add_css_class("circular");
+        info_button.set_valign(gtk::Align::Center);
+        info_button.set_tooltip_text(Some(
+            "See docs/scripts.md for the full script authoring guide.",
+        ));
+        let title_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        title_box.set_valign(gtk::Align::Center);
+        title_box.append(&title_label);
+        title_box.append(&info_button);
+
         let run_button = gtk::Button::with_label("Run");
         run_button.add_css_class("suggested-action");
         run_button.set_sensitive(false);
 
         let header = adw::HeaderBar::new();
+        header.set_title_widget(Some(&title_box));
         header.pack_start(&browse_button);
         header.pack_end(&run_button);
 
@@ -252,6 +277,7 @@ impl DialogState {
             dialog,
             toasts,
             browse_button,
+            info_button,
             run_button,
             sidebar_list,
             form_box,
@@ -267,6 +293,7 @@ impl DialogState {
             selected_index: Cell::new(None),
             controls: RefCell::new(Vec::new()),
             running_cancel: RefCell::new(None),
+            on_open_docs,
             on_output,
         }
     }
@@ -288,6 +315,16 @@ impl DialogState {
                 };
                 let index = row.map(|r| r.index() as usize);
                 this.select_script(index);
+            });
+        }
+
+        // Info button opens docs/scripts.md.
+        {
+            let weak = Rc::downgrade(self);
+            self.info_button.connect_clicked(move |_| {
+                if let Some(this) = weak.upgrade() {
+                    (this.on_open_docs)();
+                }
             });
         }
 
