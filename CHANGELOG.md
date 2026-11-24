@@ -13,6 +13,13 @@ versioning.
   `prompt-packer.py`) and seeds any missing bundled presets into `script-state`
   without overwriting existing presets of the same name.
 
+### Fixed
+
+- Disabled mousewheel value changes on spin buttons and sliders inside
+  scrollable dialogs (**Appearance → Font size** and **Run Script** `int` /
+  `slider` fields) so scrolling over them scrolls the dialog instead of
+  accidentally changing their values.
+
 ## [1.5.0] - 2026-11-23
 
 ### Added

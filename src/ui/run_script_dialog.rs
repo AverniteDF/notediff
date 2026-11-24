@@ -938,6 +938,7 @@ impl DialogState {
                 let adj = gtk::Adjustment::new(initial, lo as f64, hi as f64, 1.0, 10.0, 0.0);
                 let spin = gtk::SpinButton::new(Some(&adj), 1.0, 0);
                 spin.set_halign(gtk::Align::Start);
+                crate::ui::disable_scroll_wheel(&spin);
                 container.append(&spin);
                 FieldWidget::Int(spin)
             }
@@ -987,37 +988,13 @@ impl DialogState {
                 scale.set_digits(0);
                 scale.set_round_digits(0);
                 scale.adjustment().set_page_increment(1.0);
+                crate::ui::disable_scroll_wheel(&scale);
                 if max_idx == 0 {
                     scale.set_sensitive(false);
                 } else {
                     for i in 0..=max_idx {
                         scale.add_mark(i as f64, gtk::PositionType::Bottom, None);
                     }
-                    let scroll = gtk::EventControllerScroll::new(
-                        gtk::EventControllerScrollFlags::VERTICAL
-                            | gtk::EventControllerScrollFlags::DISCRETE,
-                    );
-                    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
-                    let scale_ref = scale.downgrade();
-                    scroll.connect_scroll(move |_, _, dy| {
-                        if let Some(scale) = scale_ref.upgrade() {
-                            let step = if dy < 0.0 {
-                                1.0
-                            } else if dy > 0.0 {
-                                -1.0
-                            } else {
-                                0.0
-                            };
-                            if step != 0.0 {
-                                let next =
-                                    (scale.value().round() + step).clamp(0.0, max_idx as f64);
-                                scale.set_value(next);
-                                return glib::Propagation::Stop;
-                            }
-                        }
-                        glib::Propagation::Proceed
-                    });
-                    scale.add_controller(scroll);
                 }
                 scale.set_value(initial as f64);
 

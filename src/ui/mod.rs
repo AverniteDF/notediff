@@ -33,6 +33,24 @@ pub(crate) fn format_local_time(at: std::time::SystemTime) -> Option<String> {
         .map(|text| text.to_string())
 }
 
+/// Remove any scroll-wheel controllers attached to `widget` (such as the
+/// built-in ones on `gtk::SpinButton` and `gtk::Scale`) so mouse-wheel events
+/// bubble up to an enclosing `gtk::ScrolledWindow` instead of accidentally
+/// changing the control's value.
+pub(crate) fn disable_scroll_wheel(widget: &impl gtk::prelude::IsA<gtk::Widget>) {
+    use gtk::prelude::{Cast, ListModelExt, WidgetExt};
+
+    let controllers = widget.observe_controllers();
+    let to_remove: Vec<gtk::EventController> = (0..controllers.n_items())
+        .filter_map(|i| controllers.item(i))
+        .filter_map(|obj| obj.downcast::<gtk::EventControllerScroll>().ok())
+        .map(Cast::upcast)
+        .collect();
+    for controller in to_remove {
+        widget.remove_controller(&controller);
+    }
+}
+
 pub fn initialize(app: &adw::Application) {
     theme::install();
     window::initialize(app);

@@ -51,6 +51,7 @@ pub(super) fn build(toasts: &adw::ToastOverlay, persist: bool) -> FontControls {
     size.set_numeric(true);
     size.set_value(current.font_size_pt() as f64);
     size.set_valign(gtk::Align::Center);
+    crate::ui::disable_scroll_wheel(&size);
     let size_row = adw::ActionRow::new();
     size_row.set_title("Font size (pt)");
     size_row.set_subtitle("Editor, diff panes and line numbers");
