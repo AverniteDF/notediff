@@ -41,7 +41,7 @@ Note: This is still an early-stage greenfield project. Backwards compatibility i
 
 3. **Future Considerations:** Briefly list any suggestions you might have for improving the project source in subsequent iterations. If you see any refactoring or restructuring opportunities then mention the most compelling ones as well. Make each listed item explicit enough to be comprehensible on its own.
 
-**Note:** Each alterations package should be given a random, unique, two-word codename. Please choose a word-pair that contrasts with any previously assigned package codenames and add it to the project's source in `codenames.md` (create that file if it doesn't yet exist). Try to be more creative than always using colors and animals. The codename, along with a very brief description of the alteration package's payload, should be recorded in that file within a reverse-chronologically ordered table and not be mentioned anywhere else in the project source files. The first line in your alterations package should state the codename in quotes (i.e., `# Alterations Package "<codename>"`).
+**Note:** Give this alterations package a random, unique, two-word codename that contrasts with any previous ones—be more creative than just colors and animals. State it on the very first line of your response in quotes (`# Alterations Package "<codename>"`), and record it with a brief description of the changes in a reverse-chronological table in `codenames.md` (creating the file if it doesn't exist). Do not mention the codename anywhere else in the project source files.
 
 ---
 
