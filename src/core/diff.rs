@@ -11,6 +11,91 @@ use std::time::{Duration, Instant};
 use similar::{ChangeTag, DiffOp, TextDiffConfig};
 
 use super::textlines;
+use super::textstats::LineEnding;
+
+/// Byte boundaries of GTK logical lines, including the end of the text.
+/// Unlike borrowed line slices, this index can be retained by a review session.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LineIndex(Vec<usize>);
+
+impl LineIndex {
+    pub(crate) fn new(text: &str) -> Self {
+        let mut offsets = vec![0];
+        let mut offset = 0;
+        for line in textlines::iter_inclusive(text) {
+            offset += line.len();
+            offsets.push(offset);
+        }
+        Self(offsets)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len() - 1
+    }
+
+    pub(crate) fn byte(&self, line: usize) -> usize {
+        self.0[line]
+    }
+
+    pub(crate) fn line_at(&self, byte: usize) -> usize {
+        self.0.partition_point(|&offset| offset <= byte) - 1
+    }
+
+    pub(crate) fn bytes(&self, lines: Range<usize>) -> Range<usize> {
+        self.byte(lines.start)..self.byte(lines.end)
+    }
+
+    /// Classify line endings without scanning line bodies.
+    pub(crate) fn line_ending(&self, text: &str) -> LineEnding {
+        let terminated = if textlines::ends_with_break(text) {
+            self.len()
+        } else {
+            self.len().saturating_sub(1)
+        };
+        let mut style = None;
+        for pair in self.0.windows(2).take(terminated) {
+            let ending = match text.as_bytes()[pair[0]..pair[1]] {
+                [.., b'\r', b'\n'] => LineEnding::CrLf,
+                [.., b'\n'] => LineEnding::Lf,
+                _ => return LineEnding::Mixed,
+            };
+            if style.is_some_and(|previous| previous != ending) {
+                return LineEnding::Mixed;
+            }
+            style = Some(ending);
+        }
+        style.unwrap_or_default()
+    }
+
+    /// Reindex a line-aligned splice, retaining the unchanged line boundaries.
+    /// The caller supplies boundaries that remain valid in the new text.
+    pub(crate) fn splice(&mut self, lines: Range<usize>, after: &str) -> usize {
+        let old_len = self.len();
+        let start = self.byte(lines.start);
+        let old_end = self.byte(lines.end);
+        let new_end = after.len() - (self.byte(old_len) - old_end);
+        let mut offset = start;
+        let middle = textlines::iter_inclusive(&after[start..new_end]).map(|line| {
+            offset += line.len();
+            offset
+        });
+        self.0.splice(lines.start + 1..lines.end + 1, middle);
+        let end_line = self.len() - (old_len - lines.end);
+        if old_end != new_end {
+            for offset in &mut self.0[end_line + 1..] {
+                *offset = *offset - old_end + new_end;
+            }
+        }
+        end_line
+    }
+
+    fn slices<'a>(&self, text: &'a str) -> Vec<&'a str> {
+        self.0
+            .windows(2)
+            .map(|pair| &text[pair[0]..pair[1]])
+            .collect()
+    }
+}
 
 /// Maximum time spent on one line diff and its inline refinement. A timed-out
 /// diff is still a valid, if less minimal, diff: hunks retain valid ranges and
@@ -63,6 +148,7 @@ impl DiffResult {
 /// Split text into lines that retain their terminators. `""` produces no
 /// lines, `"a\n"` produces one line and `"a\nb"` produces two. GTK's lone CR
 /// and U+2029 paragraph breaks are line breaks here too.
+#[cfg(test)]
 pub fn split_lines(text: &str) -> Vec<&str> {
     textlines::split_inclusive(text)
 }
@@ -72,18 +158,36 @@ pub fn line_content(line: &str) -> &str {
     textlines::content(line)
 }
 
+#[cfg(test)]
 pub fn diff_texts(baseline: &str, live: &str) -> DiffResult {
     diff_texts_with_timeout(baseline, live, DIFF_TIMEOUT)
 }
 
+#[cfg(test)]
 fn diff_texts_with_timeout(baseline: &str, live: &str, timeout: Duration) -> DiffResult {
     if baseline == live {
         return DiffResult::default();
     }
     let old_lines = split_lines(baseline);
     let new_lines = split_lines(live);
+    diff_lines(&old_lines, &new_lines, timeout)
+}
+
+pub(crate) fn diff_indexed(
+    baseline: &str,
+    live: &str,
+    old: &LineIndex,
+    new: &LineIndex,
+) -> DiffResult {
+    if baseline == live {
+        return DiffResult::default();
+    }
+    diff_lines(&old.slices(baseline), &new.slices(live), DIFF_TIMEOUT)
+}
+
+fn diff_lines(old_lines: &[&str], new_lines: &[&str], timeout: Duration) -> DiffResult {
     let deadline = Instant::now() + timeout;
-    let hunks = hunks_for(&old_lines, &new_lines, deadline);
+    let hunks = hunks_for(old_lines, new_lines, deadline);
 
     let mut result = DiffResult {
         hunks,
@@ -93,8 +197,8 @@ fn diff_texts_with_timeout(baseline: &str, live: &str, timeout: Duration) -> Dif
 
     for hunk in &result.hunks {
         compute_inline_for_hunk(
-            &old_lines,
-            &new_lines,
+            old_lines,
+            new_lines,
             hunk,
             deadline,
             &mut result.baseline_inline,
@@ -454,42 +558,70 @@ fn push_span(out: &mut Vec<InlineSpan>, line: usize, start: usize, end: usize) {
 ///
 /// `baseline` must be the text the hunk was computed against. The returned
 /// string preserves every line's original terminator from `live`.
+#[cfg(test)]
 pub fn apply_hunk(baseline: &str, live: &str, hunk: &Hunk) -> Result<String, String> {
-    let old_lines = split_lines(baseline);
-    let new_lines = split_lines(live);
+    let old = LineIndex::new(baseline);
+    let new = LineIndex::new(live);
+    let (removed, added) = hunk_bytes(hunk, &old, &new)?;
+    Ok(replace_bytes(baseline, removed, &live[added]))
+}
 
-    if hunk.old_end() > old_lines.len() || hunk.new_end() > new_lines.len() {
+pub(crate) fn hunk_bytes(
+    hunk: &Hunk,
+    old: &LineIndex,
+    new: &LineIndex,
+) -> Result<(Range<usize>, Range<usize>), String> {
+    if hunk.old_end() > old.len() || hunk.new_end() > new.len() {
         return Err(format!(
             "hunk range out of bounds (baseline {} lines, live {} lines)",
-            old_lines.len(),
-            new_lines.len()
+            old.len(),
+            new.len()
         ));
     }
+    Ok((
+        old.bytes(hunk.old_start..hunk.old_end()),
+        new.bytes(hunk.new_start..hunk.new_end()),
+    ))
+}
 
-    let removed: usize = old_lines[hunk.old_start..hunk.old_end()]
-        .iter()
-        .map(|line| line.len())
-        .sum();
-    let added: usize = new_lines[hunk.new_start..hunk.new_end()]
-        .iter()
-        .map(|line| line.len())
-        .sum();
-    let mut result = String::with_capacity(baseline.len() - removed + added);
-    for line in &old_lines[..hunk.old_start] {
-        result.push_str(line);
-    }
-    for line in &new_lines[hunk.new_start..hunk.new_end()] {
-        result.push_str(line);
-    }
-    for line in &old_lines[hunk.old_end()..] {
-        result.push_str(line);
-    }
-    Ok(result)
+pub(crate) fn replace_bytes(baseline: &str, removed: Range<usize>, added: &str) -> String {
+    let mut result = String::with_capacity(baseline.len() - removed.len() + added.len());
+    result.push_str(&baseline[..removed.start]);
+    result.push_str(added);
+    result.push_str(&baseline[removed.end..]);
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_index_keeps_exact_boundaries_and_endings() {
+        let text = "context\r\nα\r\n\n🙂final";
+        let lines = LineIndex::new(text);
+        assert_eq!(&text[lines.bytes(1..3)], "α\r\n\n");
+        assert_eq!(&text[lines.bytes(3..4)], "🙂final");
+        assert_eq!(&text[lines.bytes(4..4)], "");
+        let text = "one\rtwo\r\nthree\u{2029}four";
+        assert_eq!(LineIndex::new(text).0, [0, 4, 9, 17, 21]);
+        for text in [
+            "",
+            "a",
+            "α\nb",
+            "α\r\nb",
+            "α\r\nb\r\n",
+            "\r",
+            "\u{2029}",
+            "a\r\nb\n",
+        ] {
+            assert_eq!(
+                LineIndex::new(text).line_ending(text),
+                super::super::textstats::text_stats(text).line_ending,
+                "{text:?}"
+            );
+        }
+    }
 
     fn assert_roundtrip(text: &str) {
         let lines = split_lines(text);

@@ -497,9 +497,10 @@ Switching back into an unchanged inspection remembers its inline selection.
 
 Full diff and inspection use separate, persistent pane pairs. The full-document
 buffers, layout and viewport stay intact during inspection, so returning to
-the same hunk requires no text replacement or scroll restoration. Accept/Undo
-incrementally update the retained full diff; navigation positions it at the
-newly selected hunk before switching back. There is no fade or opacity mask.
+the same hunk requires no text replacement or scroll restoration. Accept and
+Undo update changed text and highlights in the retained full diff instead of
+rebuilding both panes for each small edit. Navigation positions the panes at
+the newly selected hunk before switching back. There is no fade or opacity mask.
 
 The right-aligned **Confirm** retains its save behavior. A partial Confirm
 preserves inspection and the selected change, then becomes **Back**. After

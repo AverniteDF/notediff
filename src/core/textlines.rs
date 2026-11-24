@@ -144,48 +144,6 @@ pub fn split_all(text: &str) -> Vec<&str> {
     iter_all(text).collect()
 }
 
-/// Byte offset of the start of `line` using `split_inclusive` numbering.
-/// A line past the end maps to the text length.
-pub fn line_start_byte(text: &str, line: usize) -> usize {
-    if line == 0 {
-        return 0;
-    }
-    let mut offset = 0;
-    for (index, item) in iter_inclusive(text).enumerate() {
-        if index == line {
-            return offset;
-        }
-        offset += item.len();
-    }
-    text.len()
-}
-
-/// Slice `len` lines starting at `start`, using `split_inclusive` numbering.
-/// Terminators are retained. An out-of-range start returns an empty slice.
-pub fn slice_lines(text: &str, start: usize, len: usize) -> &str {
-    if len == 0 {
-        return "";
-    }
-    let stop = start.saturating_add(len);
-    let mut begin = None;
-    let mut end = text.len();
-    let mut offset = 0;
-    for (index, line) in iter_inclusive(text).enumerate() {
-        if index == start {
-            begin = Some(offset);
-        }
-        if index == stop {
-            end = offset;
-            break;
-        }
-        offset += line.len();
-    }
-    match begin {
-        Some(begin) => &text[begin..end],
-        None => "",
-    }
-}
-
 /// The visible part of a line, without any line terminator.
 pub fn content(line: &str) -> &str {
     for suffix in ["\r\n", "\n", "\r", "\u{2029}"] {
@@ -232,19 +190,6 @@ mod tests {
         assert!(ends_with_break("a\r\n"));
         assert!(ends_with_break("a\u{2029}"));
         assert!(!ends_with_break("abc"));
-    }
-
-    #[test]
-    fn byte_offsets_and_slices_follow_every_break() {
-        let text = "one\rtwo\r\nthree\u{2029}four";
-        assert_eq!(line_start_byte(text, 0), 0);
-        assert_eq!(line_start_byte(text, 1), 4);
-        assert_eq!(line_start_byte(text, 2), 9);
-        assert_eq!(line_start_byte(text, 3), 17);
-        assert_eq!(slice_lines(text, 1, 2), "two\r\nthree\u{2029}");
-        assert_eq!(slice_lines(text, 2, 1), "three\u{2029}");
-        assert_eq!(slice_lines(text, 1, 0), "");
-        assert_eq!(slice_lines(text, 9, 1), "");
     }
 
     #[test]

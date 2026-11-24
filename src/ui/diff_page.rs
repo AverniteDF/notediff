@@ -14,14 +14,18 @@ use adw::prelude::*;
 use gtk::glib;
 use sourceview5::prelude::*;
 
-use crate::core::diff::{DiffResult, Hunk, InlineSpan};
+use crate::core::diff::{DiffResult, Hunk, InlineSpan, LineIndex};
 use crate::core::inline::ChangeKind;
-use crate::core::session::DiffSession;
+use crate::core::session::{DiffSession, LineEdit};
 use crate::core::textstats::{TextStats, text_stats};
 use crate::ui::diff_toolbar::{DiffToolbarState, ExitState};
 use crate::ui::gutter_selection;
 use crate::ui::status_bar::StatusBar;
 use crate::ui::theme;
+
+#[cfg(test)]
+#[path = "diff_page_bench.rs"]
+mod bench;
 
 // Fixed/XML opaque review colours distinguish normal and focused diff regions.
 const TAG_HUNK: &str = "notediff-hunk";
@@ -84,21 +88,104 @@ pub struct DiffPage {
     scroll_generation: Cell<u64>,
     inspection_layout: Cell<bool>,
     full_focus: Cell<Option<Hunk>>,
+    full_focus_lines: RefCell<[Range<usize>; 2]>,
     inspection_generation: Cell<u64>,
     inspection_pending: Cell<bool>,
     full_revision: Cell<Option<u64>>,
     full_stats: Cell<Option<[TextStats; 2]>>,
-    full_line_counts: Cell<[usize; 2]>,
-    /// Character offsets of display-only blank-line markers in each full pane.
-    left_markers: RefCell<Vec<i32>>,
-    right_markers: RefCell<Vec<i32>>,
+    left_annotations: RefCell<FullAnnotations>,
+    right_annotations: RefCell<FullAnnotations>,
     /// Whether each pane's trailing display line belongs to its last hunk
     /// because that side gained or lost a final newline.
     left_trailing_blank: Cell<bool>,
     right_trailing_blank: Cell<bool>,
 }
 
+#[derive(Default)]
+struct FullAnnotations {
+    /// Sorted logical line numbers of display-only markers.
+    markers: Vec<usize>,
+    hunks: Vec<Range<usize>>,
+    words: Vec<InlineSpan>,
+}
+
 impl DiffPage {
+    #[cfg(test)]
+    pub(crate) fn incremental_review_smoke() {
+        let page = Self::new();
+        let fresh = Self::new();
+        for (old, live) in [
+            (
+                "α\r\nold\ranchor\u{2029}¶ end\n",
+                "α\r\n\nnew\ranchor\u{2029}¶ end",
+            ),
+            (
+                "α\r\nold\ranchor\u{2029}¶ end",
+                "α\r\n\nnew\ranchor\u{2029}¶ end\n",
+            ),
+            ("top\ra\nanchor\nold\n\nend", "top\r\nanchor\nnew\n\n\nend"),
+            ("", "\r\n🙂\n"),
+            ("\r\n🙂\n", ""),
+            (&"\n".repeat(300), "new"),
+        ] {
+            for inspect in [false, true] {
+                let mut session = DiffSession::new(old.into(), live.into());
+                page.begin_review();
+                session.focus_relative(1);
+                if inspect {
+                    assert!(session.toggle_inspection());
+                }
+                page.render(&session);
+                let assert_render = |session: &DiffSession| {
+                    page.render(session);
+                    fresh.begin_review();
+                    fresh.render(session);
+                    for (side, (actual, expected, raw)) in [
+                        (&page.left_buffer, &fresh.left_buffer, session.live()),
+                        (&page.right_buffer, &fresh.right_buffer, session.baseline()),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let signature = |buffer: &sourceview5::Buffer| {
+                            let mut iter = buffer.start_iter();
+                            let mut chars = Vec::new();
+                            while !iter.is_end() {
+                                let mut tags: Vec<_> =
+                                    iter.tags().iter().filter_map(|t| t.name()).collect();
+                                tags.sort();
+                                chars.push((iter.char(), tags));
+                                iter.forward_char();
+                            }
+                            chars
+                        };
+                        assert_eq!(signature(actual), signature(expected), "{old:?} → {live:?}");
+                        actual.select_range(&actual.start_iter(), &actual.end_iter());
+                        assert_eq!(
+                            selected_text(actual.upcast_ref())
+                                .as_deref()
+                                .unwrap_or_default(),
+                            raw
+                        );
+                        let measured = text_stats(raw);
+                        let pane = page.full_stats.get().unwrap()[side];
+                        assert_eq!(pane.summary(), measured.summary());
+                        assert_eq!(pane.line_ending, measured.line_ending);
+                    }
+                };
+                assert_eq!(session.accept_focused(), Ok(true));
+                assert_render(&session);
+                assert!(session.undo());
+                assert_render(&session);
+                while !session.diff().is_empty() {
+                    assert_eq!(session.accept_focused(), Ok(true));
+                    assert_render(&session);
+                }
+                assert_eq!(session.baseline(), live);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn assert_theme_smoke(&self, selected: &theme::LoadedTheme) {
         for buffer in [
@@ -292,13 +379,13 @@ impl DiffPage {
             scroll_generation: Cell::new(0),
             inspection_layout: Cell::new(false),
             full_focus: Cell::new(None),
+            full_focus_lines: RefCell::default(),
             inspection_generation: Cell::new(0),
             inspection_pending: Cell::new(false),
             full_revision: Cell::new(None),
             full_stats: Cell::new(None),
-            full_line_counts: Cell::new([0, 0]),
-            left_markers: RefCell::new(Vec::new()),
-            right_markers: RefCell::new(Vec::new()),
+            left_annotations: RefCell::default(),
+            right_annotations: RefCell::default(),
             left_trailing_blank: Cell::new(false),
             right_trailing_blank: Cell::new(false),
         });
@@ -715,6 +802,7 @@ impl DiffPage {
         self.accept_button.set_sensitive(can_accept);
         self.full_focus
             .set(focus.and_then(|index| diff.hunks.get(index)).copied());
+        self.clear_full_focus();
         self.apply_focus(diff, focus);
         self.scroll_to_focus(diff, focus);
     }
@@ -731,20 +819,13 @@ impl DiffPage {
         // Keep the full-document buffers and views alive throughout inspection.
         // Only actual text edits invalidate their layout; a plain toggle does
         // not even remove/reapply tags or schedule a scroll.
-        let content_changed = self.full_revision.replace(Some(session.content_revision()))
-            != Some(session.content_revision());
+        let revision = session.content_revision();
+        let previous = self.full_revision.replace(Some(revision));
+        let content_changed = previous != Some(revision);
+        let [live_index, baseline_index] = session.line_indexes();
+        let [live_line_count, baseline_line_count] = [live_index.len(), baseline_index.len()];
         if content_changed {
-            // Marked blank lines depend on the hunks, so both panes are
-            // refreshed. `set_text` only rewrites the part that differs.
-            let live_stats = if let Some(stats) = self.full_stats.get() {
-                stats[0]
-            } else {
-                text_stats(session.live())
-            };
-            let live_line_count = crate::core::diff::split_lines(session.live()).len();
-            let baseline_line_count = crate::core::diff::split_lines(session.baseline()).len();
-            self.full_line_counts
-                .set([live_line_count, baseline_line_count]);
+            self.clear_full_focus();
             // The display-only line after a final newline belongs to the last
             // hunk only when that side changed content there. A pure insertion
             // or deletion leaves the other side's final newline unchanged.
@@ -754,72 +835,101 @@ impl DiffPage {
             let baseline_trailing = trailing_blank_change(session.baseline(), session.live())
                 && last_hunk
                     .is_some_and(|hunk| hunk_changes_baseline_eof(hunk, baseline_line_count));
+            let old_baseline_trailing = self.right_trailing_blank.replace(baseline_trailing);
             self.left_trailing_blank.set(live_trailing);
-            self.right_trailing_blank.set(baseline_trailing);
-            let new_ranges: Vec<Range<usize>> = diff
+            let live_ranges: Vec<_> = diff
                 .hunks
                 .iter()
                 .map(|h| h.new_start..h.new_end())
+                .filter(|range| !range.is_empty())
                 .collect();
-            let old_ranges: Vec<Range<usize>> = diff
+            let baseline_ranges: Vec<_> = diff
                 .hunks
                 .iter()
                 .map(|h| h.old_start..h.old_end())
+                .filter(|range| !range.is_empty())
                 .collect();
-            let (_, live_markers) = set_marked_text(
-                &self.left_buffer,
-                session.live(),
-                &new_ranges,
-                live_trailing,
-            );
-            let (_, baseline_markers) = set_marked_text(
-                &self.right_buffer,
+            let live_markers =
+                marker_lines(session.live(), live_index, &live_ranges, live_trailing);
+            let baseline_markers = marker_lines(
                 session.baseline(),
-                &old_ranges,
+                baseline_index,
+                &baseline_ranges,
                 baseline_trailing,
             );
-            self.left_markers.replace(live_markers);
-            self.right_markers.replace(baseline_markers);
-            self.sync_line_number_widths();
-            self.full_stats
-                .set(Some([live_stats, text_stats(session.baseline())]));
-            clear_tags(&self.left_buffer);
-            clear_tags(&self.right_buffer);
-            for hunk in &diff.hunks {
-                let live_end = hunk.new_end()
-                    + usize::from(live_trailing && hunk.new_end() == live_line_count);
-                let baseline_end = hunk.old_end()
-                    + usize::from(baseline_trailing && hunk.old_end() == baseline_line_count);
-                tag_line_range(&self.left_buffer, hunk.new_start, live_end, TAG_HUNK);
-                tag_line_range(&self.right_buffer, hunk.old_start, baseline_end, TAG_HUNK);
+            let mut left = self.left_annotations.borrow_mut();
+            let mut right = self.right_annotations.borrow_mut();
+            let edit = previous
+                .filter(|previous| previous.wrapping_add(1) == revision)
+                .and_then(|_| session.baseline_edit());
+            if let Some(edit) = edit {
+                splice_baseline(
+                    &self.right_buffer,
+                    session.baseline(),
+                    baseline_index,
+                    edit,
+                    old_baseline_trailing,
+                    &mut right,
+                );
             }
-            tag_inline(
+            // For a new review, or when many markers change together, use
+            // one text update rather than thousands of individual GTK edits.
+            left.prepare_markers(
                 &self.left_buffer,
+                session.live(),
+                live_index,
+                &live_markers,
+                edit.is_none(),
+            );
+            right.prepare_markers(
+                &self.right_buffer,
+                session.baseline(),
+                baseline_index,
+                &baseline_markers,
+                edit.is_none(),
+            );
+            left.update(
+                &self.left_buffer,
+                live_markers,
+                with_trailing_range(live_ranges, live_trailing),
                 &diff.live_inline,
-                0..usize::MAX,
-                TAG_WORD,
             );
-            tag_inline(
+            right.update(
                 &self.right_buffer,
+                baseline_markers,
+                with_trailing_range(baseline_ranges, baseline_trailing),
                 &diff.baseline_inline,
-                0..usize::MAX,
-                TAG_WORD,
             );
-            tag_markers(
-                &self.left_buffer,
-                &self.left_markers.borrow(),
-                0..usize::MAX,
-                TAG_WORD,
+
+            let live_stats = self.full_stats.get().map_or_else(
+                || {
+                    pane_stats(
+                        &self.left_buffer,
+                        session.live(),
+                        live_index,
+                        left.markers.len(),
+                    )
+                },
+                |stats| stats[0],
             );
-            tag_markers(
-                &self.right_buffer,
-                &self.right_markers.borrow(),
-                0..usize::MAX,
-                TAG_WORD,
-            );
+            if edit.is_none_or(|edit| edit.old_end != edit.new_end) {
+                self.sync_line_number_widths();
+            }
+            self.full_stats.set(Some([
+                live_stats,
+                pane_stats(
+                    &self.right_buffer,
+                    session.baseline(),
+                    baseline_index,
+                    right.markers.len(),
+                ),
+            ]));
         }
         let focus_changed = self.full_focus.replace(focused_hunk) != focused_hunk;
         if content_changed || focus_changed {
+            if !content_changed {
+                self.clear_full_focus();
+            }
             self.apply_focus(diff, focus);
             let targets = match focused_hunk {
                 Some(hunk) => [
@@ -839,9 +949,10 @@ impl DiffPage {
         if let Some(index) = toolbar.inspection {
             self.clear_carets();
             let hunk = &diff.hunks[index];
-            let live = hunk_text(session.live(), hunk.new_start, hunk.new_len);
-            let baseline = hunk_text(session.baseline(), hunk.old_start, hunk.old_len);
-            let [live_line_count, baseline_line_count] = self.full_line_counts.get();
+            let live_span = live_index.bytes(hunk.new_start..hunk.new_end());
+            let baseline_span = baseline_index.bytes(hunk.old_start..hunk.old_end());
+            let live = &session.live()[live_span.clone()];
+            let baseline = &session.baseline()[baseline_span.clone()];
             let live_trailing = self.left_trailing_blank.get()
                 && hunk.new_end() == live_line_count
                 && has_trailing_display_line(live);
@@ -906,7 +1017,7 @@ impl DiffPage {
                     &self.inspection_left_buffer,
                     live,
                     &change.new,
-                    line_byte_start(session.live(), hunk.new_start),
+                    live_span.start,
                     live_trailing,
                     change.kind,
                     &live_word_ranges,
@@ -915,7 +1026,7 @@ impl DiffPage {
                     &self.inspection_right_buffer,
                     baseline,
                     &change.old,
-                    line_byte_start(session.baseline(), hunk.old_start),
+                    baseline_span.start,
                     baseline_trailing,
                     change.kind,
                     &baseline_word_ranges,
@@ -989,15 +1100,21 @@ impl DiffPage {
         apply_exit_state(&self.exit_button, toolbar.exit, toolbar.accepted_hunks);
     }
 
+    fn clear_full_focus(&self) {
+        let previous = self.full_focus_lines.take();
+        for (buffer, lines) in [&self.left_buffer, &self.right_buffer]
+            .into_iter()
+            .zip(previous)
+        {
+            for tag in [TAG_FOCUS, TAG_WORD_FOCUS, TAG_MARKER_FOCUSED] {
+                set_line_tag(buffer, lines.start, lines.end, tag, false);
+            }
+        }
+    }
+
     /// Move the reddish-orange focus highlight (line and word level) to the
     /// focused hunk, leaving every other hunk in the yellowish base colors.
     fn apply_focus(&self, diff: &DiffResult, focus: Option<usize>) {
-        for buffer in [&self.left_buffer, &self.right_buffer] {
-            for tag in [TAG_FOCUS, TAG_WORD_FOCUS, TAG_MARKER_FOCUSED] {
-                buffer.remove_tag_by_name(tag, &buffer.start_iter(), &buffer.end_iter());
-            }
-        }
-
         let Some(hunk) = focus.and_then(|index| diff.hunks.get(index)) else {
             self.set_full_carets(None);
             self.left_line_numbers.set_strong(None);
@@ -1011,6 +1128,8 @@ impl DiffPage {
             && hunk.old_end() + 1 == self.right_buffer.line_count() as usize;
         let live_lines = hunk.new_start..hunk.new_end() + usize::from(live_trailing);
         let baseline_lines = hunk.old_start..hunk.old_end() + usize::from(baseline_trailing);
+        self.full_focus_lines
+            .replace([live_lines.clone(), baseline_lines.clone()]);
         self.left_line_numbers.set_strong(strong_line_range(
             &self.left_buffer,
             live_lines.start,
@@ -1048,27 +1167,27 @@ impl DiffPage {
             baseline_lines.clone(),
             TAG_WORD_FOCUS,
         );
-        tag_markers(
+        tag_full_markers(
             &self.left_buffer,
-            &self.left_markers.borrow(),
+            &self.left_annotations.borrow().markers,
             live_lines.clone(),
             TAG_WORD_FOCUS,
         );
-        tag_markers(
+        tag_full_markers(
             &self.right_buffer,
-            &self.right_markers.borrow(),
+            &self.right_annotations.borrow().markers,
             baseline_lines.clone(),
             TAG_WORD_FOCUS,
         );
-        tag_markers(
+        tag_full_markers(
             &self.left_buffer,
-            &self.left_markers.borrow(),
+            &self.left_annotations.borrow().markers,
             live_lines,
             TAG_MARKER_FOCUSED,
         );
-        tag_markers(
+        tag_full_markers(
             &self.right_buffer,
-            &self.right_markers.borrow(),
+            &self.right_annotations.borrow().markers,
             baseline_lines,
             TAG_MARKER_FOCUSED,
         );
@@ -1448,7 +1567,7 @@ fn marked_text(text: &str, ranges: &[Range<usize>], trailing: bool) -> (String, 
     let mut markers = Vec::new();
     let mut chars = 0i32;
     let mut next = 0;
-    for (index, line) in crate::core::diff::split_lines(text).into_iter().enumerate() {
+    for (index, line) in crate::core::textlines::iter_inclusive(text).enumerate() {
         while next < ranges.len() && ranges[next].end <= index {
             next += 1;
         }
@@ -1466,6 +1585,246 @@ fn marked_text(text: &str, ranges: &[Range<usize>], trailing: bool) -> (String, 
         markers.push(chars);
     }
     (out, markers)
+}
+
+/// Find markers only inside changed ranges; line offsets come from the diff.
+fn marker_lines(
+    text: &str,
+    index: &LineIndex,
+    ranges: &[Range<usize>],
+    trailing: bool,
+) -> Vec<usize> {
+    let mut markers = Vec::new();
+    for range in ranges {
+        markers.extend(range.clone().filter(|&line| {
+            crate::core::diff::line_content(&text[index.bytes(line..line + 1)]).is_empty()
+        }));
+    }
+    if trailing {
+        markers.push(index.len());
+    }
+    markers
+}
+
+fn pane_stats(
+    buffer: &sourceview5::Buffer,
+    text: &str,
+    index: &LineIndex,
+    markers: usize,
+) -> TextStats {
+    TextStats {
+        bytes: text.len(),
+        chars: buffer.char_count() as usize - markers,
+        lines: index.len() + usize::from(text.is_empty() || has_trailing_display_line(text)),
+        line_ending: index.line_ending(text),
+        // Review status bars don't show the editor's whitespace dot.
+        has_trailing_whitespace: false,
+        has_non_empty_blank_line: false,
+    }
+}
+
+fn with_trailing_range(mut ranges: Vec<Range<usize>>, trailing: bool) -> Vec<Range<usize>> {
+    if trailing {
+        ranges.last_mut().expect("trailing marker needs a hunk").end += 1;
+    }
+    ranges
+}
+
+fn delete_marker(buffer: &sourceview5::Buffer, line: usize) {
+    let mut start = buffer
+        .iter_at_line(line as i32)
+        .expect("marker line exists");
+    let mut end = start;
+    end.forward_char();
+    buffer.delete(&mut start, &mut end);
+}
+
+fn splice_baseline(
+    buffer: &sourceview5::Buffer,
+    text: &str,
+    index: &LineIndex,
+    edit: LineEdit,
+    old_trailing: bool,
+    annotations: &mut FullAnnotations,
+) {
+    // The synthetic EOF row is at the end boundary, not inside the splice.
+    if old_trailing
+        && annotations.markers.last() == Some(&edit.old_end)
+        && edit.old_end + 1 == buffer.line_count() as usize
+    {
+        delete_marker(buffer, edit.old_end);
+        annotations.markers.pop();
+        annotations.hunks.last_mut().unwrap().end -= 1;
+    }
+    let start = buffer
+        .iter_at_line(edit.start as i32)
+        .unwrap_or_else(|| buffer.end_iter());
+    let end = buffer
+        .iter_at_line(edit.old_end as i32)
+        .unwrap_or_else(|| buffer.end_iter());
+    let replacement = &text[index.bytes(edit.start..edit.new_end)];
+    let first_marker = annotations
+        .markers
+        .partition_point(|&line| line < edit.start);
+    if annotations
+        .markers
+        .get(first_marker)
+        .is_some_and(|&line| line < edit.old_end)
+    {
+        // Drop markers in the splice together, even for a large blank block.
+        replace_buffer_range(buffer, start, end, replacement);
+    } else {
+        // Compare only the local window, retaining marks even on unchanged
+        // parts of the neighboring rows included for line-ending context.
+        let previous = buffer.text(&start, &end, true);
+        if let Some((range, replacement)) = replacement_span(&previous, replacement) {
+            let offset = start.offset();
+            replace_buffer_range(
+                buffer,
+                buffer.iter_at_offset(offset + range.start),
+                buffer.iter_at_offset(offset + range.end),
+                replacement,
+            );
+        }
+    }
+    // Tags outside the splice move with GTK's text. Clear any inherited
+    // tags inside the inserted rows, then compare against their new positions.
+    for tag in [TAG_HUNK, TAG_WORD] {
+        set_line_tag(buffer, edit.start, edit.new_end, tag, false);
+    }
+    let project = |line: usize| {
+        if line < edit.start {
+            Some(line)
+        } else if line >= edit.old_end {
+            Some(line - edit.old_end + edit.new_end)
+        } else {
+            None
+        }
+    };
+    annotations.markers.retain_mut(|line| {
+        project(*line).is_some_and(|new| {
+            *line = new;
+            true
+        })
+    });
+    annotations.words.retain_mut(|span| {
+        project(span.line).is_some_and(|new| {
+            span.line = new;
+            true
+        })
+    });
+    let mut hunks = Vec::with_capacity(annotations.hunks.len());
+    for range in annotations.hunks.drain(..) {
+        if range.start < edit.start {
+            hunks.push(range.start..range.end.min(edit.start));
+        }
+        if range.end > edit.old_end {
+            let start = range.start.max(edit.old_end) - edit.old_end + edit.new_end;
+            hunks.push(start..range.end - edit.old_end + edit.new_end);
+        }
+    }
+    annotations.hunks = hunks;
+}
+
+/// Items present only in `from`. Both lists have strictly increasing keys.
+fn only_in<'a, T, K: Ord>(
+    from: &'a [T],
+    other: &'a [T],
+    key: impl Fn(&T) -> K + 'a,
+) -> impl Iterator<Item = &'a T> {
+    let mut other = other.iter().peekable();
+    from.iter().filter(move |item| {
+        let target = key(item);
+        while other.peek().is_some_and(|next| key(next) < target) {
+            other.next();
+        }
+        !other.peek().is_some_and(|next| key(next) == target)
+    })
+}
+
+fn sync_marker_lines(buffer: &sourceview5::Buffer, old: &[usize], new: &[usize]) {
+    for &line in only_in(old, new, |line| *line) {
+        delete_marker(buffer, line);
+    }
+    for &line in only_in(new, old, |line| *line) {
+        let mut start = buffer
+            .iter_at_line(line as i32)
+            .expect("marker line exists");
+        buffer.insert_with_tags_by_name(&mut start, "¶", &[TAG_MARKER, TAG_HUNK, TAG_WORD]);
+    }
+}
+
+impl FullAnnotations {
+    fn prepare_markers(
+        &mut self,
+        buffer: &sourceview5::Buffer,
+        text: &str,
+        index: &LineIndex,
+        markers: &[usize],
+        reset: bool,
+    ) {
+        const MAX_MARKER_EDITS: usize = 256;
+        if !reset
+            && only_in(&self.markers, markers, |line| *line)
+                .chain(only_in(markers, &self.markers, |line| *line))
+                .take(MAX_MARKER_EDITS + 1)
+                .count()
+                <= MAX_MARKER_EDITS
+        {
+            return;
+        }
+        if markers.is_empty() {
+            buffer.set_text(text);
+        } else {
+            let mut display =
+                String::with_capacity(text.len() + markers.len() * BLANK_MARKER.len_utf8());
+            let mut start = 0;
+            for &line in markers {
+                let end = index.byte(line);
+                display.push_str(&text[start..end]);
+                display.push(BLANK_MARKER);
+                start = end;
+            }
+            display.push_str(&text[start..]);
+            buffer.set_text(&display);
+        }
+        self.markers.clear();
+        self.markers.extend_from_slice(markers);
+        self.hunks.clear();
+        self.words.clear();
+        tag_full_markers(buffer, markers, 0..usize::MAX, TAG_MARKER);
+        tag_full_markers(buffer, markers, 0..usize::MAX, TAG_WORD);
+    }
+
+    fn update(
+        &mut self,
+        buffer: &sourceview5::Buffer,
+        markers: Vec<usize>,
+        hunks: Vec<Range<usize>>,
+        words: &[InlineSpan],
+    ) {
+        sync_marker_lines(buffer, &self.markers, &markers);
+        let range_key = |range: &Range<usize>| (range.start, range.end);
+        for range in only_in(&self.hunks, &hunks, range_key) {
+            set_line_tag(buffer, range.start, range.end, TAG_HUNK, false);
+        }
+        for range in only_in(&hunks, &self.hunks, range_key) {
+            tag_line_range(buffer, range.start, range.end, TAG_HUNK);
+        }
+        let span_key = |span: &InlineSpan| (span.line, span.start, span.end);
+        if let Some(tag) = buffer.tag_table().lookup(TAG_WORD) {
+            for span in only_in(&self.words, words, span_key) {
+                set_inline_tag(buffer, span, &tag, false);
+            }
+            for span in only_in(words, &self.words, span_key) {
+                set_inline_tag(buffer, span, &tag, true);
+            }
+        }
+        self.markers = markers;
+        self.hunks = hunks;
+        self.words.clear();
+        self.words.extend_from_slice(words);
+    }
 }
 
 /// Text-level part of the trailing display-line rule: this side ends with a
@@ -1548,7 +1907,7 @@ fn marker_tags(buffer: &sourceview5::Buffer) -> Vec<(i32, Vec<String>)> {
 fn display_offset(raw: &str, byte: usize, include_trailing: bool) -> i32 {
     let mut markers = 0;
     let mut start = 0;
-    for line in crate::core::diff::split_lines(raw) {
+    for line in crate::core::textlines::iter_inclusive(raw) {
         if start >= byte {
             break;
         }
@@ -1608,9 +1967,21 @@ fn set_text(buffer: &sourceview5::Buffer, text: &str) {
     // Retain the unchanged prefix/suffix, including their layout and marks.
     // Clearing the whole baseline makes GTK temporarily lose its viewport
     // anchor and repaint unrelated content before scroll placement settles.
-    let mut start = buffer.iter_at_offset(range.start);
-    let mut end = buffer.iter_at_offset(range.end);
-    if range.start != range.end {
+    replace_buffer_range(
+        buffer,
+        buffer.iter_at_offset(range.start),
+        buffer.iter_at_offset(range.end),
+        replacement,
+    );
+}
+
+fn replace_buffer_range(
+    buffer: &sourceview5::Buffer,
+    mut start: gtk::TextIter,
+    mut end: gtk::TextIter,
+    replacement: &str,
+) {
+    if start != end {
         buffer.delete(&mut start, &mut end);
     }
     if !replacement.is_empty() {
@@ -1631,25 +2002,36 @@ fn clear_tags(buffer: &sourceview5::Buffer) {
     }
 }
 
-/// The smallest contiguous replacement, using GTK character offsets and a
-/// UTF-8-safe slice of the new text. Prefix and suffix must not overlap.
+/// The smallest contiguous replacement that preserves UTF-8 and CRLF
+/// boundaries, using GTK character offsets. Prefix and suffix cannot overlap.
 fn replacement_span<'a>(old: &str, new: &'a str) -> Option<(Range<i32>, &'a str)> {
     if old == new {
         return None;
     }
-    let prefix: usize = old
+    let splits_crlf = |text: &str, byte: usize| {
+        byte > 0 && text.as_bytes().get(byte) == Some(&b'\n') && text.as_bytes()[byte - 1] == b'\r'
+    };
+    let mut prefix: usize = old
         .chars()
         .zip(new.chars())
         .take_while(|(a, b)| a == b)
         .map(|(c, _)| c.len_utf8())
         .sum();
-    let suffix: usize = old[prefix..]
+    // GTK treats CRLF as one break when inserted together, but not when
+    // the two bytes meet at the edge of a splice.
+    if splits_crlf(old, prefix) || splits_crlf(new, prefix) {
+        prefix -= 1;
+    }
+    let mut suffix: usize = old[prefix..]
         .chars()
         .rev()
         .zip(new[prefix..].chars().rev())
         .take_while(|(a, b)| a == b)
         .map(|(c, _)| c.len_utf8())
         .sum();
+    if splits_crlf(old, old.len() - suffix) || splits_crlf(new, new.len() - suffix) {
+        suffix -= 1;
+    }
     let start = old[..prefix].chars().count() as i32;
     let end = start + old[prefix..old.len() - suffix].chars().count() as i32;
     Some((start..end, &new[prefix..new.len() - suffix]))
@@ -1660,6 +2042,16 @@ fn tag_line_range(
     start_line: usize,
     end_line: usize,
     tag_name: &str,
+) {
+    set_line_tag(buffer, start_line, end_line, tag_name, true);
+}
+
+fn set_line_tag(
+    buffer: &sourceview5::Buffer,
+    start_line: usize,
+    end_line: usize,
+    tag_name: &str,
+    apply: bool,
 ) {
     if start_line >= end_line {
         return;
@@ -1677,7 +2069,11 @@ fn tag_line_range(
         }
     };
     if let Some(tag) = buffer.tag_table().lookup(tag_name) {
-        buffer.apply_tag(&tag, &start, &end);
+        if apply {
+            buffer.apply_tag(&tag, &start, &end);
+        } else {
+            buffer.remove_tag(&tag, &start, &end);
+        }
     }
 }
 
@@ -1691,16 +2087,52 @@ fn tag_inline(
     let Some(tag) = buffer.tag_table().lookup(tag_name) else {
         return;
     };
-    for span in spans.iter().filter(|span| lines.contains(&span.line)) {
-        let Some(start) = buffer.iter_at_line_offset(span.line as i32, span.start as i32) else {
-            continue;
-        };
-        let Some(end) = buffer.iter_at_line_offset(span.line as i32, span.end as i32) else {
-            continue;
-        };
-        if start.offset() < end.offset() {
-            buffer.apply_tag(&tag, &start, &end);
+    let start = spans.partition_point(|span| span.line < lines.start);
+    let end = spans.partition_point(|span| span.line < lines.end);
+    for span in &spans[start..end] {
+        set_inline_tag(buffer, span, &tag, true);
+    }
+}
+
+fn set_inline_tag(
+    buffer: &sourceview5::Buffer,
+    span: &InlineSpan,
+    tag: &gtk::TextTag,
+    apply: bool,
+) {
+    let Some(start) = buffer.iter_at_line_offset(span.line as i32, span.start as i32) else {
+        return;
+    };
+    let Some(end) = buffer.iter_at_line_offset(span.line as i32, span.end as i32) else {
+        return;
+    };
+    if start.offset() < end.offset() {
+        if apply {
+            buffer.apply_tag(tag, &start, &end);
+        } else {
+            buffer.remove_tag(tag, &start, &end);
         }
+    }
+}
+
+fn tag_full_markers(
+    buffer: &sourceview5::Buffer,
+    markers: &[usize],
+    lines: Range<usize>,
+    tag_name: &str,
+) {
+    let Some(tag) = buffer.tag_table().lookup(tag_name) else {
+        return;
+    };
+    let start = markers.partition_point(|&line| line < lines.start);
+    let end = markers.partition_point(|&line| line < lines.end);
+    for &line in &markers[start..end] {
+        let Some(start) = buffer.iter_at_line(line as i32) else {
+            continue;
+        };
+        let mut end = start;
+        end.forward_char();
+        buffer.apply_tag(&tag, &start, &end);
     }
 }
 
@@ -1719,18 +2151,6 @@ fn tag_markers(buffer: &sourceview5::Buffer, markers: &[i32], lines: Range<usize
         end.forward_char();
         buffer.apply_tag(&tag, &start, &end);
     }
-}
-
-/// Slice a hunk using the diff engine's GTK-compatible line coordinates.
-/// Terminators are preserved, including CRLF, lone CR, U+2029 and an
-/// unterminated final line.
-fn hunk_text(text: &str, start: usize, len: usize) -> &str {
-    crate::core::textlines::slice_lines(text, start, len)
-}
-
-/// Find a byte boundary without using GTK's paragraph coordinates.
-fn line_byte_start(text: &str, line: usize) -> usize {
-    crate::core::textlines::line_start_byte(text, line)
 }
 
 /// Character offset of the start of a display line. Past the last line, as
@@ -2130,8 +2550,8 @@ fn place_scroll(
 mod tests {
     use super::{
         LineNumberStyle, display_offset, display_selection, hunk_changes_baseline_eof,
-        hunk_changes_live_eof, hunk_text, line_number_markup, line_starts, marked_text,
-        replacement_span, selected_word_ranges, strip_markers, trailing_blank_change,
+        hunk_changes_live_eof, line_number_markup, line_starts, marked_text, replacement_span,
+        selected_word_ranges, strip_markers, trailing_blank_change,
     };
 
     #[test]
@@ -2158,16 +2578,6 @@ mod tests {
             line_number_markup(5, true, &unbold),
             r##"<span foreground="#eeeeee">5</span>"##
         );
-    }
-
-    #[test]
-    fn inspection_slice_keeps_exact_logical_lines() {
-        let text = "context\r\nα\r\n\n🙂final";
-        assert_eq!(hunk_text(text, 1, 2), "α\r\n\n");
-        assert_eq!(hunk_text(text, 3, 1), "🙂final");
-        assert_eq!(hunk_text(text, 4, 0), "");
-        assert_eq!(hunk_text("one\rtwo\nthree", 0, 1), "one\r");
-        assert_eq!(hunk_text("one\r\ntwo\nthree", 1, 1), "two\n");
     }
 
     #[test]
@@ -2310,6 +2720,20 @@ mod tests {
     }
 
     #[test]
+    fn replacement_keeps_crlf_together_at_either_boundary() {
+        assert_eq!(
+            replacement_span("top\ra\n", "top\r\n"),
+            Some((3..6, "\r\n"))
+        );
+        assert_eq!(
+            replacement_span("top\r\n", "top\ra\n"),
+            Some((3..5, "\ra\n"))
+        );
+        assert_eq!(replacement_span("x\nend", "x\r\nend"), Some((1..2, "\r\n")));
+        assert_eq!(replacement_span("x\r\nend", "x\nend"), Some((1..3, "\n")));
+    }
+
+    #[test]
     fn replacement_handles_insert_delete_and_overlapping_matches() {
         for (old, new, expected) in [
             ("", "abc", (0..0, "abc")),
@@ -2318,7 +2742,6 @@ mod tests {
             ("a🙂b", "ab", (1..2, "")),
             ("aaa", "aaaa", (3..3, "a")),
             ("aaaa", "aaa", (3..4, "")),
-            ("a\r\nb", "a\nb", (1..2, "")),
         ] {
             let (range, text) = replacement_span(old, new).unwrap();
             assert_eq!((range.clone(), text), expected);

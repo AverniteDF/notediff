@@ -128,6 +128,7 @@ fn gtk_window_smoke() {
         "theme = removed-theme\n"
     );
     theme::install_css();
+    crate::ui::diff_page::DiffPage::incremental_review_smoke();
     let app = adw::Application::builder()
         .application_id("io.github.AverniteDF.Test")
         .flags(gio::ApplicationFlags::NON_UNIQUE)

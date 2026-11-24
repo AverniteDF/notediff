@@ -134,6 +134,11 @@ is still valid; it may be less minimal, but every hunk range remains usable.
 **Accept All** copies the exact live text in one undoable step. The property
 test still exercises accepting individual hunks in arbitrary order.
 
+To measure repeated Accept/Undo on a 3.24 MB fixture with sparse and dense
+edits, run `cargo test --release --locked gtk_accept_benchmark -- --ignored
+--nocapture` in a graphical session. It reports medians for the model operation
+and synchronous GTK updates separately; it does not time compositor frames.
+
 ## Tests
 
 ```sh
@@ -151,7 +156,9 @@ baseline moves, links and copies, and the Diff
 Mode accept, undo and confirm flow. It exercises inline inspection keys, selection
 highlights, partial-line review, line endings, wrapped selection scrolling, pure
 insertions and deletions, and long-document scroll placement after repeated
-and rapid Accept/Undo operations. It also covers the external-change overwrite
+and rapid Accept/Undo operations. It compares incrementally updated panes
+against a fresh render, including marker tags, mixed endings and copied text.
+It also covers the external-change overwrite
 prompt on save, simultaneous multi-window Quit across dirty, accepted-review
 and clean windows, Esc and window-close review-discard confirmations, the Open
 File save prompt after the chooser (including Open New Window and no Cancel

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use similar::{ChangeTag, TextDiffConfig};
 
-use super::diff::{DIFF_TIMEOUT, DiffResult, Hunk, split_lines};
+use super::diff::{DIFF_TIMEOUT, DiffResult, LineIndex, replace_bytes};
 use super::textlines;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,26 +24,32 @@ pub struct InlineChange {
     pub kind: ChangeKind,
 }
 
+#[cfg(test)]
 pub fn changes(baseline: &str, live: &str, diff: &DiffResult) -> Vec<InlineChange> {
+    changes_indexed(
+        baseline,
+        live,
+        diff,
+        &LineIndex::new(baseline),
+        &LineIndex::new(live),
+    )
+}
+
+pub(crate) fn changes_indexed(
+    baseline: &str,
+    live: &str,
+    diff: &DiffResult,
+    old: &LineIndex,
+    new: &LineIndex,
+) -> Vec<InlineChange> {
     let deadline = Instant::now() + DIFF_TIMEOUT;
-    let old_lines = split_lines(baseline);
-    let new_lines = split_lines(live);
-    let offsets = |lines: &[&str]| {
-        let mut result = vec![0];
-        for line in lines {
-            result.push(result.last().unwrap() + line.len());
-        }
-        result
-    };
-    let old_offsets = offsets(&old_lines);
-    let new_offsets = offsets(&new_lines);
     let mut result = Vec::new();
     for (hunk, region) in diff.hunks.iter().enumerate() {
         if Instant::now() >= deadline {
             result.push(InlineChange {
                 hunk,
-                old: old_offsets[region.old_start]..old_offsets[region.old_end()],
-                new: new_offsets[region.new_start]..new_offsets[region.new_end()],
+                old: old.bytes(region.old_start..region.old_end()),
+                new: new.bytes(region.new_start..region.new_end()),
                 kind: ChangeKind::Block,
             });
             continue;
@@ -52,10 +58,12 @@ pub fn changes(baseline: &str, live: &str, diff: &DiffResult) -> Vec<InlineChang
             for offset in 0..region.old_len {
                 let old_line = region.old_start + offset;
                 let new_line = region.new_start + offset;
-                let old = body(old_lines[old_line]);
-                let new = body(new_lines[new_line]);
-                let mut old_pos = old_offsets[old_line];
-                let mut new_pos = new_offsets[new_line];
+                let old_range = old.bytes(old_line..old_line + 1);
+                let new_range = new.bytes(new_line..new_line + 1);
+                let old = body(&baseline[old_range.clone()]);
+                let new = body(&live[new_range.clone()]);
+                let mut old_pos = old_range.start;
+                let mut new_pos = new_range.start;
                 let mut current: Option<InlineChange> = None;
                 let mut bridged = false;
                 let mut config = TextDiffConfig::new();
@@ -106,15 +114,13 @@ pub fn changes(baseline: &str, live: &str, diff: &DiffResult) -> Vec<InlineChang
                 if let Some(change) = current {
                     push_text_change(&mut result, change, baseline, live);
                 }
-                let old_end = old_offsets[old_line] + old.len();
-                let new_end = new_offsets[new_line] + new.len();
-                if baseline[old_end..old_offsets[old_line + 1]]
-                    != live[new_end..new_offsets[new_line + 1]]
-                {
+                let old_end = old_range.start + old.len();
+                let new_end = new_range.start + new.len();
+                if baseline[old_end..old_range.end] != live[new_end..new_range.end] {
                     result.push(InlineChange {
                         hunk,
-                        old: old_end..old_offsets[old_line + 1],
-                        new: new_end..new_offsets[new_line + 1],
+                        old: old_end..old_range.end,
+                        new: new_end..new_range.end,
                         kind: ChangeKind::Ending,
                     });
                 }
@@ -124,8 +130,8 @@ pub fn changes(baseline: &str, live: &str, diff: &DiffResult) -> Vec<InlineChang
             // replacements also stay atomic: they have no reliable pairing.
             result.push(InlineChange {
                 hunk,
-                old: old_offsets[region.old_start]..old_offsets[region.old_end()],
-                new: new_offsets[region.new_start]..new_offsets[region.new_end()],
+                old: old.bytes(region.old_start..region.old_end()),
+                new: new.bytes(region.new_start..region.new_end()),
                 kind: ChangeKind::Block,
             });
         }
@@ -172,20 +178,6 @@ fn trim_common_whitespace(baseline: &str, live: &str, change: &mut InlineChange)
     }
 }
 
-/// Byte range of a hunk's lines in the complete live text. Live text never
-/// changes during a review, so this range remains a stable identity for the
-/// inspected region even when a re-diff splits or merges hunks.
-pub(crate) fn hunk_live_span(live: &str, hunk: &Hunk) -> Range<usize> {
-    let lines = split_lines(live);
-    let start: usize = lines[..hunk.new_start].iter().map(|line| line.len()).sum();
-    let end: usize = start
-        + lines[hunk.new_start..hunk.new_end()]
-            .iter()
-            .map(|line| line.len())
-            .sum::<usize>();
-    start..end
-}
-
 fn body(line: &str) -> &str {
     textlines::content(line)
 }
@@ -197,9 +189,7 @@ pub fn apply(baseline: &str, live: &str, change: &InlineChange) -> Result<String
     if baseline.get(change.old.clone()).is_none() {
         return Err("Invalid baseline inline range".into());
     }
-    let mut result = baseline.to_string();
-    result.replace_range(change.old.clone(), replacement);
-    Ok(result)
+    Ok(replace_bytes(baseline, change.old.clone(), replacement))
 }
 
 #[cfg(test)]

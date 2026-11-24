@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use super::diff::{self, DiffResult};
+use super::diff::{self, DiffResult, LineIndex};
 use super::inline::{self, InlineChange};
 use super::undo::UndoStack;
 
@@ -21,6 +21,9 @@ const MAX_UNDO_BYTES: usize = 64 * 1024 * 1024;
 pub struct DiffSession {
     baseline: String,
     live: String,
+    baseline_lines: LineIndex,
+    live_lines: LineIndex,
+    baseline_edit: Option<LineEdit>,
     diff: DiffResult,
     focus: Option<usize>,
     inspecting: bool,
@@ -40,6 +43,26 @@ struct SessionSnapshot {
     focus: Option<usize>,
     accepted_hunks: usize,
     inline_focus: Option<usize>,
+    edit: LineEdit,
+}
+
+/// Line-aligned splice from the previous revision. The unchanged prefix and
+/// suffix keep their text and layout; the suffix may move by a line delta.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LineEdit {
+    pub start: usize,
+    pub old_end: usize,
+    pub new_end: usize,
+}
+
+impl LineEdit {
+    fn reversed(self) -> Self {
+        Self {
+            start: self.start,
+            old_end: self.new_end,
+            new_end: self.old_end,
+        }
+    }
 }
 
 fn new_undo() -> UndoStack<SessionSnapshot> {
@@ -51,11 +74,16 @@ fn new_undo() -> UndoStack<SessionSnapshot> {
 impl DiffSession {
     /// Start a session. No hunk is focused yet.
     pub fn new(baseline: String, live: String) -> Self {
-        let diff = diff::diff_texts(&baseline, &live);
+        let baseline_lines = LineIndex::new(&baseline);
+        let live_lines = LineIndex::new(&live);
+        let diff = diff::diff_indexed(&baseline, &live, &baseline_lines, &live_lines);
         Self {
             original_baseline: baseline.clone(),
             baseline,
             live,
+            baseline_lines,
+            live_lines,
+            baseline_edit: None,
             diff,
             focus: None,
             inspecting: false,
@@ -75,6 +103,14 @@ impl DiffSession {
 
     pub fn live(&self) -> &str {
         &self.live
+    }
+
+    pub(crate) fn line_indexes(&self) -> [&LineIndex; 2] {
+        [&self.live_lines, &self.baseline_lines]
+    }
+
+    pub(crate) fn baseline_edit(&self) -> Option<LineEdit> {
+        self.baseline_edit
     }
 
     pub fn diff(&self) -> &DiffResult {
@@ -126,7 +162,13 @@ impl DiffSession {
 
     fn refresh_inline(&mut self) {
         if self.inline_revision != Some(self.content_revision) {
-            self.inline_changes = inline::changes(&self.baseline, &self.live, &self.diff);
+            self.inline_changes = inline::changes_indexed(
+                &self.baseline,
+                &self.live,
+                &self.diff,
+                &self.baseline_lines,
+                &self.live_lines,
+            );
             self.inline_revision = Some(self.content_revision);
         }
     }
@@ -202,8 +244,9 @@ impl DiffSession {
         let Some(&hunk) = self.diff.hunks.get(index) else {
             return Ok(false);
         };
-        let after = diff::apply_hunk(&self.baseline, &self.live, &hunk)?;
-        self.replace_baseline(after, Some(index));
+        let (old, new) = diff::hunk_bytes(&hunk, &self.baseline_lines, &self.live_lines)?;
+        let after = diff::replace_bytes(&self.baseline, old.clone(), &self.live[new]);
+        self.replace_baseline(after, old, Some(index));
         self.accepted_hunks += 1;
         self.focus = if self.diff.hunks.is_empty() {
             self.inspecting = false;
@@ -222,9 +265,9 @@ impl DiffSession {
             .diff
             .hunks
             .get(change.hunk)
-            .map(|hunk| inline::hunk_live_span(&self.live, hunk));
+            .map(|hunk| self.live_lines.bytes(hunk.new_start..hunk.new_end()));
         let after = inline::apply(&self.baseline, &self.live, &change)?;
-        self.replace_baseline(after, self.focus);
+        self.replace_baseline(after, change.old.clone(), self.focus);
         self.accepted_hunks += 1;
         if self.diff.is_empty() {
             self.inspecting = false;
@@ -273,7 +316,7 @@ impl DiffSession {
         let after = self.live.clone();
         let focus = self.focus;
         let pending = self.diff.hunks.len();
-        self.replace_baseline(after, focus);
+        self.replace_baseline(after, 0..self.baseline.len(), focus);
         self.accepted_hunks += pending;
         self.focus = None;
         self.inspecting = false;
@@ -290,7 +333,13 @@ impl DiffSession {
             return false;
         };
         let restored_focus = previous.focus;
+        let edit = previous.edit.reversed();
+        let new_end = self
+            .baseline_lines
+            .splice(edit.start..edit.old_end, &previous.baseline);
+        debug_assert_eq!(new_end, edit.new_end);
         self.baseline = previous.baseline;
+        self.baseline_edit = Some(edit);
         self.accepted_hunks = previous.accepted_hunks;
         self.rediff();
         let count = self.diff.hunks.len();
@@ -314,19 +363,36 @@ impl DiffSession {
 
     /// Swap in a new baseline, remembering the old one (and the focus to
     /// restore) for undo, then re-diff.
-    fn replace_baseline(&mut self, after: String, focus: Option<usize>) {
+    fn replace_baseline(&mut self, after: String, removed: Range<usize>, focus: Option<usize>) {
+        // Include a line on either side of the byte edit: joining a lone CR
+        // to a neighboring LF (or splitting CRLF) can change the line model.
+        let start = self.baseline_lines.line_at(removed.start).saturating_sub(1);
+        let old_end = (self.baseline_lines.line_at(removed.end) + 2).min(self.baseline_lines.len());
+        let new_end = self.baseline_lines.splice(start..old_end, &after);
+        let edit = LineEdit {
+            start,
+            old_end,
+            new_end,
+        };
+        self.baseline_edit = Some(edit);
         let before = std::mem::replace(&mut self.baseline, after);
         self.undo.push(SessionSnapshot {
             baseline: before,
             focus,
             accepted_hunks: self.accepted_hunks,
             inline_focus: self.inline_focus,
+            edit,
         });
         self.rediff();
     }
 
     fn rediff(&mut self) {
-        self.diff = diff::diff_texts(&self.baseline, &self.live);
+        self.diff = diff::diff_indexed(
+            &self.baseline,
+            &self.live,
+            &self.baseline_lines,
+            &self.live_lines,
+        );
         self.content_revision = self.content_revision.wrapping_add(1);
     }
 }
@@ -561,7 +627,7 @@ mod tests {
                     for _ in 0..next(6) {
                         text.push_str(["a ", "b ", "é ", "🙂", " ", ","][next(6)]);
                     }
-                    text.push_str(["\n", "\r\n"][next(2)]);
+                    text.push_str(["\n", "\r\n", "\r", "\u{2029}"][next(4)]);
                 }
                 if next(2) == 0 {
                     text.pop();
@@ -586,11 +652,21 @@ mod tests {
                 let selected = session.selected_inline().cloned();
                 let accepted = session.accepted_hunks();
                 assert_eq!(session.accept_focused(), Ok(true));
+                assert_eq!(
+                    session.baseline_lines,
+                    LineIndex::new(session.baseline()),
+                    "case {case}, accept"
+                );
                 assert_ne!(session.baseline(), before);
                 assert_eq!(session.accepted_hunks(), accepted + 1);
                 if session.is_inspecting() && next(4) == 0 {
                     assert!(session.undo());
                     assert_eq!(session.baseline(), before);
+                    assert_eq!(
+                        session.baseline_lines,
+                        LineIndex::new(session.baseline()),
+                        "case {case}, undo"
+                    );
                     assert_eq!(session.selected_inline(), selected.as_ref());
                     assert_eq!(session.accepted_hunks(), accepted);
                     session.accept_focused().unwrap();

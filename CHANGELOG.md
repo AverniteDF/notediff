@@ -15,6 +15,8 @@ versioning.
 
 ### Fixed
 
+- Accepting and undoing hunks in **Review Changes** is faster on large files:
+  the panes reuse line positions and update only the changed text and highlights.
 - Disabled mousewheel value changes on spin buttons and sliders inside
   scrollable dialogs (**Appearance → Font size** and **Run Script** `int` /
   `slider` fields) so scrolling over them scrolls the dialog instead of
