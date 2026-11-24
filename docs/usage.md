@@ -814,8 +814,8 @@ confirmation before every run even when remembered or loaded from a preset.
 
 The repository includes three example scripts under `examples/scripts/`:
 
-- `prompt-packer.py` — packs selected files and project folders (with
-  optional exclude globs and size limits) into a single Markdown prompt.
+- `prompt-packer.py` — packs selected files and project folders into a single
+  Markdown prompt, with optional prompt text, exclude globs and size limits.
 - `folder-search.py` — recursively searches UTF-8 text files in a folder for a
   literal or regex query and outputs a grouped or tabular Markdown report.
 - `file-stats.py` — summarizes line, word, character and byte counts plus the

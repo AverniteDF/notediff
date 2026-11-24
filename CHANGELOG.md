@@ -17,13 +17,17 @@ versioning.
   script title lets you save, overwrite, load, and delete named per-script
   presets or **Reset to Defaults**. **No Sandbox** still requires confirmation
   before every run.
+- The bundled `prompt-packer.py` example gains an optional **Prompt Text**
+  field (and `--prompt`), so the packed Markdown opens with your instructions
+  instead of `(Insert your prompt here)`.
 
 ### Changed
 
 - The About dialog now reads "A plain-text editor with document baseline
   comparison. Review changes without needing a repository."
 - Moved the **Run** button in **Run Script** into the bottom footer bar,
-  right-aligned alongside the sandbox controls.
+  right-aligned alongside the sandbox controls; the footer no longer shows a
+  separate **Safety Setting:** label.
 - `install.sh` now also installs missing example themes into
   `$XDG_DATA_HOME/notediff/themes/`, installs `docs/scripts.md`, and seeds a
   **Create a notediff Script** example preset for `prompt-packer.py` on a fresh
