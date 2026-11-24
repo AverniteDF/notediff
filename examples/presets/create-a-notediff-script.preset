@@ -1,5 +1,5 @@
 script = prompt-packer.py
-name = Create a notediff Script
+name = Create a notediff Script!
 item.paths = @DOCS_DIR@/scripts.md
 body_field = prompt
 ---

@@ -9,7 +9,7 @@ versioning.
 ### Added
 
 - `install.sh` now bundles example presets from `examples/presets/` (including
-  **Create a notediff Script** and **Greenfield Project Development** for
+  **Create a notediff Script!** and **Greenfield Project Development** for
   `prompt-packer.py`) and seeds any missing bundled presets into `script-state`
   without overwriting existing presets of the same name.
 
