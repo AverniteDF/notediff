@@ -731,7 +731,6 @@ impl DialogState {
         if script.metadata.is_ok() {
             let presets_btn = gtk::MenuButton::builder().label("Presets").build();
             presets_btn.set_valign(gtk::Align::Center);
-            presets_btn.set_tooltip_text(Some("Save, load, or reset parameter presets"));
             let popover = gtk::Popover::new();
             let popover_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
             popover_box.set_margin_top(8);

@@ -1,0 +1,6 @@
+script = prompt-packer.py
+name = Create a notediff Script
+item.paths = @DOCS_DIR@/scripts.md
+body_field = prompt
+---
+(Enter description of a notediff script you'd like an LLM to create)
