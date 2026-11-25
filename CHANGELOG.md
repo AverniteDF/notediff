@@ -21,6 +21,9 @@ versioning.
 
 ### Fixed
 
+- In **Review Changes** inspection mode, a blank line replacing text on the
+  other side now highlights its pilcrow (`¶`) with the selected colour instead
+  of showing both a 3 px overlay caret and an unselected pilcrow.
 - Line-level diffing in **Review Changes** now uses `similar`'s Patience
   algorithm, reducing hunk fragmentation and keeping alignments stable across
   moved blocks.

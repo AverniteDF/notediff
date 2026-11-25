@@ -184,6 +184,20 @@ impl DiffPage {
                 assert_eq!(session.baseline(), live);
             }
         }
+
+        // A blank line replacing text in inspection highlights its pilcrow as
+        // selected instead of drawing an overlay caret on top of a weak-red pilcrow.
+        let mut session = DiffSession::new("a\nb\n".into(), "\nb\n".into());
+        page.begin_review();
+        session.focus_relative(1);
+        assert!(session.toggle_inspection());
+        page.render(&session);
+        assert_eq!(page.inspection_left_caret.offset.get(), None);
+        assert!(
+            marker_tags(&page.inspection_left_buffer)
+                .iter()
+                .any(|(offset, tags)| *offset == 0 && tags.iter().any(|t| t == TAG_INLINE_SELECTED))
+        );
     }
 
     #[cfg(test)]
@@ -2412,8 +2426,9 @@ fn selected_word_ranges(spans: &[Range<i32>], selection: Range<i32>) -> Vec<Rang
 /// Highlight an exact byte range after translating it to GTK character
 /// offsets. Text changes use the same word-level spans as the unselected
 /// highlight so selecting a phrase does not also select its boundary
-/// whitespace. A zero-width side returns its exact boundary for an overlay
-/// caret, leaving the neighbouring character untouched.
+/// whitespace. A zero-width side highlights its blank-line marker when one
+/// occupies that boundary; otherwise it returns its exact boundary for an
+/// overlay caret, leaving the neighbouring character untouched.
 fn select_excerpt(
     buffer: &sourceview5::Buffer,
     text: &str,
@@ -2447,6 +2462,17 @@ fn select_excerpt(
             }
             (selected[0].start, None)
         }
+    } else if buffer
+        .tag_table()
+        .lookup(TAG_MARKER)
+        .is_some_and(|tag| buffer.iter_at_offset(start).has_tag(&tag))
+    {
+        buffer.apply_tag_by_name(
+            TAG_INLINE_SELECTED,
+            &buffer.iter_at_offset(start),
+            &buffer.iter_at_offset(start + 1),
+        );
+        (start, None)
     } else {
         (start, Some(start))
     }
