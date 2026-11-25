@@ -6,6 +6,8 @@ versioning.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-24
+
 ### Added
 
 - `install.sh` now bundles example presets from `examples/presets/` (including
@@ -347,7 +349,8 @@ The first public release.
 - An installer and uninstaller, desktop entry, application icon and GitHub
   Actions CI.
 
-[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/AverniteDF/notediff/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/AverniteDF/notediff/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/AverniteDF/notediff/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AverniteDF/notediff/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/AverniteDF/notediff/compare/v1.2.0...v1.3.0
