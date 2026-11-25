@@ -451,7 +451,8 @@ without an empty-side suffix. The pane statistics describe the excerpts.
 
 Inspection reviews **individual changes within paired lines**, rather than
 accepting the entire line. Pure inserted/deleted blocks remain atomic.
-Changes separated only by whitespace are reviewed as one phrase-level change;
+Changes separated only by whitespace (including matching line breaks and
+indentation within a hunk) are reviewed as one phrase-level change;
 an unchanged word or punctuation still separates them.
 **Up** and **Down** (or the arrow buttons) select the
 previous/next change, continuing into adjacent pending hunks when necessary.
@@ -473,8 +474,9 @@ deleted block is one atomic change: its
 entire non-empty side uses the stronger focused-red background, and Right
 accepts the whole block in one undo
 step. Up/Down moves to another change, not between lines of that block. Unequal
-multiline replacements remain atomic: notediff does not guess which lines
-should be paired.
+multiline replacements — and unrelated equal-length multiline blocks that share
+no meaningful unchanged text — remain atomic: notediff does not guess which
+lines should be paired.
 Use full Diff Mode to accept a whole hunk at once.
 
 After acceptance, inspection follows the next pending change by live-text
@@ -499,8 +501,10 @@ Full diff and inspection use separate, persistent pane pairs. The full-document
 buffers, layout and viewport stay intact during inspection, so returning to
 the same hunk requires no text replacement or scroll restoration. Accept and
 Undo update changed text and highlights in the retained full diff instead of
-rebuilding both panes for each small edit. Navigation positions the panes at
-the newly selected hunk before switching back. There is no fade or opacity mask.
+rebuilding both panes for each small edit, and whole-hunk Accept keeps unrelated
+hunks stable instead of re-aligning distant repeated lines. Navigation positions
+the panes at the newly selected hunk before switching back. There is no fade or
+opacity mask.
 
 The right-aligned **Confirm** retains its save behavior. A partial Confirm
 preserves inspection and the selected change, then becomes **Back**. After

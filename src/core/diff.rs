@@ -8,14 +8,14 @@
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use similar::{ChangeTag, DiffOp, TextDiffConfig};
+use similar::{Algorithm, ChangeTag, DiffOp, TextDiffConfig};
 
 use super::textlines;
 use super::textstats::LineEnding;
 
 /// Byte boundaries of GTK logical lines, including the end of the text.
 /// Unlike borrowed line slices, this index can be retained by a review session.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LineIndex(Vec<usize>);
 
 impl LineIndex {
@@ -43,6 +43,10 @@ impl LineIndex {
 
     pub(crate) fn bytes(&self, lines: Range<usize>) -> Range<usize> {
         self.byte(lines.start)..self.byte(lines.end)
+    }
+
+    pub(crate) fn line<'a>(&self, text: &'a str, line: usize) -> &'a str {
+        &text[self.byte(line)..self.byte(line + 1)]
     }
 
     /// Classify line endings without scanning line bodies.
@@ -133,6 +137,7 @@ pub struct InlineSpan {
 }
 
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct DiffResult {
     pub hunks: Vec<Hunk>,
     pub baseline_inline: Vec<InlineSpan>,
@@ -142,6 +147,12 @@ pub struct DiffResult {
 impl DiffResult {
     pub fn is_empty(&self) -> bool {
         self.hunks.is_empty()
+    }
+
+    pub(crate) fn byte_size(&self) -> usize {
+        self.hunks.capacity() * size_of::<Hunk>()
+            + (self.baseline_inline.capacity() + self.live_inline.capacity())
+                * size_of::<InlineSpan>()
     }
 }
 
@@ -185,6 +196,211 @@ pub(crate) fn diff_indexed(
     diff_lines(&old.slices(baseline), &new.slices(live), DIFF_TIMEOUT)
 }
 
+/// Update `diff` after accepting whole hunk `index`, when the splice kept all
+/// line boundaries outside the hunk intact. Keeps unrelated hunks stable,
+/// shifts later baseline line numbers, and runs local blank-line coalescing
+/// on the newly adjacent neighbors if needed.
+pub(crate) fn update_after_hunk_accept(
+    diff: &mut DiffResult,
+    index: usize,
+    baseline: &str,
+    live: &str,
+    old: &LineIndex,
+    new: &LineIndex,
+) {
+    let hunk = diff.hunks.remove(index);
+    let delta = hunk.new_len as isize - hunk.old_len as isize;
+    if delta != 0 {
+        for later in &mut diff.hunks[index..] {
+            later.old_start = later.old_start.checked_add_signed(delta).unwrap();
+        }
+    }
+
+    let b_start = diff
+        .baseline_inline
+        .partition_point(|span| span.line < hunk.old_start);
+    let b_end = diff
+        .baseline_inline
+        .partition_point(|span| span.line < hunk.old_end());
+    diff.baseline_inline.drain(b_start..b_end);
+    if delta != 0 {
+        for span in &mut diff.baseline_inline[b_start..] {
+            span.line = span.line.checked_add_signed(delta).unwrap();
+        }
+    }
+
+    let l_start = diff
+        .live_inline
+        .partition_point(|span| span.line < hunk.new_start);
+    let l_end = diff
+        .live_inline
+        .partition_point(|span| span.line < hunk.new_end());
+    diff.live_inline.drain(l_start..l_end);
+
+    coalesce_neighbors_at(diff, index, baseline, live, old, new);
+}
+
+fn pure_deletion(hunk: &Hunk) -> bool {
+    hunk.old_len > 0 && hunk.new_len == 0
+}
+
+fn pure_insertion(hunk: &Hunk) -> bool {
+    hunk.old_len == 0 && hunk.new_len > 0
+}
+
+fn pure_hunk(hunk: &Hunk) -> bool {
+    pure_deletion(hunk) || pure_insertion(hunk)
+}
+
+fn blank_gap_indexed(
+    previous: &Hunk,
+    next: &Hunk,
+    baseline: &str,
+    live: &str,
+    old: &LineIndex,
+    new: &LineIndex,
+) -> bool {
+    let old_gap = previous.old_end()..next.old_start;
+    let new_gap = previous.new_end()..next.new_start;
+    !old_gap.is_empty()
+        && old_gap.len() == new_gap.len()
+        && old_gap.zip(new_gap).all(|(old_line, new_line)| {
+            let old_text = old.line(baseline, old_line);
+            let new_text = new.line(live, new_line);
+            old_text == new_text && line_content(old_text).is_empty()
+        })
+}
+
+/// Accepting a hunk that turns into blank lines (or disappears) can leave pure
+/// deletion/insertion neighbors separated only by unchanged blank lines.
+/// Apply the same coalescing rule locally to that run and refresh its spans.
+fn coalesce_neighbors_at(
+    diff: &mut DiffResult,
+    index: usize,
+    baseline: &str,
+    live: &str,
+    old: &LineIndex,
+    new: &LineIndex,
+) {
+    if index == 0 || index >= diff.hunks.len() {
+        return;
+    }
+    if !pure_hunk(&diff.hunks[index - 1])
+        || !pure_hunk(&diff.hunks[index])
+        || !blank_gap_indexed(
+            &diff.hunks[index - 1],
+            &diff.hunks[index],
+            baseline,
+            live,
+            old,
+            new,
+        )
+    {
+        return;
+    }
+
+    let mut run_start = index - 1;
+    while run_start > 0
+        && pure_hunk(&diff.hunks[run_start - 1])
+        && blank_gap_indexed(
+            &diff.hunks[run_start - 1],
+            &diff.hunks[run_start],
+            baseline,
+            live,
+            old,
+            new,
+        )
+    {
+        run_start -= 1;
+    }
+
+    let mut run_end = index + 1;
+    while run_end < diff.hunks.len()
+        && pure_hunk(&diff.hunks[run_end])
+        && blank_gap_indexed(
+            &diff.hunks[run_end - 1],
+            &diff.hunks[run_end],
+            baseline,
+            live,
+            old,
+            new,
+        )
+    {
+        run_end += 1;
+    }
+
+    let run = &diff.hunks[run_start..run_end];
+    let saw_deletion = run.iter().any(pure_deletion);
+    let saw_insertion = run.iter().any(pure_insertion);
+    if !(saw_deletion && saw_insertion) {
+        return;
+    }
+
+    let first = run[0];
+    let last = run[run.len() - 1];
+    let changed_content = (first.old_start..last.old_end())
+        .any(|line| !line_content(old.line(baseline, line)).is_empty())
+        && (first.new_start..last.new_end())
+            .any(|line| !line_content(new.line(live, line)).is_empty());
+    if !changed_content {
+        return;
+    }
+
+    let merged = Hunk {
+        old_start: first.old_start,
+        old_len: last.old_end() - first.old_start,
+        new_start: first.new_start,
+        new_len: last.new_end() - first.new_start,
+    };
+    diff.hunks.splice(run_start..run_end, [merged]);
+
+    let old_slice: Vec<&str> = (merged.old_start..merged.old_end())
+        .map(|line| old.line(baseline, line))
+        .collect();
+    let new_slice: Vec<&str> = (merged.new_start..merged.new_end())
+        .map(|line| new.line(live, line))
+        .collect();
+    let local = Hunk {
+        old_start: 0,
+        old_len: merged.old_len,
+        new_start: 0,
+        new_len: merged.new_len,
+    };
+    let mut new_baseline_inline = Vec::new();
+    let mut new_live_inline = Vec::new();
+    compute_inline_for_hunk(
+        &old_slice,
+        &new_slice,
+        &local,
+        Instant::now() + DIFF_TIMEOUT,
+        &mut new_baseline_inline,
+        &mut new_live_inline,
+    );
+    for span in &mut new_baseline_inline {
+        span.line += merged.old_start;
+    }
+    for span in &mut new_live_inline {
+        span.line += merged.new_start;
+    }
+
+    let b_start = diff
+        .baseline_inline
+        .partition_point(|span| span.line < merged.old_start);
+    let b_end = diff
+        .baseline_inline
+        .partition_point(|span| span.line < merged.old_end());
+    diff.baseline_inline
+        .splice(b_start..b_end, new_baseline_inline);
+
+    let l_start = diff
+        .live_inline
+        .partition_point(|span| span.line < merged.new_start);
+    let l_end = diff
+        .live_inline
+        .partition_point(|span| span.line < merged.new_end());
+    diff.live_inline.splice(l_start..l_end, new_live_inline);
+}
+
 fn diff_lines(old_lines: &[&str], new_lines: &[&str], timeout: Duration) -> DiffResult {
     let deadline = Instant::now() + timeout;
     let hunks = hunks_for(old_lines, new_lines, deadline);
@@ -211,6 +427,7 @@ fn diff_lines(old_lines: &[&str], new_lines: &[&str], timeout: Duration) -> Diff
 
 fn hunks_for(old_lines: &[&str], new_lines: &[&str], deadline: Instant) -> Vec<Hunk> {
     let mut config = TextDiffConfig::new();
+    config.algorithm(Algorithm::Patience);
     config.deadline(deadline);
     let diff = config.diff_slices(old_lines, new_lines);
 
@@ -258,15 +475,6 @@ fn coalesce_blank_separated_replacements(
     old_lines: &[&str],
     new_lines: &[&str],
 ) -> Vec<Hunk> {
-    fn pure_deletion(hunk: &Hunk) -> bool {
-        hunk.old_len > 0 && hunk.new_len == 0
-    }
-    fn pure_insertion(hunk: &Hunk) -> bool {
-        hunk.old_len == 0 && hunk.new_len > 0
-    }
-    fn pure(hunk: &Hunk) -> bool {
-        pure_deletion(hunk) || pure_insertion(hunk)
-    }
     fn blank_gap(previous: &Hunk, next: &Hunk, old: &[&str], new: &[&str]) -> bool {
         let old_gap = &old[previous.old_end()..next.old_start];
         let new_gap = &new[previous.new_end()..next.new_start];
@@ -282,7 +490,7 @@ fn coalesce_blank_separated_replacements(
     let mut index = 0;
     while index < hunks.len() {
         let first = hunks[index];
-        if !pure(&first) {
+        if !pure_hunk(&first) {
             merged.push(first);
             index += 1;
             continue;
@@ -292,7 +500,7 @@ fn coalesce_blank_separated_replacements(
         let mut saw_insertion = pure_insertion(&first);
         while end < hunks.len() {
             let next = hunks[end];
-            if !pure(&next) || !blank_gap(&hunks[end - 1], &next, old_lines, new_lines) {
+            if !pure_hunk(&next) || !blank_gap(&hunks[end - 1], &next, old_lines, new_lines) {
                 break;
             }
             saw_deletion |= pure_deletion(&next);
@@ -333,6 +541,21 @@ fn extend(hunk: &mut Hunk, old_index: usize, old_len: usize, new_index: usize, n
     hunk.new_len = new_end - hunk.new_start;
 }
 
+/// Whether a multi-line equal-length replacement shares enough unchanged
+/// content to pair lines positionally rather than treating the hunk as one
+/// whole-block replacement. Pure punctuation coincidences (such as stray `{` or
+/// `,` between unrelated code blocks) do not qualify.
+pub(crate) fn is_related_multiline_hunk(
+    total_non_ws: usize,
+    equal_non_ws: usize,
+    equal_alnum: usize,
+) -> bool {
+    if total_non_ws == 0 || equal_non_ws * 2 == total_non_ws {
+        return true;
+    }
+    equal_alnum > 0 && equal_non_ws.saturating_mul(20) >= total_non_ws
+}
+
 fn compute_inline_for_hunk(
     old_lines: &[&str],
     new_lines: &[&str],
@@ -341,20 +564,25 @@ fn compute_inline_for_hunk(
     baseline_out: &mut Vec<InlineSpan>,
     live_out: &mut Vec<InlineSpan>,
 ) {
-    // Pair lines only when the shape is the same. For unequal replacements it
-    // is not clear which old line corresponds to which new line, so highlight
-    // whole lines instead of inventing a misleading word alignment. Once the
-    // time budget is spent, whole-line spans are also the safe fallback.
+    // Pair lines only when the shape is the same and, for multi-line hunks,
+    // the paired lines actually share meaningful unchanged content. Otherwise
+    // highlight whole lines instead of inventing a misleading word alignment.
+    // Once the time budget is spent, whole-line spans are also the safe fallback.
     if Instant::now() >= deadline {
         whole_line_spans(old_lines, hunk.old_start..hunk.old_end(), baseline_out);
         whole_line_spans(new_lines, hunk.new_start..hunk.new_end(), live_out);
         return;
     }
     if hunk.old_len == hunk.new_len && hunk.old_len > 0 {
+        let baseline_mark = baseline_out.len();
+        let live_mark = live_out.len();
+        let mut total_non_ws = 0usize;
+        let mut equal_non_ws = 0usize;
+        let mut equal_alnum = 0usize;
         for offset in 0..hunk.old_len {
             let old_index = hunk.old_start + offset;
             let new_index = hunk.new_start + offset;
-            inline_for_line_pair(
+            let stats = inline_for_line_pair(
                 line_content(old_lines[old_index]),
                 line_content(new_lines[new_index]),
                 old_index,
@@ -363,6 +591,15 @@ fn compute_inline_for_hunk(
                 baseline_out,
                 live_out,
             );
+            total_non_ws += stats.0;
+            equal_non_ws += stats.1;
+            equal_alnum += stats.2;
+        }
+        if hunk.old_len > 1 && !is_related_multiline_hunk(total_non_ws, equal_non_ws, equal_alnum) {
+            baseline_out.truncate(baseline_mark);
+            live_out.truncate(live_mark);
+            whole_line_spans(old_lines, hunk.old_start..hunk.old_end(), baseline_out);
+            whole_line_spans(new_lines, hunk.new_start..hunk.new_end(), live_out);
         }
         return;
     }
@@ -390,7 +627,7 @@ fn inline_for_line_pair(
     deadline: Instant,
     baseline_out: &mut Vec<InlineSpan>,
     live_out: &mut Vec<InlineSpan>,
-) {
+) -> (usize, usize, usize) {
     let mut config = TextDiffConfig::new();
     config.deadline(deadline);
     let diff = config.diff_unicode_words(old_line, new_line);
@@ -399,11 +636,20 @@ fn inline_for_line_pair(
     let mut old_span: Option<Range<usize>> = None;
     let mut new_span: Option<Range<usize>> = None;
     let mut bridged = false;
+    let mut total_non_ws = 0usize;
+    let mut equal_non_ws = 0usize;
+    let mut equal_alnum = 0usize;
 
     for change in diff.iter_all_changes() {
         let len = change.value().chars().count();
+        let non_ws = change
+            .value()
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .count();
         match change.tag() {
             ChangeTag::Delete => {
+                total_non_ws += non_ws;
                 // Match the review units: when a change continues after equal
                 // whitespace, both spans must cross that whitespace. Extending
                 // only the changed side leaves the other side's whitespace
@@ -418,6 +664,7 @@ fn inline_for_line_pair(
                 old_pos += len;
             }
             ChangeTag::Insert => {
+                total_non_ws += non_ws;
                 if bridged {
                     extend_span(&mut old_span, old_pos);
                     extend_span(&mut new_span, new_pos);
@@ -428,9 +675,16 @@ fn inline_for_line_pair(
                 new_pos += len;
             }
             ChangeTag::Equal => {
+                total_non_ws += non_ws * 2;
+                equal_non_ws += non_ws;
+                equal_alnum += change
+                    .value()
+                    .chars()
+                    .filter(|ch| ch.is_alphanumeric())
+                    .count();
                 // Whitespace bridges adjacent changes, while an unchanged word
                 // or punctuation separates them.
-                if !change.value().chars().all(char::is_whitespace) {
+                if non_ws > 0 {
                     bridged = false;
                     flush_span_pair(
                         &mut old_span,
@@ -460,6 +714,7 @@ fn inline_for_line_pair(
         baseline_out,
         live_out,
     );
+    (total_non_ws, equal_non_ws, equal_alnum)
 }
 
 fn extend_span(span: &mut Option<Range<usize>>, end: usize) {
@@ -703,9 +958,25 @@ mod tests {
         assert_eq!(diff_texts(old, new).hunks.len(), 2);
 
         // A blank-only deletion and an unrelated insertion stay separate.
-        let old = "\n\nx\n\n\n";
-        let new = "a\n\nx\n\nb\n";
-        assert_eq!(diff_texts(old, new).hunks.len(), 3);
+        let unmerged = coalesce_blank_separated_replacements(
+            vec![
+                Hunk {
+                    old_start: 0,
+                    old_len: 1,
+                    new_start: 0,
+                    new_len: 0,
+                },
+                Hunk {
+                    old_start: 2,
+                    old_len: 0,
+                    new_start: 1,
+                    new_len: 1,
+                },
+            ],
+            &["\n", "\n"],
+            &["\n", "a\n"],
+        );
+        assert_eq!(unmerged.len(), 2);
     }
 
     #[test]

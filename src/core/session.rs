@@ -40,6 +40,7 @@ pub struct DiffSession {
 #[derive(Debug)]
 struct SessionSnapshot {
     baseline: String,
+    diff: DiffResult,
     focus: Option<usize>,
     accepted_hunks: usize,
     inline_focus: Option<usize>,
@@ -67,7 +68,7 @@ impl LineEdit {
 
 fn new_undo() -> UndoStack<SessionSnapshot> {
     UndoStack::new(MAX_UNDO_ENTRIES, MAX_UNDO_BYTES, |snapshot| {
-        snapshot.baseline.len()
+        snapshot.baseline.len() + snapshot.diff.byte_size()
     })
 }
 
@@ -245,8 +246,28 @@ impl DiffSession {
             return Ok(false);
         };
         let (old, new) = diff::hunk_bytes(&hunk, &self.baseline_lines, &self.live_lines)?;
+        let expected_lines = self.baseline_lines.len() - hunk.old_len + hunk.new_len;
+        let expected_end_byte = old.start + new.len();
         let after = diff::replace_bytes(&self.baseline, old.clone(), &self.live[new]);
-        self.replace_baseline(after, old, Some(index));
+        let edit = self.splice_baseline_lines(&after, old.clone());
+        let clean_boundaries = self.baseline_lines.len() == expected_lines
+            && self.baseline_lines.byte(hunk.old_start) == old.start
+            && self.baseline_lines.byte(hunk.old_start + hunk.new_len) == expected_end_byte;
+        let next_diff = if clean_boundaries {
+            let mut next = self.diff.clone();
+            diff::update_after_hunk_accept(
+                &mut next,
+                index,
+                &after,
+                &self.live,
+                &self.baseline_lines,
+                &self.live_lines,
+            );
+            next
+        } else {
+            diff::diff_indexed(&after, &self.live, &self.baseline_lines, &self.live_lines)
+        };
+        self.commit_baseline(after, edit, next_diff, Some(index));
         self.accepted_hunks += 1;
         self.focus = if self.diff.hunks.is_empty() {
             self.inspecting = false;
@@ -316,7 +337,13 @@ impl DiffSession {
         let after = self.live.clone();
         let focus = self.focus;
         let pending = self.diff.hunks.len();
-        self.replace_baseline(after, 0..self.baseline.len(), focus);
+        let edit = LineEdit {
+            start: 0,
+            old_end: self.baseline_lines.len(),
+            new_end: self.live_lines.len(),
+        };
+        self.baseline_lines = self.live_lines.clone();
+        self.commit_baseline(after, edit, DiffResult::default(), focus);
         self.accepted_hunks += pending;
         self.focus = None;
         self.inspecting = false;
@@ -340,8 +367,9 @@ impl DiffSession {
         debug_assert_eq!(new_end, edit.new_end);
         self.baseline = previous.baseline;
         self.baseline_edit = Some(edit);
+        self.diff = previous.diff;
+        self.content_revision = self.content_revision.wrapping_add(1);
         self.accepted_hunks = previous.accepted_hunks;
-        self.rediff();
         let count = self.diff.hunks.len();
         self.focus = restored_focus
             .filter(|_| count > 0)
@@ -364,35 +392,43 @@ impl DiffSession {
     /// Swap in a new baseline, remembering the old one (and the focus to
     /// restore) for undo, then re-diff.
     fn replace_baseline(&mut self, after: String, removed: Range<usize>, focus: Option<usize>) {
+        let edit = self.splice_baseline_lines(&after, removed);
+        let next_diff =
+            diff::diff_indexed(&after, &self.live, &self.baseline_lines, &self.live_lines);
+        self.commit_baseline(after, edit, next_diff, focus);
+    }
+
+    fn splice_baseline_lines(&mut self, after: &str, removed: Range<usize>) -> LineEdit {
         // Include a line on either side of the byte edit: joining a lone CR
         // to a neighboring LF (or splitting CRLF) can change the line model.
         let start = self.baseline_lines.line_at(removed.start).saturating_sub(1);
         let old_end = (self.baseline_lines.line_at(removed.end) + 2).min(self.baseline_lines.len());
-        let new_end = self.baseline_lines.splice(start..old_end, &after);
-        let edit = LineEdit {
+        let new_end = self.baseline_lines.splice(start..old_end, after);
+        LineEdit {
             start,
             old_end,
             new_end,
-        };
+        }
+    }
+
+    fn commit_baseline(
+        &mut self,
+        after: String,
+        edit: LineEdit,
+        next_diff: DiffResult,
+        focus: Option<usize>,
+    ) {
         self.baseline_edit = Some(edit);
         let before = std::mem::replace(&mut self.baseline, after);
+        let previous_diff = std::mem::replace(&mut self.diff, next_diff);
         self.undo.push(SessionSnapshot {
             baseline: before,
+            diff: previous_diff,
             focus,
             accepted_hunks: self.accepted_hunks,
             inline_focus: self.inline_focus,
             edit,
         });
-        self.rediff();
-    }
-
-    fn rediff(&mut self) {
-        self.diff = diff::diff_indexed(
-            &self.baseline,
-            &self.live,
-            &self.baseline_lines,
-            &self.live_lines,
-        );
         self.content_revision = self.content_revision.wrapping_add(1);
     }
 }
@@ -848,6 +884,66 @@ mod tests {
         assert!(!session.baseline_changed());
     }
 
+    fn assert_diff_invariants(session: &DiffSession) {
+        assert_eq!(session.baseline_lines, LineIndex::new(session.baseline()));
+        let old = &session.baseline_lines;
+        let new = &session.live_lines;
+        let diff = session.diff();
+        let mut prev_old = 0usize;
+        let mut prev_new = 0usize;
+        for hunk in &diff.hunks {
+            assert!(hunk.old_len > 0 || hunk.new_len > 0);
+            assert!(hunk.old_start >= prev_old);
+            assert!(hunk.new_start >= prev_new);
+            assert!(hunk.old_end() <= old.len());
+            assert!(hunk.new_end() <= new.len());
+            assert_eq!(
+                &session.baseline()[old.bytes(prev_old..hunk.old_start)],
+                &session.live()[new.bytes(prev_new..hunk.new_start)],
+                "gap before {hunk:?} must be byte-identical"
+            );
+            prev_old = hunk.old_end();
+            prev_new = hunk.new_end();
+        }
+        assert_eq!(
+            &session.baseline()[old.bytes(prev_old..old.len())],
+            &session.live()[new.bytes(prev_new..new.len())],
+            "trailing gap must be byte-identical"
+        );
+        for (spans, text, index, is_old) in [
+            (&diff.baseline_inline, session.baseline(), old, true),
+            (&diff.live_inline, session.live(), new, false),
+        ] {
+            let mut prev: Option<(usize, usize)> = None;
+            for span in spans {
+                assert!(span.start < span.end);
+                assert!(span.line < index.len());
+                let chars = diff::line_content(index.line(text, span.line))
+                    .chars()
+                    .count();
+                assert!(span.end <= chars, "span {span:?} exceeds line len {chars}");
+                if let Some((prev_line, prev_end)) = prev {
+                    assert!(
+                        span.line > prev_line || (span.line == prev_line && span.start >= prev_end),
+                        "spans out of order or overlapping: {prev:?} then {span:?}"
+                    );
+                }
+                prev = Some((span.line, span.end));
+                assert!(
+                    diff.hunks.iter().any(|hunk| {
+                        let range = if is_old {
+                            hunk.old_start..hunk.old_end()
+                        } else {
+                            hunk.new_start..hunk.new_end()
+                        };
+                        range.contains(&span.line)
+                    }),
+                    "span {span:?} outside all hunks"
+                );
+            }
+        }
+    }
+
     #[test]
     fn repeated_lines_keep_accept_progress_and_undo_exact() {
         let mut seed = 0xc0ff_ee12_3456_789au64;
@@ -857,7 +953,6 @@ mod tests {
             seed ^= seed << 17;
             seed as usize % max
         };
-        let mut saw_regrouping = false;
         for _ in 0..2000 {
             let mut text = || {
                 let mut result = String::new();
@@ -874,12 +969,13 @@ mod tests {
                 assert!(steps < 100, "review failed to converge");
                 session.focus = Some(next(session.diff.hunks.len()));
                 let before = session.baseline().to_owned();
+                let before_diff = session.diff().clone();
                 let focus = session.focus();
-                let pending = session.diff.hunks.len();
                 let accepted = session.accepted_hunks();
                 assert_eq!(session.accept_focused(), Ok(true));
+                assert_diff_invariants(&session);
                 let after = session.baseline().to_owned();
-                saw_regrouping |= session.diff.hunks.len() + 1 != pending;
+                let after_diff = session.diff().clone();
                 assert_eq!(session.accepted_hunks(), accepted + 1);
                 assert_eq!(session.baseline_changed(), session.baseline() != baseline);
 
@@ -887,24 +983,141 @@ mod tests {
                 let remaining = session.diff.hunks.len();
                 if remaining > 0 {
                     assert!(session.accept_all());
+                    assert_diff_invariants(&session);
                     assert_eq!(session.accepted_hunks(), accepted + 1 + remaining);
                     assert_eq!(session.baseline(), live);
                     assert!(session.undo());
+                    assert_diff_invariants(&session);
                     assert_eq!(session.accepted_hunks(), accepted + 1);
                     assert_eq!(session.baseline(), after);
+                    assert_eq!(session.diff(), &after_diff);
                 }
 
                 assert!(session.undo());
+                assert_diff_invariants(&session);
                 assert_eq!(session.baseline(), before);
+                assert_eq!(session.diff(), &before_diff);
                 assert_eq!(session.focus(), focus);
                 assert_eq!(session.accepted_hunks(), accepted);
                 assert_eq!(session.baseline_changed(), before != baseline);
                 assert_eq!(session.accept_focused(), Ok(true));
+                assert_diff_invariants(&session);
                 steps += 1;
             }
             assert_eq!(session.baseline(), live);
         }
-        assert!(saw_regrouping, "fixtures must exercise hunk regrouping");
+    }
+
+    #[test]
+    fn whole_hunk_accept_coalesces_newly_blank_separated_neighbors() {
+        // Accepting the middle replacement turns it into a blank line (\r\n),
+        // leaving a pure deletion and a pure insertion separated only by blank
+        // lines.
+        let baseline = "old\n\nmid\n\n";
+        let live = "\n\r\n\nnew\n";
+        let mut session = DiffSession::new(baseline.into(), live.into());
+        assert_eq!(session.diff().hunks.len(), 3, "{:?}", session.diff().hunks);
+        let before_diff = session.diff().clone();
+
+        session.focus = Some(1);
+        assert_eq!(session.accept_focused(), Ok(true));
+        assert_diff_invariants(&session);
+        assert_eq!(session.diff().hunks.len(), 1, "{:?}", session.diff().hunks);
+        assert_eq!(
+            session.diff(),
+            &diff::diff_texts(session.baseline(), session.live())
+        );
+
+        assert!(session.undo());
+        assert_diff_invariants(&session);
+        assert_eq!(session.diff(), &before_diff);
+        assert_eq!(session.baseline(), baseline);
+
+        // Re-accept and finish converging.
+        assert_eq!(session.accept_focused(), Ok(true));
+        assert_eq!(session.accept_focused(), Ok(true));
+        assert_eq!(session.baseline(), live);
+    }
+
+    #[test]
+    fn whole_hunk_accept_falls_back_when_line_boundaries_merge() {
+        // Lone CR before a deleted line meets LF on the next line, and an
+        // unterminated live tail merges with a following baseline line.
+        for (baseline, live) in [
+            ("keep\rdel\n\nend\n", "keep\r\nend\n"),
+            ("a\nold\nkeep\n", "a\nnew"),
+            ("top\rmid\n\ntail\n", "top\r\ntail\n"),
+        ] {
+            let mut session = DiffSession::new(baseline.into(), live.into());
+            let mut steps = 0;
+            while !session.diff().is_empty() {
+                assert!(
+                    steps < 20,
+                    "failed to converge for {baseline:?} -> {live:?}"
+                );
+                let before = session.baseline().to_owned();
+                let before_diff = session.diff().clone();
+                session.focus = Some(0);
+                assert_eq!(session.accept_focused(), Ok(true));
+                assert_diff_invariants(&session);
+                assert!(session.undo());
+                assert_diff_invariants(&session);
+                assert_eq!(session.baseline(), before);
+                assert_eq!(session.diff(), &before_diff);
+                assert_eq!(session.accept_focused(), Ok(true));
+                assert_diff_invariants(&session);
+                steps += 1;
+            }
+            assert_eq!(session.baseline(), live);
+        }
+    }
+
+    #[test]
+    fn whole_hunk_accept_converges_and_preserves_invariants_across_all_endings() {
+        let mut seed = 0x51e7_cafe_1234_9876u64;
+        let mut next = |max: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed as usize % max
+        };
+        for case in 0..500 {
+            let mut text = || {
+                let mut result = String::new();
+                for _ in 0..next(16) {
+                    for _ in 0..next(4) {
+                        result.push_str(["a ", "b ", "é ", "🙂", ""][next(5)]);
+                    }
+                    result.push_str(["\n", "\r\n", "\r", "\u{2029}"][next(4)]);
+                }
+                if next(2) == 0 {
+                    result.pop();
+                }
+                result
+            };
+            let baseline = text();
+            let live = text();
+            let mut session = DiffSession::new(baseline, live.clone());
+            let mut steps = 0;
+            while !session.diff().is_empty() {
+                assert!(steps < 100, "case {case} failed to converge");
+                session.focus = Some(next(session.diff.hunks.len()));
+                let before = session.baseline().to_owned();
+                let before_diff = session.diff().clone();
+                assert_eq!(session.accept_focused(), Ok(true));
+                assert_diff_invariants(&session);
+                if next(3) == 0 {
+                    assert!(session.undo());
+                    assert_diff_invariants(&session);
+                    assert_eq!(session.baseline(), before);
+                    assert_eq!(session.diff(), &before_diff);
+                    assert_eq!(session.accept_focused(), Ok(true));
+                    assert_diff_invariants(&session);
+                }
+                steps += 1;
+            }
+            assert_eq!(session.baseline(), live, "case {case}");
+        }
     }
 
     #[test]

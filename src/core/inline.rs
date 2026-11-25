@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use similar::{ChangeTag, TextDiffConfig};
 
-use super::diff::{DIFF_TIMEOUT, DiffResult, LineIndex, replace_bytes};
+use super::diff::{DIFF_TIMEOUT, DiffResult, LineIndex, is_related_multiline_hunk, replace_bytes};
 use super::textlines;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +55,10 @@ pub(crate) fn changes_indexed(
             continue;
         }
         if region.old_len == region.new_len {
+            let start_len = result.len();
+            let mut total_non_ws = 0usize;
+            let mut equal_non_ws = 0usize;
+            let mut equal_alnum = 0usize;
             for offset in 0..region.old_len {
                 let old_line = region.old_start + offset;
                 let new_line = region.new_start + offset;
@@ -70,11 +74,23 @@ pub(crate) fn changes_indexed(
                 config.deadline(deadline);
                 for change in config.diff_unicode_words(old, new).iter_all_changes() {
                     let len = change.value().len();
+                    let non_ws = change
+                        .value()
+                        .chars()
+                        .filter(|ch| !ch.is_whitespace())
+                        .count();
                     if change.tag() == ChangeTag::Equal {
+                        total_non_ws += non_ws * 2;
+                        equal_non_ws += non_ws;
+                        equal_alnum += change
+                            .value()
+                            .chars()
+                            .filter(|ch| ch.is_alphanumeric())
+                            .count();
                         // Equal whitespace bridges adjacent changes into one
                         // phrase-level replacement; unchanged words or
                         // punctuation still separate review units.
-                        if !change.value().chars().all(char::is_whitespace) {
+                        if non_ws > 0 {
                             bridged = false;
                             if let Some(change) = current.take() {
                                 push_text_change(&mut result, change, baseline, live);
@@ -85,6 +101,7 @@ pub(crate) fn changes_indexed(
                         old_pos += len;
                         new_pos += len;
                     } else {
+                        total_non_ws += non_ws;
                         // If another change follows bridged whitespace, both
                         // ranges must cross it. Extending only the changed side
                         // leaves the other side's whitespace in place, which
@@ -125,6 +142,17 @@ pub(crate) fn changes_indexed(
                     });
                 }
             }
+            if region.old_len > 1
+                && !is_related_multiline_hunk(total_non_ws, equal_non_ws, equal_alnum)
+            {
+                result.truncate(start_len);
+                result.push(InlineChange {
+                    hunk,
+                    old: old.bytes(region.old_start..region.old_end()),
+                    new: new.bytes(region.new_start..region.new_end()),
+                    kind: ChangeKind::Block,
+                });
+            }
         } else {
             // A wholly inserted/deleted region is one atomic block. Unequal
             // replacements also stay atomic: they have no reliable pairing.
@@ -146,6 +174,20 @@ fn push_text_change(
     live: &str,
 ) {
     trim_common_whitespace(baseline, live, &mut change);
+    if let Some(previous) = out.last_mut()
+        && previous.hunk == change.hunk
+        && previous.kind == ChangeKind::Text
+        && change.kind == ChangeKind::Text
+    {
+        let old_gap = &baseline[previous.old.end..change.old.start];
+        let new_gap = &live[previous.new.end..change.new.start];
+        if old_gap == new_gap && old_gap.chars().all(char::is_whitespace) {
+            previous.old.end = change.old.end;
+            previous.new.end = change.new.end;
+            trim_common_whitespace(baseline, live, previous);
+            return;
+        }
+    }
     out.push(change);
 }
 
@@ -361,5 +403,39 @@ mod tests {
             assert!(items[0].old.is_empty() || items[0].new.is_empty());
             assert_eq!(apply(old, new, &items[0]).unwrap(), new);
         }
+    }
+
+    #[test]
+    fn whitespace_bridges_adjacent_changes_across_matching_newlines() {
+        // Two consecutive changed lines separated only by "\n    " bridge into
+        // one unit when the hunk shares enough unchanged content elsewhere.
+        let old = "keep prefix old_one\n    old_two\nkeep suffix\n";
+        let new = "keep prefix new_one\n    new_two\nkeep suffix\n";
+        let items = changes(old, new, &diff_texts(old, new));
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(&old[items[0].old.clone()], "old_one\n    old_two");
+        assert_eq!(&new[items[0].new.clone()], "new_one\n    new_two");
+        assert_eq!(apply(old, new, &items[0]).unwrap(), new);
+
+        // Differing line endings stay separate Ending units and do not bridge.
+        let old = "keep one\r\nkeep two\n";
+        let new = "keep ONE\nkeep TWO\n";
+        let items = changes(old, new, &diff_texts(old, new));
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[1].kind, ChangeKind::Ending);
+    }
+
+    #[test]
+    fn unrelated_equal_length_multiline_blocks_stay_atomic() {
+        let old = "#[derive(Clone, Copy, PartialEq, Eq)]\nenum LinkState {\n    /// No document path.\n    NoPath,\n    /// Has baseline.\n    HasBaseline,\n    /// Ready.\n    Ready,\n";
+        let new = "impl EditMode {\n    fn label(self) -> &'static str {\n        match self {\n            EditMode::Insert => \"INS\",\n            EditMode::Overwrite => \"OVR\",\n            EditMode::ReadOnly => \"RO\",\n        }\n    }\n";
+        let diff = diff_texts(old, new);
+        let items = changes(old, new, &diff);
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].kind, ChangeKind::Block);
+        assert_eq!(apply(old, new, &items[0]).unwrap(), new);
+        // Full-diff inline highlights also fall back to whole lines.
+        assert_eq!(diff.baseline_inline.len(), 8);
+        assert_eq!(diff.live_inline.len(), 8);
     }
 }

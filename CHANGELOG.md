@@ -15,8 +15,17 @@ versioning.
 
 ### Fixed
 
+- Line-level diffing in **Review Changes** now uses `similar`'s Patience
+  algorithm, reducing hunk fragmentation and keeping alignments stable across
+  moved blocks.
+- Inline inspection in **Review Changes** now bridges adjacent text changes
+  separated only by matching line breaks and indentation within a hunk, and
+  treats unrelated equal-length multiline blocks as one atomic block (with
+  whole-line highlights) instead of splitting them on stray punctuation.
 - Accepting and undoing hunks in **Review Changes** is faster on large files:
-  the panes reuse line positions and update only the changed text and highlights.
+  the panes reuse line positions and update only the changed text and highlights,
+  whole-hunk Accept updates the diff incrementally while keeping unrelated hunks
+  stable, and Undo restores the prior diff directly.
 - Disabled mousewheel value changes on spin buttons and sliders inside
   scrollable dialogs (**Appearance → Font size** and **Run Script** `int` /
   `slider` fields) so scrolling over them scrolls the dialog instead of
