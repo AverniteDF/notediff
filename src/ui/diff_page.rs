@@ -973,24 +973,14 @@ impl DiffPage {
             let baseline_trailing = self.right_trailing_blank.get()
                 && region.old_end() == baseline_line_count
                 && has_trailing_display_line(baseline);
-            let live_mark_ranges: Vec<Range<usize>> = diff
-                .hunks
-                .iter()
-                .filter_map(|h| {
-                    let start = h.new_start.max(region.new_start);
-                    let end = h.new_end().min(region.new_end());
-                    (start < end).then_some((start - region.new_start)..(end - region.new_start))
-                })
-                .collect();
-            let baseline_mark_ranges: Vec<Range<usize>> = diff
-                .hunks
-                .iter()
-                .filter_map(|h| {
-                    let start = h.old_start.max(region.old_start);
-                    let end = h.old_end().min(region.old_end());
-                    (start < end).then_some((start - region.old_start)..(end - region.old_start))
-                })
-                .collect();
+            let live_mark_ranges =
+                relative_hunk_ranges(&diff.hunks, region.new_start..region.new_end(), |h| {
+                    h.new_start..h.new_end()
+                });
+            let baseline_mark_ranges =
+                relative_hunk_ranges(&diff.hunks, region.old_start..region.old_end(), |h| {
+                    h.old_start..h.old_end()
+                });
             let (live_display, live_markers) = set_marked_text(
                 &self.inspection_left_buffer,
                 live,
@@ -2617,12 +2607,28 @@ fn place_scroll(
     geometry
 }
 
+fn relative_hunk_ranges(
+    hunks: &[Hunk],
+    region: Range<usize>,
+    side: impl Fn(&Hunk) -> Range<usize>,
+) -> Vec<Range<usize>> {
+    hunks
+        .iter()
+        .filter_map(|hunk| {
+            let range = side(hunk);
+            let start = range.start.max(region.start);
+            let end = range.end.min(region.end);
+            (start < end).then(|| (start - region.start)..(end - region.start))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         LineNumberStyle, display_offset, display_selection, hunk_changes_baseline_eof,
-        hunk_changes_live_eof, line_number_markup, line_starts, marked_text, replacement_span,
-        selected_word_ranges, strip_markers, trailing_blank_change,
+        hunk_changes_live_eof, line_number_markup, line_starts, marked_text, relative_hunk_ranges,
+        replacement_span, selected_word_ranges, strip_markers, trailing_blank_change,
     };
 
     #[test]
@@ -2774,6 +2780,44 @@ mod tests {
         // A zero-width caret stays before the display-only marker.
         let boundary = raw.len()..raw.len();
         assert_eq!(display_selection(raw, &boundary, 0, all, true), (16, 16));
+    }
+
+    #[test]
+    fn relative_hunk_ranges_ignores_hunks_outside_a_partially_drained_region() {
+        use crate::core::diff::Hunk;
+
+        // An inspection region covering lines 5..10 (live) and 4..9 (baseline),
+        // with an earlier hunk completely before it, one partially drained hunk
+        // inside it, and a later hunk completely after it.
+        let hunks = [
+            Hunk {
+                old_start: 0,
+                old_len: 2,
+                new_start: 0,
+                new_len: 2,
+            },
+            Hunk {
+                old_start: 6,
+                old_len: 2,
+                new_start: 7,
+                new_len: 2,
+            },
+            Hunk {
+                old_start: 12,
+                old_len: 3,
+                new_start: 14,
+                new_len: 3,
+            },
+        ];
+
+        assert_eq!(
+            relative_hunk_ranges(&hunks, 5..10, |h| h.new_start..h.new_end()),
+            vec![2..4]
+        );
+        assert_eq!(
+            relative_hunk_ranges(&hunks, 4..9, |h| h.old_start..h.old_end()),
+            vec![2..4]
+        );
     }
 
     #[test]

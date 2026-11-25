@@ -3476,25 +3476,13 @@ fn search_replace_scenario(app: &adw::Application, dir: &Path, store: &SnapshotS
     editor.search_controls.whole_word.set_active(false);
 
     // Live match count and zero-match disabling after the async scan settles.
-    let context = gtk::glib::MainContext::default();
-    for _ in 0..20 {
-        while context.pending() {
-            context.iteration(false);
-        }
-    }
-    assert!(editor.search_controls.match_count.is_visible());
-    assert_eq!(editor.search_controls.match_count.text().as_str(), "3 of 3");
+    wait_for(|| {
+        editor.search_controls.match_count.is_visible()
+            && editor.search_controls.match_count.text().as_str() == "3 of 3"
+    });
 
     editor.search_entry.set_text("not-present");
-    for _ in 0..20 {
-        while context.pending() {
-            context.iteration(false);
-        }
-    }
-    assert_eq!(
-        editor.search_controls.match_count.text().as_str(),
-        "No matches"
-    );
+    wait_for(|| editor.search_controls.match_count.text().as_str() == "No matches");
     assert!(!one.is_enabled());
     assert!(!all.is_enabled());
     assert!(!find_next.is_enabled());
@@ -3515,11 +3503,14 @@ fn search_replace_scenario(app: &adw::Application, dir: &Path, store: &SnapshotS
     editor.set_editor_text(".* .* aaaa\r\n");
     editor.search_entry.set_text(".*");
     editor.search_controls.match_case.set_active(true);
-    for _ in 0..20 {
-        while context.pending() {
-            context.iteration(false);
-        }
-    }
+    wait_for(|| {
+        editor
+            .search_controls
+            .match_count
+            .text()
+            .as_str()
+            .contains('2')
+    });
 
     editor.set_read_only(true);
     assert!(!replace.is_enabled());
@@ -6266,7 +6257,9 @@ fn inspection_blank_marker_layer_scenario(
     window.diff.inspect_button.emit_clicked();
     assert!(window.diff_state.borrow().as_ref().unwrap().is_inspecting());
 
-    // The inserted x is the selected change; the baseline blank line is not.
+    // The inserted x is the selected change; its zero-width baseline
+    // counterpart lands on a blank line, so the pilcrow takes the selected
+    // highlight instead of an overlay caret.
     let markers = window.diff.inspection_marker_tags(true);
     assert_eq!(
         markers.len(),
@@ -6276,11 +6269,16 @@ fn inspection_blank_marker_layer_scenario(
     let (_, tags) = &markers[0];
     assert!(
         has(tags, "notediff-inline-normal"),
-        "an unselected blank-line marker must use the focused-hunk layer: {tags:?}"
+        "a blank-line marker in an inspected hunk must carry the focused-hunk layer: {tags:?}"
     );
     assert!(
-        !has(tags, "notediff-inline-selected"),
-        "the marker is not part of the selected change: {tags:?}"
+        has(tags, "notediff-inline-selected"),
+        "a selected zero-width side on a blank line must highlight its pilcrow: {tags:?}"
+    );
+    assert_eq!(
+        window.diff.inspection_caret(true),
+        (false, None),
+        "a highlighted blank-line pilcrow must not also draw an overlay caret"
     );
     assert!(window.diff.inspection_marker_tags(false).is_empty());
     window.window.destroy();
@@ -6700,16 +6698,18 @@ fn full_boundary_marker_scenario(app: &adw::Application, dir: &Path, store: &Sna
 fn caret_navigation_scenario(app: &adw::Application, dir: &Path, store: &SnapshotStore) {
     use gtk::gdk::{Key, ModifierType};
 
-    // Five lines: two blank lines, a character, two blank lines. The live
-    // edit puts a character on the first and fifth lines, so both baseline
-    // excerpts are the same one-line "\n" with the caret at offset 0. This
-    // used to leave the right caret invisible after navigating hunks.
+    // Three non-blank hunks separated by unique anchor lines so Patience diff
+    // keeps them distinct and each zero-width side draws an overlay caret
+    // rather than highlighting a blank-line pilcrow. The first and third
+    // baseline excerpts are the same one-line "foo bar\n" with the right caret
+    // at offset 0; this used to leave the right caret invisible after
+    // navigating hunks.
     let path = dir.join("caret-navigation.txt");
-    std::fs::write(&path, "\n\nx\n\n\n").unwrap();
+    std::fs::write(&path, "foo bar\nkeep1\nremoved bar\nkeep2\nfoo bar\n").unwrap();
     let window = AppWindow::with_store(app, store.clone());
     AppWindow::open_path(&window, &path);
     window.create_baseline();
-    window.set_editor_text("a\n\nx\n\nb\n");
+    window.set_editor_text("added foo bar\nkeep1\nbar\nkeep2\nextra foo bar\n");
     window.persist(None).unwrap();
     window.window.present();
     let controllers = window.window.observe_controllers();
@@ -6721,9 +6721,10 @@ fn caret_navigation_scenario(app: &adw::Application, dir: &Path, store: &Snapsho
     let press =
         |key: Key| keys.emit_by_name::<bool>("key-pressed", &[&key, &0u32, &ModifierType::empty()]);
 
-    // The diff engine resolves the repeated blank lines as three hunks:
-    // replace (right caret), delete (left caret), insert (right caret). The
-    // right-hand caret used to go missing after navigating to the later ones.
+    // Three hunks: insertion at start of line (right caret), deletion at start
+    // of line (left caret), insertion at start of an identical baseline line
+    // (right caret). The right-hand caret used to go missing after navigating
+    // to the later ones.
     let assert_carets = |label: &str, right: Option<i32>, left: Option<i32>| {
         gtk::test_widget_wait_for_draw(&window.window);
         assert_eq!(
