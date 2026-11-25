@@ -1563,6 +1563,7 @@ impl DialogState {
             container.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
             let preset_count = presets.len();
             let list_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            let armed: Rc<RefCell<Option<(String, gtk::Button)>>> = Rc::new(RefCell::new(None));
 
             for (name, _) in presets {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -1598,12 +1599,26 @@ impl DialogState {
                     let pop_ref = popover.downgrade();
                     let box_ref = container.clone();
                     let preset_name = name.clone();
-                    delete_btn.connect_clicked(move |_| {
-                        if let Some(this) = weak.upgrade() {
-                            this.delete_preset(&preset_name);
-                            if let Some(pop) = pop_ref.upgrade() {
-                                this.populate_presets_popover(&pop, &box_ref);
+                    let armed = armed.clone();
+                    delete_btn.connect_clicked(move |btn| {
+                        let is_armed = armed
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|(armed_name, _)| armed_name == &preset_name);
+                        if is_armed {
+                            armed.borrow_mut().take();
+                            if let Some(this) = weak.upgrade() {
+                                this.delete_preset(&preset_name);
+                                if let Some(pop) = pop_ref.upgrade() {
+                                    this.populate_presets_popover(&pop, &box_ref);
+                                }
                             }
+                        } else {
+                            if let Some((_, previous)) = armed.borrow_mut().take() {
+                                previous.remove_css_class("error");
+                            }
+                            btn.add_css_class("error");
+                            *armed.borrow_mut() = Some((preset_name.clone(), btn.clone()));
                         }
                     });
                 }

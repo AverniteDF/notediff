@@ -13,6 +13,12 @@ versioning.
   `prompt-packer.py`) and seeds any missing bundled presets into `script-state`
   without overwriting existing presets of the same name.
 
+### Changed
+
+- Preset deletion in **Run Script → Presets** now requires two activations of
+  the trashcan icon: the first turns the icon red to arm it, the second deletes
+  the preset, and closing the popover or arming another row disarms it.
+
 ### Fixed
 
 - Line-level diffing in **Review Changes** now uses `similar`'s Patience

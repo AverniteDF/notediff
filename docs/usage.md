@@ -813,8 +813,10 @@ you switch scripts, close the dialog, or click **Run**. They are kept in
 `~/.local/share/notediff/script-state`) and restored across restarts. Click
 **Presets** beside a script's title to save the current parameters and sandbox
 mode as a named preset for that script (saving with an existing name
-overwrites it), load a saved preset, delete a preset immediately with its
-trashcan icon, or choose **Reset to Defaults**. **No Sandbox** still asks for
+overwrites it), load a saved preset, delete a preset by activating its trashcan
+icon twice (the first activation turns the icon red to arm it; activating it
+again deletes the preset, and closing the popover or arming another row disarms
+it), or choose **Reset to Defaults**. **No Sandbox** still asks for
 confirmation before every run even when remembered or loaded from a preset.
 
 The repository includes three example scripts under `examples/scripts/`:
