@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use super::diff::{self, DiffResult, LineIndex};
+use super::diff::{self, DiffResult, Hunk, LineIndex};
 use super::inline::{self, InlineChange};
 use super::undo::UndoStack;
 
@@ -27,6 +27,7 @@ pub struct DiffSession {
     diff: DiffResult,
     focus: Option<usize>,
     inspecting: bool,
+    inspection_region: Option<Hunk>,
     inline_changes: Vec<InlineChange>,
     inline_revision: Option<u64>,
     inline_focus: Option<usize>,
@@ -42,6 +43,7 @@ struct SessionSnapshot {
     baseline: String,
     diff: DiffResult,
     focus: Option<usize>,
+    inspection_region: Option<Hunk>,
     accepted_hunks: usize,
     inline_focus: Option<usize>,
     edit: LineEdit,
@@ -88,6 +90,7 @@ impl DiffSession {
             diff,
             focus: None,
             inspecting: false,
+            inspection_region: None,
             inline_changes: Vec::new(),
             inline_revision: None,
             inline_focus: None,
@@ -131,6 +134,20 @@ impl DiffSession {
         self.inspecting
     }
 
+    /// Pinned line region shown in inspection mode. Stays fixed while accepting
+    /// changes inside the same original hunk so accepted lines remain visible
+    /// as unhighlighted context until the region is drained.
+    pub fn inspection_region(&self) -> Option<Hunk> {
+        if !self.inspecting {
+            return None;
+        }
+        self.inspection_region.or_else(|| {
+            self.focus
+                .and_then(|index| self.diff.hunks.get(index))
+                .copied()
+        })
+    }
+
     /// Switch between the full diff and the focused hunk.
     pub fn toggle_inspection(&mut self) -> bool {
         if self.focus.is_none() {
@@ -145,9 +162,14 @@ impl DiffSession {
             }) {
                 self.inline_focus = Some(index);
             }
+            self.inspection_region = self
+                .focus
+                .and_then(|index| self.diff.hunks.get(index))
+                .copied();
         } else {
             self.remembered_inline = self.selected_inline().cloned();
             self.inline_focus = None;
+            self.inspection_region = None;
         }
         true
     }
@@ -216,7 +238,15 @@ impl DiffSession {
             let current = self.inline_focus.unwrap_or(0);
             let index = (current as i64 + i64::from(direction)).clamp(0, last as i64) as usize;
             self.inline_focus = Some(index);
-            self.focus = Some(self.inline_changes[index].hunk);
+            let hunk_index = self.inline_changes[index].hunk;
+            self.focus = Some(hunk_index);
+            if let Some(&hunk) = self.diff.hunks.get(hunk_index)
+                && !self
+                    .inspection_region
+                    .is_some_and(|region| region_contains(&region, &hunk))
+            {
+                self.inspection_region = Some(hunk);
+            }
             return true;
         }
         let count = self.diff.hunks.len();
@@ -282,17 +312,18 @@ impl DiffSession {
         let Some(change) = self.selected_inline().cloned() else {
             return Ok(false);
         };
-        let region = self
-            .diff
-            .hunks
-            .get(change.hunk)
-            .map(|hunk| self.live_lines.bytes(hunk.new_start..hunk.new_end()));
+        let pinned = self
+            .inspection_region
+            .or_else(|| self.diff.hunks.get(change.hunk).copied());
+        let region = pinned.map(|hunk| self.live_lines.bytes(hunk.new_start..hunk.new_end()));
+        let old_baseline_len = self.baseline_lines.len();
         let after = inline::apply(&self.baseline, &self.live, &change)?;
         self.replace_baseline(after, change.old.clone(), self.focus);
         self.accepted_hunks += 1;
         if self.diff.is_empty() {
             self.inspecting = false;
             self.focus = None;
+            self.inspection_region = None;
             self.inline_changes.clear();
             self.inline_revision = None;
             self.inline_focus = None;
@@ -316,12 +347,32 @@ impl DiffSession {
                     inside_live_region(item, region) && item.new.end <= change.new.start
                 })
             });
+            let stayed_in_region = successor_in_region.is_some() || nearest_above.is_some();
             let index = successor_in_region
                 .or(nearest_above)
                 .or(successor)
                 .unwrap_or(self.inline_changes.len() - 1);
             self.inline_focus = Some(index);
-            self.focus = Some(self.inline_changes[index].hunk);
+            let next_hunk_index = self.inline_changes[index].hunk;
+            self.focus = Some(next_hunk_index);
+            let next_hunk = self.diff.hunks[next_hunk_index];
+            let line_delta = self.baseline_lines.len() as isize - old_baseline_len as isize;
+            let kept = stayed_in_region
+                .then_some(pinned)
+                .flatten()
+                .and_then(|region| {
+                    let old_end = region.old_end().checked_add_signed(line_delta)?;
+                    (old_end >= region.old_start && old_end <= self.baseline_lines.len()).then_some(
+                        Hunk {
+                            old_start: region.old_start,
+                            old_len: old_end - region.old_start,
+                            new_start: region.new_start,
+                            new_len: region.new_len,
+                        },
+                    )
+                })
+                .filter(|region| region_contains(region, &next_hunk));
+            self.inspection_region = Some(kept.unwrap_or(next_hunk));
         }
         Ok(true)
     }
@@ -347,6 +398,7 @@ impl DiffSession {
         self.accepted_hunks += pending;
         self.focus = None;
         self.inspecting = false;
+        self.inspection_region = None;
         self.inline_changes.clear();
         self.inline_revision = None;
         self.inline_focus = None;
@@ -385,6 +437,20 @@ impl DiffSession {
             if let Some(change) = self.selected_inline() {
                 self.focus = Some(change.hunk);
             }
+            let focused_hunk = self
+                .focus
+                .and_then(|index| self.diff.hunks.get(index))
+                .copied();
+            self.inspection_region = previous
+                .inspection_region
+                .filter(|region| {
+                    region.old_end() <= self.baseline_lines.len()
+                        && region.new_end() <= self.live_lines.len()
+                        && focused_hunk.is_none_or(|hunk| region_contains(region, &hunk))
+                })
+                .or(focused_hunk);
+        } else {
+            self.inspection_region = None;
         }
         true
     }
@@ -425,6 +491,7 @@ impl DiffSession {
             baseline: before,
             diff: previous_diff,
             focus,
+            inspection_region: self.inspection_region,
             accepted_hunks: self.accepted_hunks,
             inline_focus: self.inline_focus,
             edit,
@@ -438,6 +505,13 @@ impl DiffSession {
 /// atomic review unit.
 fn inside_live_region(change: &InlineChange, region: &Range<usize>) -> bool {
     !region.is_empty() && change.new.start >= region.start && change.new.end <= region.end
+}
+
+fn region_contains(region: &Hunk, hunk: &Hunk) -> bool {
+    hunk.old_start >= region.old_start
+        && hunk.old_end() <= region.old_end()
+        && hunk.new_start >= region.new_start
+        && hunk.new_end() <= region.new_end()
 }
 
 #[cfg(test)]
@@ -610,13 +684,60 @@ mod tests {
         assert_eq!(session.accept_focused(), Ok(true));
 
         // The successor is in the second half, still inside the original
-        // hunk's live-text span, so it is followed normally.
+        // hunk's live-text span, so it is followed normally, and the pinned
+        // inspection region keeps all three lines visible.
         assert_eq!(session.diff().hunks.len(), 2);
         assert_eq!(session.focus(), Some(1));
+        assert_eq!(
+            session.inspection_region(),
+            Some(Hunk {
+                old_start: 0,
+                old_len: 3,
+                new_start: 0,
+                new_len: 3,
+            })
+        );
         assert_eq!(
             &live[session.selected_inline().unwrap().new.clone()],
             "THREE"
         );
+    }
+
+    #[test]
+    fn inspection_pins_region_when_trailing_line_is_accepted_first() {
+        let old = "if let Some((provider, font_family)) = css {\n    provider.load_from_string(&stylesheet(font_family, current()));\nanchor\nother old\n";
+        let live = "if let Some(provider) = css {\n    provider.load_from_string(&stylesheet(&appearance(), current()));\nanchor\nother new\n";
+        let mut session = DiffSession::new(old.into(), live.into());
+        assert_eq!(session.diff().hunks.len(), 2);
+        session.focus_relative(1);
+        session.toggle_inspection();
+        let initial_region = session.inspection_region().unwrap();
+        assert_eq!(initial_region.new_len, 2);
+
+        // Select and accept the 3rd inline change (on line 2).
+        session.focus_relative(1);
+        session.focus_relative(1);
+        assert_eq!(
+            &live[session.selected_inline().unwrap().new.clone()],
+            "&appearance()"
+        );
+        assert_eq!(session.accept_focused(), Ok(true));
+        // The hunk shrank to 1 line, but the pinned inspection region keeps
+        // both lines visible until the remaining changes on line 1 are drained.
+        assert_eq!(session.diff().hunks[0].new_len, 1);
+        assert_eq!(session.inspection_region(), Some(initial_region));
+
+        // Undo restores the pinned region and selection.
+        assert!(session.undo());
+        assert_eq!(session.inspection_region(), Some(initial_region));
+        assert_eq!(session.accept_focused(), Ok(true));
+
+        // Draining the remaining changes on line 1 advances the pinned region
+        // to the next hunk.
+        assert_eq!(session.accept_focused(), Ok(true));
+        assert_eq!(session.accept_focused(), Ok(true));
+        assert_eq!(session.inspection_region(), Some(session.diff().hunks[0]));
+        assert_eq!(session.inspection_region().unwrap().new_start, 3);
     }
 
     #[test]

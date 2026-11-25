@@ -481,8 +481,9 @@ Use full Diff Mode to accept a whole hunk at once.
 
 After acceptance, inspection follows the next pending change by live-text
 position when it lies in the hunk being inspected. Re-diff regrouping uses the
-original hunk's live-text byte span, so a split hunk still counts as one
-region. If the accepted change was the region's last pending change, inspection
+original hunk's live-text span, so a split or shrunk hunk still counts as one
+region and keeps its accepted lines visible as unhighlighted context until the
+region is drained or you navigate to another hunk. If the accepted change was the region's last pending change, inspection
 advances to the next pending hunk; if there is none, it falls back to the last
 remaining change. The excerpts scroll independently to keep the selected change
 visible, including within long wrapped paragraphs. **Left** undoes the last accept and restores the exact

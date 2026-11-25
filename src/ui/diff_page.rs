@@ -962,25 +962,45 @@ impl DiffPage {
 
         if let Some(index) = toolbar.inspection {
             self.clear_carets();
-            let hunk = &diff.hunks[index];
-            let live_span = live_index.bytes(hunk.new_start..hunk.new_end());
-            let baseline_span = baseline_index.bytes(hunk.old_start..hunk.old_end());
+            let region = session.inspection_region().unwrap_or(diff.hunks[index]);
+            let live_span = live_index.bytes(region.new_start..region.new_end());
+            let baseline_span = baseline_index.bytes(region.old_start..region.old_end());
             let live = &session.live()[live_span.clone()];
             let baseline = &session.baseline()[baseline_span.clone()];
             let live_trailing = self.left_trailing_blank.get()
-                && hunk.new_end() == live_line_count
+                && region.new_end() == live_line_count
                 && has_trailing_display_line(live);
             let baseline_trailing = self.right_trailing_blank.get()
-                && hunk.old_end() == baseline_line_count
+                && region.old_end() == baseline_line_count
                 && has_trailing_display_line(baseline);
-            let whole = 0..usize::MAX;
-            let whole = std::slice::from_ref(&whole);
-            let (live_display, live_markers) =
-                set_marked_text(&self.inspection_left_buffer, live, whole, live_trailing);
+            let live_mark_ranges: Vec<Range<usize>> = diff
+                .hunks
+                .iter()
+                .filter_map(|h| {
+                    let start = h.new_start.max(region.new_start);
+                    let end = h.new_end().min(region.new_end());
+                    (start < end).then_some((start - region.new_start)..(end - region.new_start))
+                })
+                .collect();
+            let baseline_mark_ranges: Vec<Range<usize>> = diff
+                .hunks
+                .iter()
+                .filter_map(|h| {
+                    let start = h.old_start.max(region.old_start);
+                    let end = h.old_end().min(region.old_end());
+                    (start < end).then_some((start - region.old_start)..(end - region.old_start))
+                })
+                .collect();
+            let (live_display, live_markers) = set_marked_text(
+                &self.inspection_left_buffer,
+                live,
+                &live_mark_ranges,
+                live_trailing,
+            );
             let (baseline_display, baseline_markers) = set_marked_text(
                 &self.inspection_right_buffer,
                 baseline,
-                whole,
+                &baseline_mark_ranges,
                 baseline_trailing,
             );
             clear_tags(&self.inspection_left_buffer);
@@ -1015,13 +1035,13 @@ impl DiffPage {
             let live_word_ranges = tag_excerpt(
                 &self.inspection_left_buffer,
                 &live_display,
-                hunk.new_start,
+                region.new_start,
                 &diff.live_inline,
             );
             let baseline_word_ranges = tag_excerpt(
                 &self.inspection_right_buffer,
                 &baseline_display,
-                hunk.old_start,
+                region.old_start,
                 &diff.baseline_inline,
             );
             self.left_status.set_stats(&text_stats(live));
@@ -1032,6 +1052,7 @@ impl DiffPage {
                     live,
                     &change.new,
                     live_span.start,
+                    &live_mark_ranges,
                     live_trailing,
                     change.kind,
                     &live_word_ranges,
@@ -1041,6 +1062,7 @@ impl DiffPage {
                     baseline,
                     &change.old,
                     baseline_span.start,
+                    &baseline_mark_ranges,
                     baseline_trailing,
                     change.kind,
                     &baseline_word_ranges,
@@ -1914,18 +1936,28 @@ fn marker_tags(buffer: &sourceview5::Buffer) -> Vec<(i32, Vec<String>)> {
     found
 }
 
-/// Character offset in the displayed (fully marked) excerpt of a raw byte
-/// offset: every blank line starting before it contributes one marker. When
+/// Character offset in the displayed excerpt of a raw byte offset: every blank
+/// line inside `mark_ranges` starting before it contributes one marker. When
 /// requested, a byte at the end also includes the display-only marker after a
 /// final newline.
-fn display_offset(raw: &str, byte: usize, include_trailing: bool) -> i32 {
+fn display_offset(
+    raw: &str,
+    byte: usize,
+    mark_ranges: &[Range<usize>],
+    include_trailing: bool,
+) -> i32 {
     let mut markers = 0;
     let mut start = 0;
-    for line in crate::core::textlines::iter_inclusive(raw) {
+    let mut next = 0;
+    for (index, line) in crate::core::textlines::iter_inclusive(raw).enumerate() {
         if start >= byte {
             break;
         }
-        if crate::core::diff::line_content(line).is_empty() {
+        while next < mark_ranges.len() && mark_ranges[next].end <= index {
+            next += 1;
+        }
+        let in_hunk = mark_ranges.get(next).is_some_and(|r| r.contains(&index));
+        if in_hunk && crate::core::diff::line_content(line).is_empty() {
             markers += 1;
         }
         start += line.len();
@@ -2401,11 +2433,22 @@ fn update_caret(view: &sourceview5::View, caret: &Caret) {
 /// Character offsets in the displayed excerpt for a raw byte range. The
 /// display-only marker after a final newline belongs to a non-empty selection
 /// that reaches the end of the excerpt, but not to a zero-width boundary.
-fn display_selection(text: &str, range: &Range<usize>, first: usize, trailing: bool) -> (i32, i32) {
+fn display_selection(
+    text: &str,
+    range: &Range<usize>,
+    first: usize,
+    mark_ranges: &[Range<usize>],
+    trailing: bool,
+) -> (i32, i32) {
     let start_byte = range.start.saturating_sub(first).min(text.len());
     let end_byte = range.end.saturating_sub(first).min(text.len());
-    let start = display_offset(text, start_byte, false);
-    let end = display_offset(text, end_byte, trailing && start_byte < end_byte);
+    let start = display_offset(text, start_byte, mark_ranges, false);
+    let end = display_offset(
+        text,
+        end_byte,
+        mark_ranges,
+        trailing && start_byte < end_byte,
+    );
     (start, end)
 }
 
@@ -2429,16 +2472,18 @@ fn selected_word_ranges(spans: &[Range<i32>], selection: Range<i32>) -> Vec<Rang
 /// whitespace. A zero-width side highlights its blank-line marker when one
 /// occupies that boundary; otherwise it returns its exact boundary for an
 /// overlay caret, leaving the neighbouring character untouched.
+#[allow(clippy::too_many_arguments)]
 fn select_excerpt(
     buffer: &sourceview5::Buffer,
     text: &str,
     range: &Range<usize>,
     first: usize,
+    mark_ranges: &[Range<usize>],
     trailing: bool,
     kind: ChangeKind,
     word_ranges: &[Range<i32>],
 ) -> (i32, Option<i32>) {
-    let (start, end) = display_selection(text, range, first, trailing);
+    let (start, end) = display_selection(text, range, first, mark_ranges, trailing);
     if start != end {
         let selected = if kind == ChangeKind::Text {
             selected_word_ranges(word_ranges, start..end)
@@ -2703,22 +2748,32 @@ mod tests {
     #[test]
     fn display_offsets_count_markers_before_the_byte() {
         let raw = "\n\nab";
-        assert_eq!(display_offset(raw, 0, false), 0);
-        assert_eq!(display_offset(raw, 1, false), 2);
-        assert_eq!(display_offset(raw, 2, false), 4);
-        assert_eq!(display_offset(raw, 4, false), 6);
+        let all = 0..usize::MAX;
+        let all = std::slice::from_ref(&all);
+        assert_eq!(display_offset(raw, 0, all, false), 0);
+        assert_eq!(display_offset(raw, 1, all, false), 2);
+        assert_eq!(display_offset(raw, 2, all, false), 4);
+        assert_eq!(display_offset(raw, 4, all, false), 6);
+        // Unmarked blank lines (e.g. accepted lines in a pinned region) add no marker.
+        let partial = 1..3;
+        assert_eq!(
+            display_offset(raw, 4, std::slice::from_ref(&partial), false),
+            5
+        );
     }
 
     #[test]
     fn selections_include_the_trailing_marker_at_the_excerpt_end() {
         let raw = "\nA sentence.\n\n";
         let whole = 0..raw.len();
-        assert_eq!(display_selection(raw, &whole, 0, false), (0, 16));
-        assert_eq!(display_selection(raw, &whole, 0, true), (0, 17));
+        let all = 0..usize::MAX;
+        let all = std::slice::from_ref(&all);
+        assert_eq!(display_selection(raw, &whole, 0, all, false), (0, 16));
+        assert_eq!(display_selection(raw, &whole, 0, all, true), (0, 17));
 
         // A zero-width caret stays before the display-only marker.
         let boundary = raw.len()..raw.len();
-        assert_eq!(display_selection(raw, &boundary, 0, true), (16, 16));
+        assert_eq!(display_selection(raw, &boundary, 0, all, true), (16, 16));
     }
 
     #[test]
